@@ -1,0 +1,1826 @@
+import SwiftUI
+import AVFoundation
+import AVKit
+import SmartTubeIOSCore
+import os
+#if canImport(UIKit)
+import UIKit
+#endif
+
+private let swipeLog = CrashlyticsLogger(category: "Player")
+
+// MARK: - PlayerView
+//
+// Full-screen video player.  Wraps AVKit's `VideoPlayer` and overlays
+// custom controls, chapter markers, and SponsorBlock skip toasts.
+// Mirrors the Android `PlaybackFragment`.
+
+public struct PlayerView: View {
+    public let video: Video
+    @State private var vm = PlaybackViewModel()
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismiss
+    @Environment(SettingsStore.self) private var store
+    @Environment(AuthService.self) private var authService
+    @State private var showSpeedPicker = false
+    @State private var showQualityPicker = false
+    @State private var showCaptionPicker = false
+    @State private var showMoreMenu = false
+    @State private var showDescriptionSheet = false
+    @State private var showCommentsSheet = false
+    @State private var videoComments: [Comment] = []
+    @State private var isLoadingComments = false
+    @State private var commentsAPI = InnerTubeAPI()
+    @State private var slideOffset: CGFloat = 0
+    @State private var isTransitioning = false
+    @State private var channelDestination: ChannelDestination?
+    #if !os(tvOS)
+    @State private var downloadService = VideoDownloadService()
+    @State private var downloadAlertItem: DownloadAlertItem?
+    #endif
+    #if os(iOS)
+    @State private var pipController: AVPictureInPictureController?
+    @State private var pipDelegate: PiPDelegate?
+    @State private var isPiPActive: Bool = false
+    @State private var playerLayer: AVPlayerLayer?
+    #endif
+    /// True while the app is backgrounded. Prevents `onDisappear` from calling
+    /// `suspend()` when iOS fires it as a side-effect of backgrounding rather
+    /// than actual navigation away from the player.
+    @State private var isInBackground = false
+    #if os(tvOS)
+    @FocusState private var playerFocused: Bool
+    #endif
+
+    public init(video: Video) {
+        self.video = video
+    }
+
+    public var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                // AVPlayerLayerView: bare AVPlayerLayer without AVPlayerViewController.
+                // AVPlayerViewController (VideoPlayer) dominates the UIKit accessibility
+                // tree, making all overlaid SwiftUI elements invisible to XCUITest.
+                // A bare AVPlayerLayer renders video with no accessibility interference.
+                AVPlayerLayerView(player: vm.player, videoGravity: store.settings.videoGravityMode.avGravity) { layer in
+                    #if os(iOS)
+                    playerLayer = layer
+                    #endif
+                }
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+
+                #if os(iOS)
+                // Horizontal swipe layer: left → next video, right → previous video.
+                // Uses UIKit-level UIPanGestureRecognizer so it fires above AVPlayerLayer.
+                SwipeGestureOverlay(
+                    onSwipeLeft: {
+                        swipeLog.debug("[swipe-overlay] onSwipeLeft — isTransitioning=\(isTransitioning) isScrubbing=\(vm.isScrubbing) controlsVisible=\(vm.controlsVisible) hasNext=\(vm.hasNext)")
+                        guard !isTransitioning else { return }
+                        if vm.hasNext { performHorizontalTransition(direction: -1, screenWidth: geo.size.width) { vm.playNext() } }
+                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { slideOffset = 0 } }
+                    },
+                    onSwipeRight: {
+                        swipeLog.debug("[swipe-overlay] onSwipeRight — isTransitioning=\(isTransitioning) isScrubbing=\(vm.isScrubbing) controlsVisible=\(vm.controlsVisible) hasPrevious=\(vm.hasPrevious)")
+                        guard !isTransitioning else { return }
+                        if vm.hasPrevious { performHorizontalTransition(direction: 1, screenWidth: geo.size.width) { vm.playPrevious() } }
+                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { slideOffset = 0 } }
+                    },
+                    onTap: {
+                        // Suppress toggle-controls when end cards are active — taps belong to the cards.
+                        if !vm.hasVisibleEndCards { vm.toggleControls() }
+                    },
+                    onTwoFingerTap: { vm.toggleStatsForNerds() },
+                    onPanChanged: { dx in
+                        guard !isTransitioning else { return }
+                        if (dx < 0 && vm.hasNext) || (dx > 0 && vm.hasPrevious) {
+                            slideOffset = dx
+                        } else {
+                            slideOffset = dx * 0.15
+                        }
+                    },
+                    onSwipeCancelled: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { slideOffset = 0 }
+                    },
+                    onLongPressStart: { vm.beginHoldSpeed() },
+                    onLongPressEnd:   { vm.endHoldSpeed() },
+                    // Disabled during scrubbing so the Slider can claim touches uncontested.
+                    // Also disabled when controls are visible so SwiftUI buttons (Menu, etc.)
+                    // receive touches directly without UIKit gesture interference.
+                    isEnabled: !vm.isScrubbing && !vm.controlsVisible
+                )
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+                #endif
+
+                // Loading spinner
+                if vm.isLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .scaleEffect(1.5)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: vm.isLoading)
+                }
+
+                // Hold-to-speed badge — shown while user long-presses to boost to 2×
+                if vm.isHoldingToSpeed {
+                    HoldSpeedBadge()
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        .animation(.easeOut(duration: 0.15), value: vm.isHoldingToSpeed)
+                }
+
+                // Custom overlay controls
+                if vm.controlsVisible {
+                    controlsOverlay(size: geo.size, safeAreaInsets: geo.safeAreaInsets)
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.25), value: vm.controlsVisible)
+                }
+
+                // Error banner
+                if let err = vm.error {
+                    errorBanner(err)
+                }
+
+                // SponsorBlock skip toast
+                sponsorSkipToast
+
+                // Caption cue overlay — shown when a track is selected and a cue is active
+                #if !os(tvOS)
+                if let cue = vm.currentCaptionCue {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        CaptionCueView(text: cue.text)
+                            .padding(.bottom, 72)
+                    }
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                }
+                #endif
+
+                // End cards — shown in the final seconds of a video.
+                // Displayed regardless of controls visibility, matching official YouTube behaviour.
+                #if !os(tvOS)
+                if !vm.endCards.isEmpty {
+                    EndCardOverlay(
+                        cards: vm.endCards,
+                        currentTime: vm.currentTime,
+                        size: geo.size,
+                        onSelect: { card in
+                            guard let videoId = card.videoId else { return }
+                            let video = Video(
+                                id: videoId,
+                                title: card.title,
+                                channelTitle: "",
+                                thumbnailURL: card.thumbnailURL
+                            )
+                            vm.load(video: video)
+                        }
+                    )
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.25), value: vm.controlsVisible)
+                }
+                #endif
+
+                // Stats for Nerds overlay (toggled by two-finger tap)
+                if vm.statsForNerdsVisible {
+                    StatsForNerdsOverlay(snapshot: vm.statsSnapshot)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: vm.statsForNerdsVisible)
+                }
+
+                // More-menu — pure SwiftUI overlay so no UIKit presentation fires
+                // onDisappear on the player and tears itself down.
+                if showMoreMenu {
+                    moreMenuOverlay
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.easeOut(duration: 0.2), value: showMoreMenu)
+                }
+
+                // Speed picker — pure SwiftUI overlay, no UIKit sheet presentation.
+                if showSpeedPicker {
+                    speedPickerOverlay
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.easeOut(duration: 0.2), value: showSpeedPicker)
+                }
+
+                // Quality picker — pure SwiftUI overlay, no UIKit sheet presentation.
+                if showQualityPicker {
+                    qualityPickerOverlay
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.easeOut(duration: 0.2), value: showQualityPicker)
+                }
+
+                // Caption picker — pure SwiftUI overlay, no UIKit sheet presentation.
+                #if !os(tvOS)
+                if showCaptionPicker {
+                    captionPickerOverlay
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.easeOut(duration: 0.2), value: showCaptionPicker)
+                }
+                #endif
+
+                // Description sheet — pure SwiftUI overlay.
+                if showDescriptionSheet {
+                    descriptionOverlay
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.easeOut(duration: 0.2), value: showDescriptionSheet)
+                }
+
+                // Comments sheet — pure SwiftUI overlay.
+                if showCommentsSheet {
+                    commentsOverlay
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.easeOut(duration: 0.2), value: showCommentsSheet)
+                }
+            }
+            .offset(x: slideOffset)
+        }
+        .background(Color.black.ignoresSafeArea())
+        #if os(tvOS)
+        .focusable()
+        .focused($playerFocused)
+        // Siri Remote D-pad: left/right seek ±10s; up/down toggle controls overlay.
+        .onMoveCommand { direction in
+            guard !isTransitioning else { return }
+            switch direction {
+            case .left:
+                vm.seekRelative(seconds: -10)
+            case .right:
+                vm.seekRelative(seconds: 10)
+            default:
+                vm.toggleControls()
+            }
+        }
+        .onPlayPauseCommand {
+            vm.togglePlayPause()
+        }
+        .onExitCommand {
+            vm.stop()
+            dismiss()
+        }
+        #endif
+        #if os(iOS)
+        .navigationBarHidden(true)
+        .statusBarHidden(true)
+        .toolbar(.hidden, for: .tabBar)
+        #elseif os(tvOS)
+        .toolbar(.hidden, for: .tabBar)
+        #endif
+        // Always-visible title badge so XCUITest can read the current video title
+        // without waiting for the controls overlay to be shown.
+        // Also provides an always-accessible back button for UI automation.
+        .overlay(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                Button { vm.stop(); withAnimation(.none) { dismiss() } } label: {
+                    Color.clear.frame(width: 60, height: 60)
+                }
+                .accessibilityIdentifier("player.backButton")
+                #if os(tvOS)
+                .buttonStyle(.plain)
+                .focusable(false)
+                #endif
+                Text(vm.playerInfo?.video.title ?? video.title)
+                    .font(.caption)
+                    .opacity(0)   // visually invisible (including emoji), accessible
+                    .accessibilityIdentifier("player.titleLabel")
+                    .allowsHitTesting(false)
+            }
+            .padding(.top, 60)
+        }
+        .onAppear {
+            swipeLog.notice("[PlayerView] onAppear id=\(video.id)")
+            #if os(tvOS)
+            playerFocused = true
+            #endif
+            if vm.currentVideoId == video.id {
+                // Spurious appear (e.g. a sheet temporarily covered us) — only resume
+                // if playback was active before the view disappeared, so an intentional
+                // user pause is not overridden (e.g. pause → background → foreground).
+                if vm.wasPlayingBeforeSuspend {
+                    vm.resume()
+                }
+            } else {
+                vm.load(video: video)
+            }
+            vm.setPlaybackSpeed(store.settings.playbackSpeed)
+            vm.updateSettings(store.settings)
+            vm.updateAuthToken(authService.accessToken)
+        }
+        .onDisappear {
+            swipeLog.notice("[PlayerView] onDisappear id=\(video.id) isInBackground=\(isInBackground)")
+            guard !isInBackground else { return }
+            vm.suspend()
+        }
+        .onChange(of: authService.accessToken) { _, newToken in vm.updateAuthToken(newToken) }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                isInBackground = true
+            case .active:
+                isInBackground = false
+                vm.handleForeground()
+            default:
+                break
+            }
+        }
+        #if os(iOS)
+        // Create the PiP controller the first time the player actually starts
+        // playing — AVPlayer must have a ready item for isPictureInPicturePossible
+        // to ever become true. Creating it at view-appear time (before any item
+        // is loaded) means it stays permanently inert.
+        .onChange(of: vm.isPlaying) { _, playing in
+            guard playing, pipController == nil,
+                  let layer = playerLayer,
+                  AVPictureInPictureController.isPictureInPictureSupported() else { return }
+            let pip = AVPictureInPictureController(playerLayer: layer)
+            pip?.canStartPictureInPictureAutomaticallyFromInline = true
+            let delegate = PiPDelegate { active in isPiPActive = active }
+            pip?.delegate = delegate
+            pipDelegate = delegate
+            pipController = pip
+        }
+        #endif
+        .navigationDestination(item: $channelDestination) { dest in
+            ChannelView(channelId: dest.channelId)
+        }
+        #if !os(tvOS)
+        .onChange(of: downloadService.state) { _, newState in
+            switch newState {
+            case .done:
+                let title = vm.playerInfo?.video.title ?? video.title
+                downloadAlertItem = DownloadAlertItem(title: "Saved to Gallery", message: "\"\(title)\" has been saved to your Photos library.")
+                downloadService.reset()
+            case .failed(let reason):
+                downloadAlertItem = DownloadAlertItem(title: "Download Failed", message: reason)
+                downloadService.reset()
+            default:
+                break
+            }
+        }
+        .alert(item: $downloadAlertItem) { item in
+            Alert(title: Text(item.title), message: Text(item.message), dismissButton: .default(Text("OK")))
+        }
+        #endif
+    }
+
+    // MARK: - Slide transition
+
+    /// Animates the current content off-screen in `direction` (-1 = left, +1 = right),
+    /// runs `action` to load the next/previous video, then slides the new content in
+    /// from the opposite side.
+    private func performHorizontalTransition(direction: CGFloat, screenWidth: CGFloat, action: @escaping () -> Void) {
+        // Set the re-entry guard synchronously so any concurrent gesture event
+        // arriving before the Task runs still sees isTransitioning == true.
+        isTransitioning = true
+        // Defer ALL SwiftUI state mutations (incl. the initial slide-out animation)
+        // into the async Task so none of them execute synchronously inside UIKit's
+        // touch-event delivery pass. On iOS 26 the UpdateCycle framework throws when
+        // @Observable/@State mutations happen synchronously during event dispatch.
+        Task { @MainActor in
+            withAnimation(.easeIn(duration: 0.2)) {
+                slideOffset = direction * screenWidth
+            }
+            try? await Task.sleep(for: .milliseconds(220))
+            action()                                        // load new video, clears AVPlayer
+            slideOffset = -direction * screenWidth          // snap to opposite side (off-screen)
+            withAnimation(.easeOut(duration: 0.25)) {
+                slideOffset = 0                             // slide new content in
+            }
+            try? await Task.sleep(for: .milliseconds(270))
+            isTransitioning = false
+        }
+    }
+
+    // MARK: - Controls overlay
+
+    private func controlsOverlay(size: CGSize, safeAreaInsets: EdgeInsets) -> some View {
+        VStack {
+            // Top bar: back + title
+            HStack {
+                Button { vm.stop(); withAnimation(.none) { dismiss() } } label: {
+                    Image(systemName: AppSymbol.chevronLeft)
+                        .font(.title2)
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .background(.black.opacity(0.4))
+                        .clipShape(Circle())
+                }
+                .accessibilityIdentifier("player.backButton")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(vm.playerInfo?.video.title ?? video.title)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("player.titleLabel")
+                    let channelId = vm.playerInfo?.video.channelId ?? video.channelId
+                    let channelTitle = vm.playerInfo?.video.channelTitle ?? video.channelTitle
+                    Button {
+                        guard let cid = channelId, !cid.isEmpty else { return }
+                        channelDestination = ChannelDestination(channelId: cid)
+                    } label: {
+                        Text(channelTitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(channelId == nil || channelId?.isEmpty == true)
+                }
+                Spacer()
+                #if os(iOS)
+                // Picture-in-Picture button — shown whenever PiP is supported on this device
+                if let pip = pipController {
+                    Button {
+                        if isPiPActive {
+                            pip.stopPictureInPicture()
+                        } else {
+                            pip.startPictureInPicture()
+                        }
+                    } label: {
+                        Image(systemName: isPiPActive ? "pip.exit" : "pip.enter")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.black.opacity(0.4))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("player.pipButton")
+                }
+                #endif
+                // Share / Download menu
+                Button {
+                    swipeLog.notice("[menu] ... button tapped — controlsVisible=\(vm.controlsVisible) showMoreMenu=\(showMoreMenu)")
+                    showMoreMenu = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.white)
+                        .padding(8)
+                        .background(.black.opacity(0.4))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, max(safeAreaInsets.top, 20))
+
+            Spacer()
+
+            // Centre: rewind / play-pause / forward
+            HStack(spacing: 40) {
+                seekButton(symbol: "gobackward.\(store.settings.seekBackSeconds)",
+                           seconds: -Double(store.settings.seekBackSeconds))
+                playPauseButton
+                seekButton(symbol: "goforward.\(store.settings.seekForwardSeconds)",
+                           seconds: Double(store.settings.seekForwardSeconds))
+            }
+            .disabled(vm.isLoading)
+            .opacity(vm.isLoading ? 0.3 : 1)
+
+            Spacer()
+
+            // Bottom: progress bar + prev/next
+            VStack(spacing: 8) {
+                // Current chapter title — shown whenever chapters are available
+                if let chapter = vm.currentChapter {
+                    Text(chapter.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: chapter.title)
+                }
+                progressBar
+                HStack {
+                    // Previous video button
+                    Button {
+                        vm.playPrevious()
+                    } label: {
+                        Image(systemName: AppSymbol.previousTrack)
+                            .font(.system(size: 18))
+                            .foregroundStyle(vm.hasPrevious && !vm.isLoading ? .white : .white.opacity(0.3))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!vm.hasPrevious || vm.isLoading)
+
+                    // Previous chapter button — only present when the video has chapters
+                    if !vm.chapters.isEmpty {
+                        Button {
+                            vm.skipToPreviousChapter()
+                        } label: {
+                            Image(systemName: AppSymbol.previousChapter)
+                                .font(.system(size: 18))
+                                .foregroundStyle(vm.hasPreviousChapter && !vm.isLoading ? .white : .white.opacity(0.3))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!vm.hasPreviousChapter || vm.isLoading)
+                        .accessibilityIdentifier("player.prevChapterBtn")
+                    }
+
+                    #if !os(tvOS)
+                    Text(formatDuration(vm.currentTime))
+                        .padding(.leading, 6)
+                    Spacer()
+                    Text(formatDuration(vm.duration))
+                        .padding(.trailing, 6)
+                    #else
+                    Spacer()
+                    #endif
+
+                    // Next chapter button — only present when the video has chapters
+                    if !vm.chapters.isEmpty {
+                        Button {
+                            vm.skipToNextChapter()
+                        } label: {
+                            Image(systemName: AppSymbol.nextChapter)
+                                .font(.system(size: 18))
+                                .foregroundStyle(vm.hasNextChapter && !vm.isLoading ? .white : .white.opacity(0.3))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!vm.hasNextChapter || vm.isLoading)
+                        .accessibilityIdentifier("player.nextChapterBtn")
+                    }
+
+                    // Next video button
+                    Button {
+                        vm.playNext()
+                    } label: {
+                        Image(systemName: AppSymbol.nextTrack)
+                            .font(.system(size: 18))
+                            .foregroundStyle(vm.hasNext && !vm.isLoading ? .white : .white.opacity(0.3))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!vm.hasNext || vm.isLoading)
+                    .accessibilityIdentifier("player.nextBtn")
+                }
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.8))
+                #if os(tvOS)
+                .padding(.horizontal, 40)
+                #else
+                .padding(.horizontal, 20)
+                #endif
+            }
+            .padding(.bottom, 20)
+        }
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.6), .clear, .clear, .black.opacity(0.6)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                swipeLog.notice("[menu] gradient background tap — controlsVisible=\(vm.controlsVisible)")
+                vm.toggleControls()
+            }
+        )
+    }
+
+    // MARK: - Control elements
+
+    /// Pure-SwiftUI bottom sheet combining all top-bar controls + Share/Download.
+    /// Rendered inside the player's ZStack so no UIKit sheet presentation
+    /// fires onDisappear and teardowns the action sheet mid-animation.
+    private var moreMenuOverlay: some View {
+        let currentVideo = vm.playerInfo?.video ?? video
+        return ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showMoreMenu = false }
+
+            VStack(spacing: 0) {
+                // Speed
+                Button {
+                    showMoreMenu = false
+                    showSpeedPicker = true
+                } label: {
+                    HStack {
+                        Label("Playback Speed", systemImage: "speedometer")
+                        Spacer()
+                        Text(store.settings.playbackSpeed == 1.0 ? "Normal"
+                             : "\(store.settings.playbackSpeed, specifier: "%.2g")×")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding()
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                Divider()
+                // Quality (only when formats are available)
+                if !vm.availableFormats.isEmpty {
+                    Button {
+                        showMoreMenu = false
+                        showQualityPicker = true
+                    } label: {
+                        HStack {
+                            Label("Quality", systemImage: "4k.tv")
+                            Spacer()
+                            Text(vm.selectedFormat?.qualityLabel ?? "Auto")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    .disabled(vm.isLoading)
+                    Divider()
+                }
+                // Like / Dislike (requires sign-in)
+                if authService.isSignedIn {
+                    HStack(spacing: 0) {
+                        Button {
+                            vm.like()
+                            showMoreMenu = false
+                        } label: {
+                            Label(
+                                vm.likeStatus == .like ? "Liked" : "Like",
+                                systemImage: vm.likeStatus == .like
+                                    ? "\(AppSymbol.thumbsUp).fill" : AppSymbol.thumbsUp
+                            )
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .foregroundStyle(vm.likeStatus == .like ? Color.accentColor : .primary)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        Divider().frame(height: 44)
+                        Button {
+                            vm.dislike()
+                            showMoreMenu = false
+                        } label: {
+                            Label(
+                                vm.likeStatus == .dislike ? "Disliked" : "Dislike",
+                                systemImage: vm.likeStatus == .dislike
+                                    ? "\(AppSymbol.thumbsDown).fill" : AppSymbol.thumbsDown
+                            )
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .foregroundStyle(vm.likeStatus == .dislike ? Color.accentColor : .primary)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Divider()
+                }
+                // Share
+                #if os(iOS)
+                Button {
+                    showMoreMenu = false
+                    if let url = URL(string: "https://www.youtube.com/watch?v=\(currentVideo.id)") {
+                        presentShareSheet(url: url)
+                    }
+                } label: {
+                    Label("Share", systemImage: AppSymbol.share)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                Divider()
+                #endif
+                // Sleep timer
+                Menu {
+                    Button("Off") { vm.setSleepTimer(minutes: nil) }
+                    ForEach(PlaybackViewModel.sleepTimerOptions, id: \.self) { mins in
+                        Button("\(mins) min") { vm.setSleepTimer(minutes: mins) }
+                    }
+                } label: {
+                    HStack {
+                        Label("Sleep Timer", systemImage: "moon.zzz")
+                        Spacer()
+                        if let mins = vm.sleepTimerMinutes {
+                            Text("\(mins) min")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Off")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding()
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                Divider()
+                #if !os(tvOS)
+                // Download
+                Button {
+                    showMoreMenu = false
+                    downloadService.updateAuthToken(authService.accessToken)
+                    downloadService.download(video: currentVideo)
+                } label: {
+                    Group {
+                        if downloadService.state.isActive {
+                            Label("Downloading…", systemImage: AppSymbol.download)
+                        } else {
+                            Label("Download to Gallery", systemImage: AppSymbol.download)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                .disabled(downloadService.state.isActive)
+                Divider()
+                // Captions (only when tracks are available)
+                if !vm.availableCaptions.isEmpty {
+                    Button {
+                        showMoreMenu = false
+                        showCaptionPicker = true
+                    } label: {
+                        HStack {
+                            Label("Captions", systemImage: "captions.bubble")
+                            Spacer()
+                            Text(vm.selectedCaption.map {
+                                $0.isAutoGenerated ? "\($0.name) (auto)" : $0.name
+                            } ?? "Off")
+                            .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    Divider()
+                }
+                #endif
+                // Description
+                let descriptionText = currentVideo.description ?? ""
+                if !descriptionText.isEmpty {
+                    Button {
+                        showMoreMenu = false
+                        showDescriptionSheet = true
+                    } label: {
+                        Label("Description", systemImage: "text.alignleft")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    Divider()
+                }
+                // Comments
+                Button {
+                    showMoreMenu = false
+                    showCommentsSheet = true
+                    if videoComments.isEmpty && !isLoadingComments {
+                        loadComments()
+                    }
+                } label: {
+                    Label("Comments", systemImage: "bubble.left.and.bubble.right")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                Divider()
+                Button(role: .cancel) { showMoreMenu = false } label: {                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .fontWeight(.semibold)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Description overlay
+
+    private var descriptionOverlay: some View {
+        let currentVideo = vm.playerInfo?.video ?? video
+        let description = currentVideo.description ?? ""
+        return ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showDescriptionSheet = false }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Button { showDescriptionSheet = false } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .padding(12)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Text("Description")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                .padding(.horizontal, 4)
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(currentVideo.title)
+                            .font(.headline)
+                        if !currentVideo.channelTitle.isEmpty {
+                            Text(currentVideo.channelTitle)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        if !description.isEmpty {
+                            Text(descriptionAttributedString(description))
+                                .font(.body)
+                        } else {
+                            Text("No description available.")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                }
+                .frame(maxHeight: 400)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    private func descriptionAttributedString(_ string: String) -> AttributedString {
+        var attributed = AttributedString(string)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return attributed
+        }
+        let nsString = string as NSString
+        let matches = detector.matches(in: string, range: NSRange(location: 0, length: nsString.length))
+        for match in matches {
+            guard let range = Range(match.range, in: string),
+                  let url = match.url,
+                  let attrRange = Range(range, in: attributed) else { continue }
+            attributed[attrRange].link = url
+        }
+        return attributed
+    }
+
+    // MARK: - Comments overlay
+
+    private var commentsOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showCommentsSheet = false }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Button { showCommentsSheet = false } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .padding(12)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Text("Comments")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                .padding(.horizontal, 4)
+                Divider()
+                if isLoadingComments {
+                    ProgressView()
+                        .padding(40)
+                } else if videoComments.isEmpty {
+                    Text("No comments available.")
+                        .foregroundStyle(.secondary)
+                        .padding(40)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(videoComments) { comment in
+                                CommentRowView(comment: comment)
+                            }
+                        }
+                        .padding()
+                    }
+                    .frame(maxHeight: 400)
+                }
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Comments loading
+
+    private func loadComments() {
+        let videoId = (vm.playerInfo?.video ?? video).id
+        let token = authService.accessToken
+        isLoadingComments = true
+        Task {
+            do {
+                await commentsAPI.setAuthToken(token)
+                let fetched = try await commentsAPI.fetchComments(videoId: videoId)
+                videoComments = fetched
+            } catch {
+                // Comments unavailable — empty state shown
+            }
+            isLoadingComments = false
+        }
+    }
+
+    private var playPauseButton: some View {
+        Button { vm.togglePlayPause() } label: {
+            Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 42))
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("player.playPauseButton")
+    }
+
+    private func seekButton(symbol: String, seconds: TimeInterval) -> some View {
+        Button { vm.seekRelative(seconds: seconds) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 28))
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var progressBar: some View {
+        #if os(tvOS)
+        tvProgressBar
+        #else
+        iosProgressBar
+        #endif
+    }
+
+    #if os(tvOS)
+    private var tvProgressBar: some View {
+        VStack(spacing: 6) {
+            // Scrub time tooltip
+            GeometryReader { geo in
+                if vm.isScrubbing && vm.duration > 0 {
+                    let hPad: CGFloat = 40
+                    let trackW = geo.size.width - hPad * 2
+                    let fraction = CGFloat(vm.scrubTime / vm.duration)
+                    let thumbX = hPad + trackW * fraction
+                    let labelW: CGFloat = 90
+                    let clampedX = min(max(thumbX, hPad + labelW / 2), geo.size.width - hPad - labelW / 2)
+
+                    Text(formatDuration(vm.scrubTime))
+                        .font(.body.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 8))
+                        .frame(width: labelW)
+                        .position(x: clampedX, y: geo.size.height / 2)
+                }
+            }
+            .frame(height: 36)
+
+            // Track row
+            GeometryReader { geo in
+                let hPad: CGFloat = 40
+                let trackW = geo.size.width - hPad * 2
+                let time = vm.isScrubbing ? vm.scrubTime : vm.currentTime
+                let progress = vm.duration > 0 ? CGFloat(time / vm.duration) : 0
+                let thumbX = hPad + trackW * progress
+
+                ZStack {
+                    // Background track
+                    Capsule()
+                        .fill(Color.white.opacity(0.25))
+                        .frame(height: 6)
+                        .padding(.horizontal, hPad)
+
+                    // Progress fill
+                    HStack(spacing: 0) {
+                        Capsule()
+                            .fill(Color.red.opacity(0.85))
+                            .frame(width: max(thumbX - hPad, 0), height: 6)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.leading, hPad)
+
+                    // Thumb
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 22, height: 22)
+                        .shadow(color: .black.opacity(0.4), radius: 4)
+                        .position(x: thumbX, y: geo.size.height / 2)
+                }
+                .overlay(sponsorBlockMarkers)
+                .overlay(chapterMarkers)
+            }
+            .frame(height: 36)
+
+            // Time labels
+            HStack {
+                Text(formatDuration(vm.currentTime))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.leading, 40)
+                Spacer()
+                Text(formatDuration(vm.duration))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.trailing, 40)
+            }
+        }
+    }
+    #endif
+
+    private var iosProgressBar: some View {
+        VStack(spacing: 4) {
+            // Tooltip row — always occupies space so layout doesn't jump
+            GeometryReader { geo in
+                if vm.isScrubbing && vm.duration > 0 {
+                    let hPad: CGFloat = 20
+                    let trackW = geo.size.width - hPad * 2
+                    let fraction = CGFloat(vm.scrubTime / vm.duration)
+                    let thumbX = hPad + trackW * fraction
+                    let labelW: CGFloat = 64
+                    let clampedX = min(max(thumbX, hPad + labelW / 2), geo.size.width - hPad - labelW / 2)
+
+                    Text(formatDuration(vm.scrubTime))
+                        .font(.caption.monospacedDigit())
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                        .frame(width: labelW)
+                        .position(x: clampedX, y: geo.size.height / 2)
+                }
+            }
+            .frame(height: 28)
+
+            // Track + slider row (custom — fully transparent thumb and track)
+            GeometryReader { geo in
+                let hPad: CGFloat = 20
+                let trackW = geo.size.width - hPad * 2
+                let time = vm.isScrubbing ? vm.scrubTime : vm.currentTime
+                let progress = vm.duration > 0 ? CGFloat(time / vm.duration) : 0
+                let thumbX = hPad + trackW * progress
+
+                ZStack {
+                    // Background track
+                    Capsule()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(height: 4)
+                        .padding(.horizontal, hPad)
+
+                    // Progress fill
+                    HStack(spacing: 0) {
+                        Capsule()
+                            .fill(Color.red.opacity(0.5))
+                            .frame(width: max(thumbX - hPad, 0), height: 4)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.leading, hPad)
+
+                    // Thumb
+                    Circle()
+                        .fill(Color.white.opacity(0.5))
+                        .frame(width: 16, height: 16)
+                        .position(x: thumbX, y: geo.size.height / 2)
+                }
+                .overlay(sponsorBlockMarkers)
+                .overlay(chapterMarkers)
+                .contentShape(Rectangle())
+                #if !os(tvOS)
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let fraction = min(max((value.location.x - hPad) / trackW, 0), 1)
+                            if !vm.isScrubbing { vm.beginScrubbing() }
+                            vm.updateScrub(to: Double(fraction) * vm.duration)
+                        }
+                        .onEnded { _ in vm.commitScrub() }
+                )
+                #endif
+            }
+            .frame(height: 28)
+        }
+    }
+
+    // Chapter tick marks on the progress bar — small white notches at each chapter boundary.
+    // Each tick has a 24×44 pt transparent tap area so the user can tap to jump to it.
+    private var chapterMarkers: some View {
+        GeometryReader { geo in
+            ForEach(vm.chapters) { chapter in
+                let x = geo.size.width * CGFloat(chapter.startTime / max(vm.duration, 1))
+                ZStack {
+                    // Invisible enlarged hit area
+                    Color.clear
+                        .frame(width: 24, height: 44)
+                    // Visible tick
+                    Rectangle()
+                        .fill(Color.white.opacity(0.85))
+                        .frame(width: 2, height: 12)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { vm.seek(to: chapter.startTime) }
+                .position(x: x, y: geo.size.height / 2)
+            }
+        }
+    }
+
+    // SponsorBlock segment markers on the progress bar
+    private var sponsorBlockMarkers: some View {
+        GeometryReader { geo in
+            ForEach(vm.sponsorSegments) { seg in
+                let x = geo.size.width * CGFloat(seg.start / max(vm.duration, 1))
+                let w = geo.size.width * CGFloat((seg.end - seg.start) / max(vm.duration, 1))
+                Rectangle()
+                    .fill(seg.category.color.opacity(0.8))
+                    .frame(width: max(w, 2), height: 4)
+                    .position(x: x + w / 2, y: geo.size.height / 2)
+            }
+        }
+    }
+
+    private var sponsorSkipToast: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                if let seg = vm.currentToastSegment {
+                    Button("Skip \(seg.category.displayName)") {
+                        vm.skipToastSegment()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(seg.category.color)
+                    .padding()
+                    .transition(.move(edge: .trailing))
+                }
+            }
+        }
+        .animation(.easeInOut, value: vm.currentToastSegment?.id)
+    }
+
+    private func errorBanner(_ err: Error) -> some View {
+        VStack {
+            HStack {
+                Image(systemName: AppSymbol.warning)
+                    .foregroundStyle(.yellow)
+                Text(err.localizedDescription)
+                    .font(.callout)
+                    .foregroundStyle(.white)
+            }
+            .padding()
+            .background(.black.opacity(0.75))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .padding()
+        .accessibilityIdentifier("player.errorBanner")
+    }
+
+    // MARK: - Quality picker overlay
+
+    private var qualityPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showQualityPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showQualityPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Quality")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Button {
+                            vm.selectFormat(nil)
+                            store.settings.preferredQuality = .auto
+                            showQualityPicker = false
+                        } label: {
+                            HStack {
+                                Text("Auto")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if vm.selectedFormat == nil {
+                                    Image(systemName: AppSymbol.checkmark)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                        ForEach(vm.availableFormats) { fmt in
+                            Button {
+                                vm.selectFormat(fmt)
+                                store.settings.preferredQuality = AppSettings.VideoQuality.from(height: fmt.height) ?? .auto
+                                showQualityPicker = false
+                            } label: {
+                                HStack {
+                                    Text(fmt.qualityLabel)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if vm.selectedFormat?.id == fmt.id {
+                                        Image(systemName: AppSymbol.checkmark)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 320)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Speed picker overlay
+
+    private var speedPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showSpeedPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showSpeedPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Playback Speed")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(AppSettings.availableSpeeds, id: \.self) { (speed: Double) in
+                            Button {
+                                store.settings.playbackSpeed = speed
+                                vm.setPlaybackSpeed(speed)
+                                showSpeedPicker = false
+                            } label: {
+                                HStack {
+                                    Text(speed == 1.0 ? "Normal (1\u{d7})" : "\(speed, specifier: "%.2g")\u{d7}")
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if abs(store.settings.playbackSpeed - speed) < 0.01 {
+                                        Image(systemName: AppSymbol.checkmark)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 320)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Caption picker overlay
+
+    #if !os(tvOS)
+    private var captionPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showCaptionPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showCaptionPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Captions")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Off row
+                        Button {
+                            vm.selectCaption(nil)
+                            showCaptionPicker = false
+                        } label: {
+                            HStack {
+                                Text("Off")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if vm.selectedCaption == nil {
+                                    Image(systemName: AppSymbol.checkmark)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                        ForEach(vm.availableCaptions) { track in
+                            Button {
+                                vm.selectCaption(track)
+                                showCaptionPicker = false
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(track.name)
+                                            .foregroundStyle(.primary)
+                                        if track.isAutoGenerated {
+                                            Text("Auto-generated")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    if vm.selectedCaption?.id == track.id {
+                                        Image(systemName: AppSymbol.checkmark)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 360)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+    #endif
+
+    // MARK: - Share
+
+    #if os(iOS)
+    private func presentShareSheet(url: URL) {
+        let wasPlaying = vm.isPlaying
+        vm.suspend()
+        let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        vc.completionWithItemsHandler = { _, _, _, _ in
+            if wasPlaying { vm.resume() }
+        }
+        guard
+            let scene = UIApplication.shared.connectedScenes
+                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
+            let root = scene.windows.first(where: \.isKeyWindow)?.rootViewController
+        else { return }
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        top.present(vc, animated: true)
+    }
+    #endif
+}
+
+// MARK: - StatsForNerdsOverlay
+
+struct StatsForNerdsOverlay: View {
+    let snapshot: StatsForNerdsSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            row("Video ID",         snapshot.videoId)
+            row("Resolution",       snapshot.fps > 0
+                    ? "\(snapshot.displayResolution) @ \(snapshot.fps) fps"
+                    : snapshot.displayResolution)
+            row("Codec",            snapshot.codec)
+            row("Nominal Bitrate",  snapshot.nominalBitrate)
+            row("Connection Speed", snapshot.observedBitrate)
+            row("Dropped Frames",   "\(snapshot.droppedFrames)")
+            row("Stalls",           "\(snapshot.stalls)")
+            Text("Two-finger tap to dismiss")
+                .foregroundStyle(.white.opacity(0.4))
+                .font(.system(.caption2, design: .monospaced))
+                .padding(.top, 4)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.black.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 20)
+        .padding(.top, 30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+    }
+
+    private func row(_ key: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(key)
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(minWidth: 130, alignment: .leading)
+            Text(value.isEmpty ? "—" : value)
+                .foregroundStyle(.white)
+        }
+        .font(.system(.caption, design: .monospaced))
+    }
+}
+
+// MARK: - AVPlayerLayerView
+
+#if os(iOS) || os(tvOS)
+/// Lightweight UIViewRepresentable wrapping an `AVPlayerLayer` directly.
+/// Unlike `VideoPlayer` / `AVPlayerViewController`, it does not interfere
+/// with the UIKit accessibility tree so SwiftUI overlays remain reachable.
+/// On tvOS, `AVPlayerViewController` would provide system transport controls
+/// but `AVPlayerLayer` is used here for layout consistency with iOS.
+private struct AVPlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer?
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
+    var onLayerReady: ((AVPlayerLayer) -> Void)? = nil
+
+    func makeUIView(context: Context) -> _PlayerUIView {
+        let view = _PlayerUIView()
+        view.backgroundColor = .black
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = videoGravity
+        view.onLayerReady = onLayerReady
+        return view
+    }
+
+    func updateUIView(_ uiView: _PlayerUIView, context: Context) {
+        uiView.playerLayer.player = player
+        uiView.playerLayer.videoGravity = videoGravity
+    }
+
+    final class _PlayerUIView: UIView {
+        override static var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+        var onLayerReady: ((AVPlayerLayer) -> Void)?
+        private var didFireCallback = false
+
+        override func willMove(toWindow newWindow: UIWindow?) {
+            super.willMove(toWindow: newWindow)
+            guard newWindow != nil, !didFireCallback else { return }
+            didFireCallback = true
+            // Defer to next run-loop tick so the layer has a non-zero frame.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.onLayerReady?(self.playerLayer)
+            }
+        }
+    }
+}
+
+// MARK: - PiPDelegate
+
+/// AVPictureInPictureControllerDelegate that notifies a SwiftUI closure when
+/// PiP starts or stops, and implements the restore callback required for a
+/// smooth transition back to full-screen without rebuffering.
+private final class PiPDelegate: NSObject, AVPictureInPictureControllerDelegate {
+    private let onActiveChange: (Bool) -> Void
+
+    init(onActiveChange: @escaping (Bool) -> Void) {
+        self.onActiveChange = onActiveChange
+    }
+
+    func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        onActiveChange(true)
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
+        onActiveChange(false)
+    }
+
+    /// Called when the user taps the PiP window to return to the app.
+    /// Must call completionHandler(true) once the UI is ready to show the video
+    /// again — without this iOS cannot complete the restore animation and the
+    /// player rebuffers/stutters.
+    func pictureInPictureController(
+        _ controller: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
+        // The AVPlayerLayer is always present and visible in PlayerView, so the
+        // UI is immediately ready. Calling completionHandler(true) right away
+        // lets AVKit animate the video seamlessly back into the layer.
+        completionHandler(true)
+    }
+}
+
+// MARK: - HoldSpeedBadge
+
+private struct HoldSpeedBadge: View {
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "forward.fill")
+                .font(.system(size: 20, weight: .semibold))
+            Text("2×")
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - SwipeGestureOverlay (horizontal)
+
+#if os(iOS)
+/// Left swipe → `onSwipeLeft`, right swipe → `onSwipeRight`, tap → `onTap`.
+/// Set `isEnabled = false` (e.g. while the progress slider is being scrubbed) to
+/// temporarily suppress pan recognition so the scrub drag is not mistaken for a swipe.
+private struct SwipeGestureOverlay: UIViewRepresentable {
+    var onSwipeLeft:        () -> Void
+    var onSwipeRight:       () -> Void
+    var onTap:              () -> Void
+    var onTwoFingerTap:     () -> Void = {}
+    var onPanChanged:       ((CGFloat) -> Void)?
+    var onSwipeCancelled:   (() -> Void)?
+    var onLongPressStart:   (() -> Void)?
+    var onLongPressEnd:     (() -> Void)?
+    var isEnabled:          Bool = true
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let pan = UIPanGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.handlePan(_:)))
+        pan.cancelsTouchesInView = true
+        view.addGestureRecognizer(pan)
+        context.coordinator.pan = pan
+
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                          action: #selector(Coordinator.handleTap))
+        tap.cancelsTouchesInView = false
+        tap.require(toFail: pan)
+        view.addGestureRecognizer(tap)
+        context.coordinator.tap = tap
+
+        let twoFingerTap = UITapGestureRecognizer(target: context.coordinator,
+                                                   action: #selector(Coordinator.handleTwoFingerTap))
+        twoFingerTap.numberOfTouchesRequired = 2
+        twoFingerTap.cancelsTouchesInView = false
+        view.addGestureRecognizer(twoFingerTap)
+
+        let longPress = UILongPressGestureRecognizer(target: context.coordinator,
+                                                      action: #selector(Coordinator.handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.4
+        longPress.cancelsTouchesInView = false
+        view.addGestureRecognizer(longPress)
+        context.coordinator.longPress = longPress
+
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.pan?.isEnabled = isEnabled
+        context.coordinator.tap?.isEnabled = isEnabled
+        context.coordinator.longPress?.isEnabled = isEnabled
+    }
+
+    final class Coordinator: NSObject {
+        var parent: SwipeGestureOverlay
+        weak var pan: UIPanGestureRecognizer?
+        weak var tap: UITapGestureRecognizer?
+        weak var longPress: UILongPressGestureRecognizer?
+        private let minDistance: CGFloat = 40
+
+        init(_ parent: SwipeGestureOverlay) { self.parent = parent }
+
+        @MainActor @objc func handlePan(_ gr: UIPanGestureRecognizer) {
+            let t = gr.translation(in: gr.view)
+            switch gr.state {
+            case .changed:
+                parent.onPanChanged?(t.x)
+            case .ended:
+                guard abs(t.x) > minDistance, abs(t.x) > abs(t.y) else {
+                    parent.onSwipeCancelled?()
+                    return
+                }
+                if t.x < 0 { parent.onSwipeLeft() } else { parent.onSwipeRight() }
+            case .cancelled, .failed:
+                parent.onSwipeCancelled?()
+            default:
+                break
+            }
+        }
+
+        @MainActor @objc func handleTap() { parent.onTap() }
+        @MainActor @objc func handleTwoFingerTap() { parent.onTwoFingerTap() }
+
+        @MainActor @objc func handleLongPress(_ gr: UILongPressGestureRecognizer) {
+            switch gr.state {
+            case .began:
+                parent.onLongPressStart?()
+            case .ended, .cancelled, .failed:
+                parent.onLongPressEnd?()
+            default:
+                break
+            }
+        }
+    }
+}
+#endif // os(iOS)
+#endif // os(iOS) || os(tvOS)
+
+// MARK: - RelatedVideosView
+struct RelatedVideosView: View {
+    let videos: [Video]
+    let onSelect: (Video) -> Void
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                ForEach(videos) { video in
+                    VideoCardView(video: video, compact: true)
+                        .padding(.horizontal)
+                        .onTapGesture { onSelect(video) }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - CommentRowView
+
+private struct CommentRowView: View {
+    let comment: Comment
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            AsyncImage(url: comment.authorAvatarURL) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Circle().fill(Color.secondary.opacity(0.3))
+            }
+            .frame(width: 36, height: 36)
+            .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(comment.author)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    Text(comment.publishedTime)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(comment.text)
+                    .font(.callout)
+                if !comment.likeCount.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "hand.thumbsup")
+                            .font(.caption2)
+                        Text(comment.likeCount)
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - EndCardOverlay
+
+/// Positions YouTube end-screen cards absolutely within the player bounds.
+/// Cards are shown only during their `startMs…endMs` window and dismissed when
+/// the controls overlay is visible (consistent with official YouTube behaviour).
+#if !os(tvOS)
+private struct EndCardOverlay: View {
+    let cards: [EndCard]
+    let currentTime: TimeInterval
+    let size: CGSize
+    let onSelect: (EndCard) -> Void
+
+    private var visibleCards: [EndCard] {
+        let ms = Int(currentTime * 1000)
+        return cards.filter { $0.style == .video && $0.videoId != nil && ms >= $0.startMs && ms <= $0.endMs }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(visibleCards) { card in
+                let cardWidth  = card.width / 100 * size.width
+                let cardHeight = cardWidth / max(card.aspectRatio, 0.1)
+                let x          = card.left / 100 * size.width
+                let y          = card.top  / 100 * size.height
+                EndCardButton(card: card, width: cardWidth, height: cardHeight, onSelect: onSelect)
+                    .offset(x: x, y: y)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    .animation(.easeOut(duration: 0.2), value: visibleCards.count)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .allowsHitTesting(!visibleCards.isEmpty)
+    }
+}
+
+private struct EndCardButton: View {
+    let card: EndCard
+    let width: CGFloat
+    let height: CGFloat
+    let onSelect: (EndCard) -> Void
+
+    var body: some View {
+        Button { onSelect(card) } label: {
+            ZStack(alignment: .bottom) {
+                AsyncImage(url: card.thumbnailURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        Color.gray.opacity(0.4)
+                    }
+                }
+                .frame(width: width, height: height)
+                .clipped()
+
+                if !card.title.isEmpty {
+                    Text(card.title)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .lineLimit(2)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.black.opacity(0.65))
+                }
+            }
+            .frame(width: width, height: height)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(.white.opacity(0.4), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("End card: \(card.title)")
+    }
+}
+#endif
+
+// MARK: - AppSettings.VideoGravityMode → AVLayerVideoGravity mapping
+
+private extension AppSettings.VideoGravityMode {
+    var avGravity: AVLayerVideoGravity {
+        self == .fill ? .resizeAspectFill : .resizeAspect
+    }
+}
