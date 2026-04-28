@@ -2313,9 +2313,16 @@ public struct PlayerInfo: Sendable {
     public var preferredStreamURL: URL? {
         // HLS is the most reliable for AVPlayer — adaptive, no header restrictions
         if let hls = hlsURL { return hls }
-        // Combined (muxed) video+audio MP4 as fallback
-        let combined = formats.filter { $0.mimeType.contains("video/mp4") && $0.mimeType.contains("codecs=") }
-        return combined.sorted { ($0.bitrate ?? 0) > ($1.bitrate ?? 0) }.first?.url
+        // Muxed (combined video+audio) MP4 — identified by two codecs separated by ", "
+        // e.g. `video/mp4; codecs="avc1.42001E, mp4a.40.2"` (itag=18).
+        // Adaptive video-only streams also have video/mp4 but only one codec, so the
+        // `", "` check correctly excludes them (they have no audio and can't be played).
+        let muxed = formats.filter {
+            $0.mimeType.hasPrefix("video/mp4") &&
+            $0.mimeType.contains(", ") &&
+            $0.url != nil
+        }
+        return muxed.sorted { ($0.bitrate ?? 0) > ($1.bitrate ?? 0) }.first?.url
     }
 
     /// A direct MP4 URL suitable for file download (muxed video+audio).

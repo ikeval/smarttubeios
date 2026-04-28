@@ -24,6 +24,7 @@ struct ScrollOffsetPreferenceKey: PreferenceKey {
 /// ScrollOffsetRestorer(targetOffset: restoreOffset) { restoreOffset = nil }
 ///     .frame(width: 0, height: 0)
 /// ```
+#if os(iOS) || os(tvOS)
 struct ScrollOffsetRestorer: UIViewRepresentable {
     /// Desired `contentOffset.y`. Pass `nil` to do nothing.
     let targetOffset: CGFloat?
@@ -53,3 +54,4 @@ struct ScrollOffsetRestorer: UIViewRepresentable {
         }
     }
 }
+#endif

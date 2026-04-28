@@ -43,10 +43,10 @@ public struct LibraryView: View {
                 signedOutPrompt
             }
         }
-        #if os(tvOS)
+        #if os(iOS) || os(tvOS)
         .toolbar(.hidden, for: .navigationBar)
-        #else
-        .toolbar(.hidden, for: .navigationBar)
+        #endif
+        #if os(iOS)
         .fullScreenCover(item: $selectedVideo) { video in
             PlayerView(video: video)
         }
@@ -90,7 +90,7 @@ public struct LibraryView: View {
                                 (isSelected || focusedSection == sec) ? Color(white: 0) : Color.primary
                             )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
                     .scaleEffect(focusedSection == sec ? 1.12 : 1.0)
                     .animation(.easeInOut(duration: 0.15), value: focusedSection)
                     .animation(.easeInOut(duration: 0.15), value: selectedSection)

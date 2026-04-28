@@ -30,9 +30,11 @@ public struct BrowseView: View {
         }
         .navigationTitle(vm.currentSection.title)
         .toolbar { sectionPicker }
+        #if !os(macOS)
         .fullScreenCover(item: $selectedVideo) { video in
             PlayerView(video: video)
         }
+        #endif
         .navigationDestination(item: $channelDestination) { dest in
             ChannelView(channelId: dest.channelId)
         }
@@ -49,9 +51,11 @@ public struct BrowseView: View {
         .onChange(of: vm.error == nil ? 0 : 1) { _, hasError in
             if hasError == 1 { showError = true }
         }
+        #if !os(macOS)
         .fullScreenCover(item: $shortsPresentation) { target in
             ShortsPlayerView(videos: target.videos, startIndex: target.startIndex)
         }
+        #endif
         .sheet(isPresented: $showSignIn) { SignInView() }
         .onAppear {
             if vm.videoGroups.isEmpty { vm.loadContent() }

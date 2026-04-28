@@ -39,9 +39,11 @@ public struct PlaylistView: View {
                 vm.load(playlistId: playlistId)
             }
         }
+        #if !os(macOS)
         .fullScreenCover(item: $selectedVideo) { video in
             PlayerView(video: video)
         }
+        #endif
         .navigationDestination(item: $channelDestination) { dest in
             ChannelView(channelId: dest.channelId)
         }

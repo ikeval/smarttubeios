@@ -282,7 +282,7 @@ public struct SignInView: View {
 
 // MARK: - QRCodeView
 
-private struct QRCodeView: View {
+struct QRCodeView: View {
     let content: String
 
     var body: some View {

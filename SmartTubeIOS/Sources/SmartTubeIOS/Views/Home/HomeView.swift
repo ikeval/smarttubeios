@@ -48,11 +48,7 @@ public struct HomeView: View {
             Divider()
             #endif
             contentArea
-                #if os(tvOS)
-                .focusSection()
-                .onExitCommand { focusedSection = selectedSection }
-                #endif
-                #if !os(tvOS)
+                #if os(iOS)
                 .fullScreenCover(item: $selectedVideo) { video in
                     PlayerView(video: video)
                 }
@@ -64,13 +60,16 @@ public struct HomeView: View {
                 .navigationDestination(item: $channelDestination) { dest in
                     ChannelView(channelId: dest.channelId)
                 }
+                #if os(tvOS)
+                .focusSection()
+                #endif
         }
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
-        #endif
         .fullScreenCover(item: $shortsPresentation) { target in
             ShortsPlayerView(videos: target.videos, startIndex: target.startIndex)
         }
+        #endif
         .sheet(isPresented: $showSignIn) { SignInView() }
         .onReceive(NotificationCenter.default.publisher(for: .openChannel)) { note in
             guard let channelId = note.userInfo?["channelId"] as? String, !channelId.isEmpty else { return }
@@ -83,8 +82,6 @@ public struct HomeView: View {
         }
         .task(id: auth.accessToken) {
             await homeVM.updateAuthToken(auth.accessToken)
-            // Only reload the section feed when it is actually displayed;
-            // on the Home chip the feed is hidden so just update the token.
             if selectedSection.type == .home {
                 await sectionVM.setAuthToken(auth.accessToken)
             } else {
@@ -142,23 +139,25 @@ public struct HomeView: View {
             }
         }
         #if os(tvOS)
+        let isFocused = focusedSection == section
         return Button(action: action) {
             Text(section.title)
                 .font(.title3.weight(.medium))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 .background(
-                    (isSelected || focusedSection == section) ? Color.primary : Color.secondary.opacity(0.15),
+                    (isSelected || isFocused) ? Color.primary : Color.secondary.opacity(0.15),
                     in: Capsule()
                 )
                 .foregroundStyle(
-                    (isSelected || focusedSection == section)
+                    (isSelected || isFocused)
                         ? Color(white: colorScheme == .dark ? 0 : 1)
                         : Color.primary
                 )
+                .focusEffectDisabled()
         }
-        .buttonStyle(.plain)
-        .scaleEffect(focusedSection == section ? 1.12 : 1.0)
+        .buttonStyle(.borderless)
+        .scaleEffect(isFocused ? 1.12 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: focusedSection)
         .animation(.easeInOut(duration: 0.15), value: selectedSection)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])

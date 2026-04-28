@@ -4,7 +4,7 @@ import Photos
 import Observation
 import os
 import SmartTubeIOSCore
-#if canImport(ActivityKit)
+#if os(iOS)
 @preconcurrency import ActivityKit
 #endif
 
@@ -45,8 +45,9 @@ public final class VideoDownloadService {
     private let api: InnerTubeAPI
     private var downloadTask: Task<Void, Never>?
 
-    #if canImport(ActivityKit)
+    #if os(iOS)
     @available(iOS 16.1, *)
+    @ObservationIgnored
     private var liveActivity: Activity<DownloadActivityAttributes>?
     #endif
 
@@ -87,7 +88,7 @@ public final class VideoDownloadService {
     public func download(video: Video) {
         guard !state.isActive else { return }
         state = .fetching
-        #if canImport(ActivityKit)
+        #if os(iOS)
         if #available(iOS 16.1, *) {
             startLiveActivity(video: video)
         }
@@ -105,7 +106,7 @@ public final class VideoDownloadService {
 
     // MARK: Live Activity helpers
 
-    #if canImport(ActivityKit)
+    #if os(iOS)
     @available(iOS 16.1, *)
     private func startLiveActivity(video: Video) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
@@ -166,7 +167,7 @@ public final class VideoDownloadService {
         do {
             guard await requestPhotoAddAccess() else {
                 state = .failed("Photo library access is required to save the video")
-                #if canImport(ActivityKit)
+                #if os(iOS)
                 if #available(iOS 16.1, *) { await endLiveActivity(phase: .failed) }
                 #endif
                 return
@@ -174,7 +175,7 @@ public final class VideoDownloadService {
 
             if let tempURL = await tryDirectDownload(videoId: video.id) {
                 downloadLog.notice("[download] remuxing for Photos compatibility")
-                #if canImport(ActivityKit)
+                #if os(iOS)
                 if #available(iOS 16.1, *) { await updateLiveActivity(phase: .saving, progress: 1) }
                 #endif
                 let photosURL = try await passthroughRemux(inputURL: tempURL, videoId: video.id, suffix: "muxed")
@@ -184,14 +185,14 @@ public final class VideoDownloadService {
                 try? FileManager.default.removeItem(at: photosURL)
                 downloadLog.notice("[download] ✅ saved to Photos \(video.id)")
                 state = .done
-                #if canImport(ActivityKit)
+                #if os(iOS)
                 if #available(iOS 16.1, *) { await endLiveActivity(phase: .done) }
                 #endif
                 return
             }
 
             downloadLog.notice("[download] direct download failed, trying adaptive merge fallback")
-            #if canImport(ActivityKit)
+            #if os(iOS)
             if #available(iOS 16.1, *) { await updateLiveActivity(phase: .downloading, progress: 0.1) }
             #endif
             let androidInfo = try await api.fetchPlayerInfoAndroid(videoId: video.id)
@@ -203,7 +204,7 @@ public final class VideoDownloadService {
                   let audioURL = androidInfo.bestAdaptiveAudioURL else {
                 downloadLog.error("[download] ❌ no adaptive video/audio streams found")
                 state = .failed("No downloadable stream found for this video")
-                #if canImport(ActivityKit)
+                #if os(iOS)
                 if #available(iOS 16.1, *) { await endLiveActivity(phase: .failed) }
                 #endif
                 return
@@ -214,25 +215,25 @@ public final class VideoDownloadService {
             let mergedURL = try await mergeAdaptiveStreams(videoURL: videoURL, audioURL: audioURL, videoId: video.id,
                                                           userAgent: InnerTubeClients.Android.userAgent)
             state = .saving
-            #if canImport(ActivityKit)
+            #if os(iOS)
             if #available(iOS 16.1, *) { await updateLiveActivity(phase: .saving, progress: 1) }
             #endif
             try await saveToPhotoLibrary(fileURL: mergedURL)
             try? FileManager.default.removeItem(at: mergedURL)
             downloadLog.notice("[download] ✅ adaptive merge saved to Photos \(video.id)")
             state = .done
-            #if canImport(ActivityKit)
+            #if os(iOS)
             if #available(iOS 16.1, *) { await endLiveActivity(phase: .done) }
             #endif
         } catch is CancellationError {
             state = .idle
-            #if canImport(ActivityKit)
+            #if os(iOS)
             if #available(iOS 16.1, *) { await endLiveActivity(phase: .failed) }
             #endif
         } catch {
             downloadLog.error("[download] ❌ failed: \(error.localizedDescription)")
             state = .failed(error.localizedDescription)
-            #if canImport(ActivityKit)
+            #if os(iOS)
             if #available(iOS 16.1, *) { await endLiveActivity(phase: .failed) }
             #endif
         }
@@ -264,7 +265,7 @@ public final class VideoDownloadService {
             }
             downloadLog.notice("[download] \(label) ✅ muxed URL found, downloading")
             state = .downloading(progress: 0)
-            #if canImport(ActivityKit)
+            #if os(iOS)
             if #available(iOS 16.1, *) { await updateLiveActivity(phase: .downloading, progress: 0) }
             #endif
             if let tempURL = try? await downloadToTemp(url: muxedURL, videoId: videoId, userAgent: clientUA) {

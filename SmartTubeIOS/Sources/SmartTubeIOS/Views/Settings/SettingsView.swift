@@ -11,6 +11,10 @@ public struct SettingsView: View {
     @Environment(AuthService.self) private var auth
     @Environment(SettingsStore.self) private var store
     @State private var showSignIn = false
+    #if os(tvOS)
+    @State private var showKofiQR = false
+    @State private var showGithubQR = false
+    #endif
 
     public init() {}
 
@@ -29,6 +33,14 @@ public struct SettingsView: View {
         #endif
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
+        #endif
+        #if os(tvOS)
+        .sheet(isPresented: $showKofiQR) {
+            KofiQRView()
+        }
+        .sheet(isPresented: $showGithubQR) {
+            GitHubQRView()
+        }
         #endif
     }
 
@@ -216,7 +228,18 @@ public struct SettingsView: View {
     private var aboutSection: some View {
         Section("About") {
             LabeledContent("Version", value: appVersion)
-            #if !os(tvOS)
+            #if os(tvOS)
+            Button {
+                showKofiQR = true
+            } label: {
+                Label("Support on Ko-fi", systemImage: "cup.and.saucer.fill")
+            }
+            Button {
+                showGithubQR = true
+            } label: {
+                Label("View on GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+            }
+            #else
             Link(destination: URL(string: "https://ko-fi.com/milikadelic")!) {
                 Label("Support on Ko-fi", systemImage: "cup.and.saucer.fill")
             }
@@ -236,6 +259,110 @@ public struct SettingsView: View {
         return "\(v) (\(b))"
     }
 }
+
+// MARK: - KofiQRView (tvOS)
+
+#if os(tvOS)
+private struct KofiQRView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private let kofiURL = "https://ko-fi.com/milikadelic"
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.opacity(0.85).ignoresSafeArea()
+
+            VStack(spacing: 32) {
+                VStack(spacing: 12) {
+                    Image(systemName: "cup.and.saucer.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.yellow)
+
+                    Text("Support SmartTube on Ko-fi")
+                        .font(.largeTitle).fontWeight(.bold)
+
+                    Text("Scan the QR code with your phone to support development.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                QRCodeView(content: kofiURL)
+                    .frame(width: 280, height: 280)
+                    .padding(16)
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                Text(kofiURL)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(60)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button {
+                dismiss()
+            } label: {
+                Label("Close", systemImage: "xmark")
+                    .font(.headline)
+            }
+            .padding(40)
+        }
+    }
+}
+#endif
+
+// MARK: - GitHubQRView (tvOS)
+
+#if os(tvOS)
+private struct GitHubQRView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private let githubURL = "https://github.com/milika/SmartTubeIOS"
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.opacity(0.85).ignoresSafeArea()
+
+            VStack(spacing: 32) {
+                VStack(spacing: 12) {
+                    Image(systemName: "chevron.left.forwardslash.chevron.right")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.white)
+
+                    Text("SmartTube on GitHub")
+                        .font(.largeTitle).fontWeight(.bold)
+
+                    Text("Scan the QR code with your phone to view the project on GitHub.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                QRCodeView(content: githubURL)
+                    .frame(width: 280, height: 280)
+                    .padding(16)
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                Text(githubURL)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(60)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button {
+                dismiss()
+            } label: {
+                Label("Close", systemImage: "xmark")
+                    .font(.headline)
+            }
+            .padding(40)
+        }
+    }
+}
+#endif
 
 // MARK: - SectionsSettingsView
 

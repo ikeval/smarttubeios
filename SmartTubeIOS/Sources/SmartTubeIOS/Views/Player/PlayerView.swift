@@ -49,7 +49,21 @@ public struct PlayerView: View {
     /// than actual navigation away from the player.
     @State private var isInBackground = false
     #if os(tvOS)
+    private enum TVPlayerControl: Equatable {
+        case back, channel, more                             // top row
+        case seekBack, playPause, seekForward                // centre row
+        case prevVideo, prevChapter, nextChapter, nextVideo  // bottom row
+        var isTopRow: Bool {
+            switch self { case .back, .channel, .more: true; default: false }
+        }
+        var isCenterRow: Bool {
+            switch self { case .seekBack, .playPause, .seekForward: true; default: false }
+        }
+    }
     @FocusState private var playerFocused: Bool
+    /// Which playback control is visually highlighted in the overlay.
+    /// nil = not in controls-nav mode; all remote input targets the video layer.
+    @State private var highlightedControl: TVPlayerControl? = nil
     #endif
 
     public init(video: Video) {
@@ -61,6 +75,7 @@ public struct PlayerView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
+                #if os(iOS) || os(tvOS)
                 // AVPlayerLayerView: bare AVPlayerLayer without AVPlayerViewController.
                 // AVPlayerViewController (VideoPlayer) dominates the UIKit accessibility
                 // tree, making all overlaid SwiftUI elements invisible to XCUITest.
@@ -72,6 +87,9 @@ public struct PlayerView: View {
                 }
                 .ignoresSafeArea()
                 .accessibilityHidden(true)
+                #else
+                Color.black.ignoresSafeArea()
+                #endif
 
                 #if os(iOS)
                 // Horizontal swipe layer: left → next video, right → previous video.
@@ -127,11 +145,13 @@ public struct PlayerView: View {
                 }
 
                 // Hold-to-speed badge — shown while user long-presses to boost to 2×
+                #if os(iOS) || os(tvOS)
                 if vm.isHoldingToSpeed {
                     HoldSpeedBadge()
                         .transition(.opacity.combined(with: .scale(scale: 0.85)))
                         .animation(.easeOut(duration: 0.15), value: vm.isHoldingToSpeed)
                 }
+                #endif
 
                 // Custom overlay controls
                 if vm.controlsVisible {
@@ -242,26 +262,58 @@ public struct PlayerView: View {
         }
         .background(Color.black.ignoresSafeArea())
         #if os(tvOS)
+        // Outer view is ALWAYS the focus target. All remote input is handled here.
+        // The controls overlay buttons are not SwiftUI-focusable — instead we track
+        // a `highlightedControl` manually and visually indicate the selection.
         .focusable()
         .focused($playerFocused)
-        // Siri Remote D-pad: left/right seek ±10s; up/down toggle controls overlay.
         .onMoveCommand { direction in
             guard !isTransitioning else { return }
-            switch direction {
-            case .left:
-                vm.seekRelative(seconds: -10)
-            case .right:
-                vm.seekRelative(seconds: 10)
-            default:
-                vm.toggleControls()
+            if let current = highlightedControl {
+                // Controls-nav mode: move the highlight between buttons.
+                highlightedControl = tvNextControl(from: current, direction: direction)
+                vm.showControls()
+            } else if vm.controlsVisible {
+                // Controls visible but nav not started: any d-pad enters nav mode.
+                highlightedControl = .playPause
+                vm.showControls()
+            } else {
+                // Controls hidden: left/right seek, up/down shows controls.
+                switch direction {
+                case .left:  vm.seekRelative(seconds: -10)
+                case .right: vm.seekRelative(seconds: 10)
+                default:     vm.showControls(); highlightedControl = .playPause
+                }
             }
         }
-        .onPlayPauseCommand {
-            vm.togglePlayPause()
+        .onTapGesture {
+            if let current = highlightedControl {
+                tvActivateControl(current)
+            } else if vm.controlsVisible {
+                highlightedControl = .playPause
+                vm.showControls()
+            } else {
+                vm.showControls()
+                highlightedControl = .playPause
+            }
         }
+        .onPlayPauseCommand { vm.togglePlayPause() }
         .onExitCommand {
-            vm.stop()
-            dismiss()
+            if highlightedControl != nil {
+                // Esc/Menu from nav mode → exit nav mode, controls stay until timer.
+                highlightedControl = nil
+            } else if vm.controlsVisible {
+                vm.toggleControls()
+            } else {
+                vm.stop()
+                dismiss()
+            }
+        }
+        .onChange(of: vm.controlsVisible) { _, visible in
+            if !visible {
+                highlightedControl = nil
+                playerFocused = true
+            }
         }
         #endif
         #if os(iOS)
@@ -290,7 +342,9 @@ public struct PlayerView: View {
                     .accessibilityIdentifier("player.titleLabel")
                     .allowsHitTesting(false)
             }
+            #if !os(tvOS)
             .padding(.top, 60)
+            #endif
         }
         .onAppear {
             swipeLog.notice("[PlayerView] onAppear id=\(video.id)")
@@ -411,6 +465,12 @@ public struct PlayerView: View {
                         .clipShape(Circle())
                 }
                 .accessibilityIdentifier("player.backButton")
+                #if os(tvOS)
+                .buttonStyle(.plain)
+                .scaleEffect(highlightedControl == .back ? 1.5 : 1.0)
+                .shadow(color: highlightedControl == .back ? .white.opacity(0.85) : .clear, radius: 12)
+                .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+                #endif
                 VStack(alignment: .leading, spacing: 2) {
                     Text(vm.playerInfo?.video.title ?? video.title)
                         .font(.headline)
@@ -428,7 +488,14 @@ public struct PlayerView: View {
                             .foregroundStyle(.white.opacity(0.8))
                             .lineLimit(1)
                     }
+                    #if os(tvOS)
                     .buttonStyle(.plain)
+                    .scaleEffect(highlightedControl == .channel ? 1.5 : 1.0)
+                    .shadow(color: highlightedControl == .channel ? .white.opacity(0.85) : .clear, radius: 12)
+                    .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+                    #else
+                    .buttonStyle(.plain)
+                    #endif
                     .disabled(channelId == nil || channelId?.isEmpty == true)
                 }
                 Spacer()
@@ -465,20 +532,43 @@ public struct PlayerView: View {
                         .background(.black.opacity(0.4))
                         .clipShape(Circle())
                 }
+                #if os(tvOS)
                 .buttonStyle(.plain)
+                .scaleEffect(highlightedControl == .more ? 1.5 : 1.0)
+                .shadow(color: highlightedControl == .more ? .white.opacity(0.85) : .clear, radius: 12)
+                .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+                #else
+                .buttonStyle(.plain)
+                #endif
             }
             .padding(.horizontal, 20)
+            #if os(tvOS)
+            .padding(.top, 0)
+            #else
             .padding(.top, max(safeAreaInsets.top, 20))
+            #endif
 
             Spacer()
 
             // Centre: rewind / play-pause / forward
             HStack(spacing: 40) {
+                #if os(tvOS)
+                seekButton(symbol: "gobackward.\(store.settings.seekBackSeconds)",
+                           seconds: -Double(store.settings.seekBackSeconds),
+                           tvHighlighted: highlightedControl == .seekBack)
+                #else
                 seekButton(symbol: "gobackward.\(store.settings.seekBackSeconds)",
                            seconds: -Double(store.settings.seekBackSeconds))
+                #endif
                 playPauseButton
+                #if os(tvOS)
+                seekButton(symbol: "goforward.\(store.settings.seekForwardSeconds)",
+                           seconds: Double(store.settings.seekForwardSeconds),
+                           tvHighlighted: highlightedControl == .seekForward)
+                #else
                 seekButton(symbol: "goforward.\(store.settings.seekForwardSeconds)",
                            seconds: Double(store.settings.seekForwardSeconds))
+                #endif
             }
             .disabled(vm.isLoading)
             .opacity(vm.isLoading ? 0.3 : 1)
@@ -508,6 +598,11 @@ public struct PlayerView: View {
                             .foregroundStyle(vm.hasPrevious && !vm.isLoading ? .white : .white.opacity(0.3))
                     }
                     .buttonStyle(.plain)
+                    #if os(tvOS)
+                    .scaleEffect(highlightedControl == .prevVideo ? 1.55 : 1.0)
+                    .shadow(color: highlightedControl == .prevVideo ? .white.opacity(0.85) : .clear, radius: 14)
+                    .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+                    #endif
                     .disabled(!vm.hasPrevious || vm.isLoading)
 
                     // Previous chapter button — only present when the video has chapters
@@ -520,6 +615,11 @@ public struct PlayerView: View {
                                 .foregroundStyle(vm.hasPreviousChapter && !vm.isLoading ? .white : .white.opacity(0.3))
                         }
                         .buttonStyle(.plain)
+                        #if os(tvOS)
+                        .scaleEffect(highlightedControl == .prevChapter ? 1.55 : 1.0)
+                        .shadow(color: highlightedControl == .prevChapter ? .white.opacity(0.85) : .clear, radius: 14)
+                        .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+                        #endif
                         .disabled(!vm.hasPreviousChapter || vm.isLoading)
                         .accessibilityIdentifier("player.prevChapterBtn")
                     }
@@ -544,6 +644,11 @@ public struct PlayerView: View {
                                 .foregroundStyle(vm.hasNextChapter && !vm.isLoading ? .white : .white.opacity(0.3))
                         }
                         .buttonStyle(.plain)
+                        #if os(tvOS)
+                        .scaleEffect(highlightedControl == .nextChapter ? 1.55 : 1.0)
+                        .shadow(color: highlightedControl == .nextChapter ? .white.opacity(0.85) : .clear, radius: 14)
+                        .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+                        #endif
                         .disabled(!vm.hasNextChapter || vm.isLoading)
                         .accessibilityIdentifier("player.nextChapterBtn")
                     }
@@ -557,6 +662,11 @@ public struct PlayerView: View {
                             .foregroundStyle(vm.hasNext && !vm.isLoading ? .white : .white.opacity(0.3))
                     }
                     .buttonStyle(.plain)
+                    #if os(tvOS)
+                    .scaleEffect(highlightedControl == .nextVideo ? 1.55 : 1.0)
+                    .shadow(color: highlightedControl == .nextVideo ? .white.opacity(0.85) : .clear, radius: 14)
+                    .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+                    #endif
                     .disabled(!vm.hasNext || vm.isLoading)
                     .accessibilityIdentifier("player.nextBtn")
                 }
@@ -582,6 +692,10 @@ public struct PlayerView: View {
                 vm.toggleControls()
             }
         )
+        #if os(tvOS)
+        // Controls overlay is not a focus section — the outer view handles all input.
+        .onTapGesture { vm.toggleControls() }
+        #endif
     }
 
     // MARK: - Control elements
@@ -955,16 +1069,26 @@ public struct PlayerView: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
+        #if os(tvOS)
+        .scaleEffect(highlightedControl == .playPause ? 1.6 : 1.0)
+        .shadow(color: highlightedControl == .playPause ? .white.opacity(0.9) : .clear, radius: 16)
+        .animation(.easeInOut(duration: 0.15), value: highlightedControl)
+        #endif
         .accessibilityIdentifier("player.playPauseButton")
     }
 
-    private func seekButton(symbol: String, seconds: TimeInterval) -> some View {
+    private func seekButton(symbol: String, seconds: TimeInterval, tvHighlighted: Bool = false) -> some View {
         Button { vm.seekRelative(seconds: seconds) } label: {
             Image(systemName: symbol)
                 .font(.system(size: 28))
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
+        #if os(tvOS)
+        .scaleEffect(tvHighlighted ? 1.55 : 1.0)
+        .shadow(color: tvHighlighted ? .white.opacity(0.85) : .clear, radius: 14)
+        .animation(.easeInOut(duration: 0.15), value: tvHighlighted)
+        #endif
     }
 
     private var progressBar: some View {
@@ -974,6 +1098,80 @@ public struct PlayerView: View {
         iosProgressBar
         #endif
     }
+
+    #if os(tvOS)
+    // MARK: - tvOS controls navigation
+
+    private func tvNextControl(from current: TVPlayerControl, direction: MoveCommandDirection) -> TVPlayerControl {
+        switch direction {
+        case .left:
+            switch current {
+            // top row
+            case .more:        return .channel
+            case .channel:     return .back
+            // center row
+            case .playPause:   return .seekBack
+            case .seekForward: return .playPause
+            // bottom row
+            case .prevChapter: return .prevVideo
+            case .nextChapter: return .prevChapter
+            case .nextVideo:   return vm.chapters.isEmpty ? .prevVideo : .nextChapter
+            default: return current
+            }
+        case .right:
+            switch current {
+            // top row
+            case .back:        return .channel
+            case .channel:     return .more
+            // center row
+            case .seekBack:    return .playPause
+            case .playPause:   return .seekForward
+            // bottom row
+            case .prevVideo:   return vm.chapters.isEmpty ? .nextVideo : .prevChapter
+            case .prevChapter: return .nextChapter
+            case .nextChapter: return .nextVideo
+            default: return current
+            }
+        case .up:
+            if current.isCenterRow { return .more }   // center → top row
+            if !current.isCenterRow && !current.isTopRow {
+                // bottom row → center row (map by position)
+                switch current {
+                case .prevVideo, .prevChapter: return .seekBack
+                default:                       return .seekForward
+                }
+            }
+            return current  // already at top
+        case .down:
+            if current.isTopRow { return .playPause }  // top row → center row
+            if current.isCenterRow {                   // center row → bottom row
+                switch current {
+                case .seekBack: return vm.chapters.isEmpty ? .prevVideo : .prevChapter
+                default:        return vm.chapters.isEmpty ? .nextVideo : .nextChapter
+                }
+            }
+            return current  // already at bottom
+        @unknown default: return current
+        }
+    }
+
+    private func tvActivateControl(_ control: TVPlayerControl) {
+        switch control {
+        case .back:        vm.stop(); withAnimation(.none) { dismiss() }
+        case .channel:
+            let channelId = vm.playerInfo?.video.channelId ?? video.channelId
+            if let cid = channelId, !cid.isEmpty { channelDestination = ChannelDestination(channelId: cid) }
+        case .more:        showMoreMenu = true
+        case .seekBack:    vm.seekRelative(seconds: -Double(store.settings.seekBackSeconds))
+        case .playPause:   vm.togglePlayPause()
+        case .seekForward: vm.seekRelative(seconds: Double(store.settings.seekForwardSeconds))
+        case .prevVideo:   if vm.hasPrevious { vm.playPrevious() }
+        case .prevChapter: if vm.hasPreviousChapter { vm.skipToPreviousChapter() }
+        case .nextChapter: if vm.hasNextChapter { vm.skipToNextChapter() }
+        case .nextVideo:   if vm.hasNext { vm.playNext() }
+        }
+    }
+    #endif
 
     #if os(tvOS)
     private var tvProgressBar: some View {
