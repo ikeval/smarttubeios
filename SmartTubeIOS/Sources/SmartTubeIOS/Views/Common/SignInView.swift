@@ -354,6 +354,10 @@ private struct CountdownView: View {
                 guard !Task.isCancelled else { return }
                 remaining = max(0, expiresAt.timeIntervalSinceNow)
             }
+            // Give an in-flight poll (e.g. fired by handleForeground on app return)
+            // a few seconds to complete before creating a new device code.
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
             onExpired()
         }
     }

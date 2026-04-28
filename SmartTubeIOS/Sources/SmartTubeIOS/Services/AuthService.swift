@@ -104,7 +104,7 @@ public final class AuthService {
         do {
             let deviceResponse = try await requestDeviceCode(creds: creds)
             authLog.notice("✅ Got device code. userCode=\(deviceResponse.userCode) expiresIn=\(deviceResponse.expiresIn)s interval=\(deviceResponse.interval)s")
-            let expiresAt = Date().addingTimeInterval(TimeInterval(deviceResponse.expiresIn - 10))
+            let expiresAt = Date().addingTimeInterval(TimeInterval(deviceResponse.expiresIn))
             // Static fallback URL — safe to use URL(string:) with a known-valid literal
             let fallbackURL = URL(string: "https://yt.be/activate") ?? URL(string: "https://youtube.com/activate")!
             let verURL = URL(string: deviceResponse.verificationURL) ?? fallbackURL

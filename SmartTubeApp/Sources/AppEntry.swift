@@ -105,7 +105,10 @@ struct AppEntry: App {
                     }
                     .onOpenURL { url in handleOpenURL(url) }
                     .onChange(of: scenePhase, initial: true) { _, phase in
-                        if phase == .active { consumePendingVideoID() }
+                        if phase == .active {
+                            consumePendingVideoID()
+                            authService.handleForeground()
+                        }
                     }
                     .onAppear { enableShortsIfNeeded() }
             }
