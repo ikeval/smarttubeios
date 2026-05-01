@@ -1,6 +1,5 @@
 import SwiftUI
 import FirebaseCore
-import FirebaseAnalytics
 import SmartTubeIOS
 import SmartTubeIOSCore
 
@@ -21,7 +20,6 @@ struct AppEntry: App {
 
     init() {
         FirebaseApp.configure()
-        Analytics.setAnalyticsCollectionEnabled(true)
         let api = InnerTubeAPI()
         _api             = State(initialValue: api)
         _authService     = State(initialValue: AuthService())

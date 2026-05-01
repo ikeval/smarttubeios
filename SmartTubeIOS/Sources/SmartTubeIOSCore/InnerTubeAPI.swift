@@ -469,6 +469,35 @@ public actor InnerTubeAPI {
         }
     }
 
+    /// Same as `fetchAuthenticatedTrackingURLs(videoId:)` but uses the supplied token directly
+    /// instead of reading `self.authToken`. Use this when the caller holds the token but cannot
+    /// guarantee that `setAuthToken` has already propagated to the actor (e.g. prefetch tasks
+    /// that start before `PlaybackViewModel.updateAuthToken` has had a chance to run).
+    public func fetchAuthenticatedTrackingURLs(videoId: String, usingToken token: String) async -> PlaybackTrackingURLs? {
+        do {
+            var body = makeBody(client: tvClientContext)
+            body["videoId"] = videoId
+            body["racyCheckOk"] = true
+            body["contentCheckOk"] = true
+            let data = try await postTV(endpoint: "player", body: body, explicitBearerToken: token)
+            guard
+                let tracking  = data["playbackTracking"] as? [String: Any],
+                let pbStr      = (tracking["videostatsPlaybackUrl"]  as? [String: Any])?["baseUrl"] as? String,
+                let wtStr      = (tracking["videostatsWatchtimeUrl"] as? [String: Any])?["baseUrl"] as? String,
+                let pbURL      = URL(string: pbStr),
+                let wtURL      = URL(string: wtStr)
+            else {
+                tubeLog.notice("fetchAuthenticatedTrackingURLs: no tracking data in TV player response for \(videoId, privacy: .public)")
+                return nil
+            }
+            tubeLog.notice("fetchAuthenticatedTrackingURLs: account-bound URLs obtained for \(videoId, privacy: .public)")
+            return PlaybackTrackingURLs(playbackURL: pbURL, watchtimeURL: wtURL)
+        } catch {
+            tubeLog.error("fetchAuthenticatedTrackingURLs failed for \(videoId, privacy: .public): \(error, privacy: .public)")
+            return nil
+        }
+    }
+
     /// Appends extra query parameters to a YouTube stats URL and fires a fire-and-forget GET.
     /// Only adds parameters that are not already present in the base URL — preserving
     /// the `cpn`, `docid`, and other session params YouTube embedded in the tracking URL.
@@ -819,7 +848,16 @@ public actor InnerTubeAPI {
         // if the live response shape differs from the mock.
         let contentsKeys = (data["contents"] as? [String: Any])?.keys.map { $0 } ?? []
         tubeLog.notice("fetchUserPlaylists FElibrary contents keys: \(contentsKeys, privacy: .public)")
-        return try parsePlaylists(from: data)
+        var playlists = try parsePlaylists(from: data)
+        // Watch Later (id "WL") is a special system playlist. On the TVHTML5 FElibrary
+        // response it appears as a specialCollectionRenderer / video-item shelf rather
+        // than a gridPlaylistRenderer, so parsePlaylists never picks it up. Prepend it
+        // explicitly — it is always available for authenticated users and always uses
+        // the fixed browse ID VLWL (handled correctly by fetchPlaylistVideos).
+        if !playlists.contains(where: { $0.id == "WL" }) {
+            playlists.insert(PlaylistInfo(id: "WL", title: "Watch Later"), at: 0)
+        }
+        return playlists
     }
 
     public func fetchPlaylistVideos(playlistId: String, continuationToken: String? = nil) async throws -> VideoGroup {
@@ -987,13 +1025,20 @@ public actor InnerTubeAPI {
     /// Android alignment: when Bearer token is present, no ?key= param is sent
     /// (mirrors RetrofitOkHttpHelper — authHeaders non-empty → skip key, apply Bearer headers).
     /// When unauthenticated, the WEB key is used as on all other clients.
-    private func postTV(endpoint: String, body: [String: Any], useAuth: Bool = true) async throws -> [String: Any] {
+    private func postTV(
+        endpoint: String,
+        body: [String: Any],
+        useAuth: Bool = true,
+        explicitBearerToken: String? = nil
+    ) async throws -> [String: Any] {
         guard var comps = URLComponents(url: playerBaseURL.appendingPathComponent(endpoint),
                                         resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL(endpoint)
         }
-        // Android: no ?key= when Bearer present; WEB key for unauthenticated
-        let shouldAuthenticate = useAuth && authToken != nil
+        // Android: no ?key= when Bearer present; WEB key for unauthenticated.
+        // `explicitBearerToken` lets callers bypass actor-state and supply a token directly.
+        let resolvedToken = explicitBearerToken ?? (useAuth ? authToken : nil)
+        let shouldAuthenticate = resolvedToken != nil
         if !shouldAuthenticate {
             comps.queryItems = [URLQueryItem(name: "key", value: apiKey)]
         }
@@ -1003,11 +1048,11 @@ public actor InnerTubeAPI {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(InnerTubeClients.TV.nameID, forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(InnerTubeClients.TV.version, forHTTPHeaderField: "X-YouTube-Client-Version")
-        if shouldAuthenticate, let token = authToken {
+        if let token = resolvedToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let authLabel = authToken != nil ? "yes" : "no"
+        let authLabel = shouldAuthenticate ? "yes" : "no"
         tubeLog.notice("POST /\(endpoint, privacy: .public) [TV] auth=\(authLabel, privacy: .public)")
         let (data, response) = try await session.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0

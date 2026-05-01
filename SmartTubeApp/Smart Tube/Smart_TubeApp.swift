@@ -1,6 +1,5 @@
 import SwiftUI
 import FirebaseCore
-import FirebaseAnalytics
 import SmartTubeIOS
 import SmartTubeIOSCore
 
@@ -17,7 +16,6 @@ struct SmartTubeTVApp: App {
 
     init() {
         FirebaseApp.configure()
-        Analytics.setAnalyticsCollectionEnabled(true)
         _authService     = State(initialValue: AuthService())
         _browseViewModel = State(initialValue: BrowseViewModel())
         _settingsStore   = State(initialValue: SettingsStore())

@@ -36,7 +36,6 @@ let package = Package(
             name: "SmartTubeIOS",
             dependencies: [
                 "SmartTubeIOSCore",
-                .product(name: "FirebaseAnalytics", package: "firebase-ios-sdk"),
                 .product(name: "FirebaseCrashlytics", package: "firebase-ios-sdk"),
             ],
             path: "Sources/SmartTubeIOS",

@@ -52,10 +52,13 @@ public struct VideoCardView: View {
         .task(id: video.id) {
             // Pre-fetch all playback data for this video in the background while
             // the user is browsing. The cache skips the call if data is already fresh.
+            // Pass the actual token (not just a Bool) so runPrefetch can sync it to
+            // its internal API before the tracking URL fetch — eliminating the race
+            // where prefetch fires before PlaybackViewModel.updateAuthToken propagates.
             await VideoPreloadCache.shared.prefetch(
                 videoId: video.id,
                 sponsorCategories: store.settings.activeSponsorCategories,
-                isAuthenticated: authService.accessToken != nil
+                authToken: authService.accessToken
             )
         }
         .contextMenu {

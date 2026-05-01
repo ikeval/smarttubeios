@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let cacheLog = Logger(subsystem: appSubsystem, category: "PreloadCache")
 
 // MARK: - VideoPreloadCache
 //
@@ -94,40 +97,56 @@ public actor VideoPreloadCache {
 
     /// Forward the current auth token so prefetch requests can make authenticated calls.
     /// Call this from PlaybackViewModel.updateAuthToken and at app launch.
-    public func setAuthToken(_ token: String?) {
-        api.setAuthToken(token)
+    public func setAuthToken(_ token: String?) async {
+        cacheLog.notice("[auth] setAuthToken: \(token != nil ? "present" : "nil", privacy: .public)")
+        await api.setAuthToken(token)
     }
 
     // MARK: - Public: prefetch
 
     /// Kicks off a background fetch for all data types for `videoId`.
     /// No-op if fresh data already exists or a task is already running.
+    /// Pass the actual `authToken` value (not just a Bool) so the cache can
+    /// sync it to its internal API before the tracking URL fetch fires —
+    /// eliminating a race where prefetch starts before `setAuthToken` runs.
     public func prefetch(
         videoId: String,
         sponsorCategories: Set<SponsorSegment.Category>,
-        isAuthenticated: Bool
+        authToken: String?
     ) {
         // Skip if still fresh
-        if let entry = playerInfoCache[videoId], !entry.isExpired { return }
+        if let entry = playerInfoCache[videoId], !entry.isExpired {
+            cacheLog.debug("[prefetch] SKIP \(videoId, privacy: .public) — already fresh")
+            return
+        }
         // Skip if already in-flight
-        if prefetchTasks[videoId] != nil { return }
+        if prefetchTasks[videoId] != nil {
+            cacheLog.debug("[prefetch] SKIP \(videoId, privacy: .public) — task already running")
+            return
+        }
         // Respect concurrency cap
-        guard activePrefetchCount < Self.maxConcurrentPrefetches else { return }
+        guard activePrefetchCount < Self.maxConcurrentPrefetches else {
+            cacheLog.notice("[prefetch] CAP REACHED (\(self.activePrefetchCount, privacy: .public)/\(Self.maxConcurrentPrefetches, privacy: .public)) — dropping \(videoId, privacy: .public)")
+            return
+        }
 
+        cacheLog.notice("[prefetch] START \(videoId, privacy: .public) auth=\(authToken != nil, privacy: .public) active=\(self.activePrefetchCount + 1, privacy: .public)/\(Self.maxConcurrentPrefetches, privacy: .public)")
         activePrefetchCount += 1
-        let task = Task(priority: .background) { [weak self] in
-            defer { Task { await self?.decrementPrefetchCount() } }
-            await self?.runPrefetch(
+        let task = Task(priority: .background) {
+            await self.runPrefetch(
                 videoId: videoId,
                 sponsorCategories: sponsorCategories,
-                isAuthenticated: isAuthenticated
+                authToken: authToken
             )
+            await self.decrementPrefetchCount()
         }
         prefetchTasks[videoId] = task
     }
 
     /// Cancels any in-flight prefetch for `videoId` (e.g. when a cell scrolls far off screen).
     public func cancelPrefetch(for videoId: String) {
+        guard prefetchTasks[videoId] != nil else { return }
+        cacheLog.notice("[prefetch] CANCEL \(videoId, privacy: .public)")
         prefetchTasks[videoId]?.cancel()
         prefetchTasks.removeValue(forKey: videoId)
     }
@@ -138,7 +157,7 @@ public actor VideoPreloadCache {
     /// for data that is missing or expired. Callers fetch only the missing pieces.
     public func consume(videoId: String) -> CachedVideoData {
         touch(videoId)
-        return CachedVideoData(
+        let data = CachedVideoData(
             playerInfo:      fresh(playerInfoCache[videoId]),
             trackingURLs:    trackingCache[videoId].flatMap { $0.isExpired ? nil : $0.value },
             nextInfo:        fresh(nextInfoCache[videoId]),
@@ -146,36 +165,44 @@ public actor VideoPreloadCache {
             sponsorSegments: fresh(sponsorCache[videoId]),
             deArrowBranding: fresh(deArrowCache[videoId])
         )
+        cacheLog.notice("[consume] \(videoId, privacy: .public) — player=\(data.playerInfo != nil, privacy: .public) tracking=\(data.trackingURLs != nil, privacy: .public) next=\(data.nextInfo != nil, privacy: .public) endCards=\(data.endCards != nil, privacy: .public) sponsor=\(data.sponsorSegments != nil, privacy: .public) deArrow=\(data.deArrowBranding != nil, privacy: .public) complete=\(data.isComplete, privacy: .public)")
+        return data
     }
 
     // MARK: - Public: store (write after live fetch)
 
     public func store(playerInfo: PlayerInfo, for videoId: String) {
+        cacheLog.debug("[store] playerInfo \(videoId, privacy: .public) formats=\(playerInfo.formats.count, privacy: .public) hls=\(playerInfo.hlsURL != nil, privacy: .public)")
         playerInfoCache[videoId] = CacheEntry(value: playerInfo, storedAt: .init(), ttl: Self.playerInfoTTL)
         touch(videoId)
     }
 
     public func store(trackingURLs: PlaybackTrackingURLs?, for videoId: String) {
+        cacheLog.debug("[store] trackingURLs \(videoId, privacy: .public) present=\(trackingURLs != nil, privacy: .public)")
         trackingCache[videoId] = CacheEntry(value: trackingURLs, storedAt: .init(), ttl: Self.trackingTTL)
         touch(videoId)
     }
 
     public func store(nextInfo: NextInfo, for videoId: String) {
+        cacheLog.debug("[store] nextInfo \(videoId, privacy: .public) related=\(nextInfo.relatedVideos.count, privacy: .public) chapters=\(nextInfo.chapters.count, privacy: .public)")
         nextInfoCache[videoId] = CacheEntry(value: nextInfo, storedAt: .init(), ttl: Self.nextInfoTTL)
         touch(videoId)
     }
 
     public func store(endCards: [EndCard], for videoId: String) {
+        cacheLog.debug("[store] endCards \(videoId, privacy: .public) count=\(endCards.count, privacy: .public)")
         endCardsCache[videoId] = CacheEntry(value: endCards, storedAt: .init(), ttl: Self.endCardsTTL)
         touch(videoId)
     }
 
     public func store(sponsorSegments: [SponsorSegment], for videoId: String) {
+        cacheLog.debug("[store] sponsorSegments \(videoId, privacy: .public) count=\(sponsorSegments.count, privacy: .public)")
         sponsorCache[videoId] = CacheEntry(value: sponsorSegments, storedAt: .init(), ttl: Self.sponsorTTL)
         touch(videoId)
     }
 
     public func store(deArrowBranding: DeArrowService.BrandingInfo, for videoId: String) {
+        cacheLog.debug("[store] deArrowBranding \(videoId, privacy: .public) hasTitle=\(deArrowBranding.title != nil, privacy: .public)")
         deArrowCache[videoId] = CacheEntry(value: deArrowBranding, storedAt: .init(), ttl: Self.deArrowTTL)
         touch(videoId)
     }
@@ -184,12 +211,14 @@ public actor VideoPreloadCache {
 
     /// Call on sign-out: tracking URLs and like-status in nextInfo are account-bound.
     public func evictAuthSensitiveData() {
+        cacheLog.notice("[evict] auth sign-out — clearing trackingCache (\(self.trackingCache.count, privacy: .public) entries) + nextInfoCache (\(self.nextInfoCache.count, privacy: .public) entries)")
         trackingCache.removeAll()
         nextInfoCache.removeAll()
     }
 
     /// Call after a token refresh: tracking URLs bound to the old token are stale.
     public func evictTrackingURLs() {
+        cacheLog.notice("[evict] token refresh — clearing trackingCache (\(self.trackingCache.count, privacy: .public) entries)")
         trackingCache.removeAll()
     }
 
@@ -198,23 +227,43 @@ public actor VideoPreloadCache {
     private func runPrefetch(
         videoId: String,
         sponsorCategories: Set<SponsorSegment.Category>,
-        isAuthenticated: Bool
+        authToken: String?
     ) async {
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else {
+            cacheLog.notice("[prefetch] CANCELLED before start \(videoId, privacy: .public)")
+            return
+        }
+        let startedAt = Date()
+        cacheLog.notice("[prefetch] FETCHING \(videoId, privacy: .public) — all 6 calls in parallel")
 
+        // Spawn 5 child tasks immediately so they run in parallel with the tracking fetch below.
         async let playerResult   = (try? await api.fetchPlayerInfo(videoId: videoId))
-        async let trackingResult = isAuthenticated
-            ? (await api.fetchAuthenticatedTrackingURLs(videoId: videoId))
-            : nil
         async let nextResult     = (try? await api.fetchNextInfo(videoId: videoId))
         async let endCardsResult = (try? await api.fetchEndCards(videoId: videoId))
         async let sponsorResult  = await sponsorBlock.fetchSegments(videoId: videoId, categories: sponsorCategories)
         async let deArrowResult  = await deArrow.fetchBranding(videoId: videoId)
 
-        let (player, tracking, next, cards, sponsor, dearrow) =
-            await (playerResult, trackingResult, nextResult, endCardsResult, sponsorResult, deArrowResult)
+        // Pass the caller-supplied token directly — no dependency on api.authToken being set —
+        // eliminating the actor-timing race that caused tracking=false on browse-phase prefetch.
+        // This runs concurrently with the 5 child tasks above (all are in flight by this point).
+        let tracking: PlaybackTrackingURLs?
+        if let token = authToken {
+            tracking = await api.fetchAuthenticatedTrackingURLs(videoId: videoId, usingToken: token)
+        } else {
+            tracking = nil
+        }
 
-        guard !Task.isCancelled else { return }
+        let (player, next, cards, sponsor, dearrow) =
+            await (playerResult, nextResult, endCardsResult, sponsorResult, deArrowResult)
+
+        guard !Task.isCancelled else {
+            cacheLog.notice("[prefetch] CANCELLED after fetch \(videoId, privacy: .public)")
+            return
+        }
+
+        let elapsed = String(format: "%.2fs", Date().timeIntervalSince(startedAt))
+        let summary = "player=\(player != nil) tracking=\(tracking != nil) next=\(next != nil) endCards=\(cards != nil) sponsor=\(sponsor.count)segs deArrow=\(dearrow.title != nil)"
+        cacheLog.notice("[prefetch] DONE \(videoId, privacy: .public) in \(elapsed, privacy: .public) \(summary, privacy: .public)")
 
         if let player  { store(playerInfo: player,          for: videoId) }
         store(trackingURLs: tracking,                        for: videoId)
@@ -228,6 +277,7 @@ public actor VideoPreloadCache {
 
     private func decrementPrefetchCount() {
         activePrefetchCount = max(0, activePrefetchCount - 1)
+        cacheLog.debug("[prefetch] active count now \(self.activePrefetchCount, privacy: .public)")
     }
 
     // MARK: - Private: LRU helpers
@@ -237,6 +287,7 @@ public actor VideoPreloadCache {
         accessOrder.append(videoId)
         if accessOrder.count > Self.maxVideoEntries {
             let evict = accessOrder.removeFirst()
+            cacheLog.notice("[lru] EVICT \(evict, privacy: .public) — cache full (\(Self.maxVideoEntries, privacy: .public) entries)")
             playerInfoCache.removeValue(forKey: evict)
             trackingCache.removeValue(forKey: evict)
             nextInfoCache.removeValue(forKey: evict)

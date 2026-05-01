@@ -40,12 +40,13 @@ public final class PlaybackViewModel {
             guard let error else { return }
             let nsError = error as NSError
             playerLog.recordNonFatal(error, userInfo: [
-                "video_id":    currentVideo?.id    ?? "unknown",
-                "video_title": currentVideo?.title ?? "unknown",
-                "error_domain": nsError.domain,
-                "error_code":  "\(nsError.code)",
-                "has_retried": "\(hasRetriedPlayback)",
-                "current_time": "\(Int(currentTime))s",
+                "video_id":      currentVideo?.id    ?? "unknown",
+                "video_title":   currentVideo?.title ?? "unknown",
+                "error_message": error.localizedDescription,
+                "error_domain":  nsError.domain,
+                "error_code":    "\(nsError.code)",
+                "has_retried":   "\(hasRetriedPlayback)",
+                "current_time":  "\(Int(currentTime))s",
             ])
         }
     }
@@ -171,6 +172,7 @@ public final class PlaybackViewModel {
     private let deArrow: DeArrowService
     private var settings: AppSettings
     private var hasAuthToken: Bool = false
+    private var currentAuthToken: String? = nil
 
     public init(
         api: InnerTubeAPI = InnerTubeAPI(),
@@ -211,6 +213,7 @@ public final class PlaybackViewModel {
 
     public func load(video: Video) {
         playerLog.notice("[load] load() called — id=\(video.id) currentVideo=\(self.currentVideo?.id ?? "nil") isLoading=\(self.isLoading)")
+        CrashlyticsLogger.setVideoContext(id: video.id, title: video.title)
         // Cancel any previous in-flight load so we never have two concurrent API
         // fetches for the same (or different) video running at the same time.
         loadTask?.cancel()
@@ -338,8 +341,11 @@ public final class PlaybackViewModel {
             // --- Player info (stream URLs + metadata) ---
             // Kick off an authenticated TV-client player request in parallel with the
             // primary iOS player fetch when the cache doesn't already have tracking URLs.
+            // cached.trackingURLs is PlaybackTrackingURLs?? — .some(nil) means the prefetch
+            // ran before auth was ready; treat that as a miss so we still get live URLs.
+            let cachedTrackingURLs: PlaybackTrackingURLs? = cached.trackingURLs.flatMap { $0 }
             let authTrackingTask: Task<PlaybackTrackingURLs?, Never>?
-            if cached.trackingURLs != nil {
+            if cachedTrackingURLs != nil {
                 // Tracking URLs came from the cache; no need for a parallel TV-client call.
                 authTrackingTask = nil
             } else {
@@ -454,14 +460,14 @@ public final class PlaybackViewModel {
 
             // --- Kick off neighbour pre-fetch now that relatedVideos is populated ---
             let neighbourIds = Array(relatedVideos.prefix(3).map(\.id))
-            let isAuth = hasAuthToken
+            let prefetchToken = currentAuthToken
             let sponsorCats = settings.activeSponsorCategories
             Task(priority: .background) {
                 for videoId in neighbourIds {
                     await VideoPreloadCache.shared.prefetch(
                         videoId: videoId,
                         sponsorCategories: sponsorCats,
-                        isAuthenticated: isAuth
+                        authToken: prefetchToken
                     )
                 }
             }
@@ -477,8 +483,7 @@ public final class PlaybackViewModel {
             // Prefer account-bound TV-client URLs over the anonymous iOS-client URLs.
             // Use the cached value if present; otherwise await the parallel task result.
             let resolvedTrackingURLs: PlaybackTrackingURLs?
-            if let cachedTracking = cached.trackingURLs {
-                // cachedTracking is PlaybackTrackingURLs?? — unwrap outer optional
+            if let cachedTracking = cachedTrackingURLs {
                 resolvedTrackingURLs = cachedTracking
                 playerLog.notice("cache HIT: trackingURLs")
             } else {
@@ -641,6 +646,7 @@ public final class PlaybackViewModel {
     public func updateAuthToken(_ token: String?) {
         let wasAuthenticated = hasAuthToken
         hasAuthToken = token != nil
+        currentAuthToken = token
         // Keep the cache's InnerTubeAPI instance in sync so prefetch requests
         // can make authenticated calls (e.g. fetchAuthenticatedTrackingURLs).
         Task { await VideoPreloadCache.shared.setAuthToken(token) }

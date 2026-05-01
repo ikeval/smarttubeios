@@ -47,4 +47,13 @@ struct CrashlyticsLogger: Sendable {
         }
         crashlytics.record(error: error)
     }
+
+    /// Stamps the video currently being loaded onto Crashlytics' persistent custom keys.
+    /// Called once per `load(video:)` so that both crashes and non-fatals show which
+    /// video was active at the time of the failure.
+    static func setVideoContext(id: String, title: String) {
+        let crashlytics = Crashlytics.crashlytics()
+        crashlytics.setCustomValue(id, forKey: "active_video_id")
+        crashlytics.setCustomValue(title.prefix(120).description, forKey: "active_video_title")
+    }
 }
