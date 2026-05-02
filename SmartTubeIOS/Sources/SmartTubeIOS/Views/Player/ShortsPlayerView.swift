@@ -114,6 +114,7 @@ public struct ShortsPlayerView: View {
 
             if vm.controlsVisible {
                 shortsOverlay
+                    .accessibilityIdentifier("shorts.controlsOverlay")
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.2), value: vm.controlsVisible)
             }
@@ -219,6 +220,7 @@ public struct ShortsPlayerView: View {
                         .background(.black.opacity(0.4))
                         .clipShape(Circle())
                 }
+                .accessibilityIdentifier("shorts.backButton")
                 Spacer()
             }
             .padding(.horizontal, 20)

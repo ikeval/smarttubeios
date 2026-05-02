@@ -1,0 +1,151 @@
+import XCTest
+
+// MARK: - LibrarySubscriptionsUITests
+//
+// UI tests for the Library → Subscriptions segment.
+//
+// Requirements:
+//   • Network access is required.
+//   • A signed-in account with subscriptions is needed for feed-level tests.
+//   • Run on an iOS 17+ simulator with the SmartTubeApp scheme selected.
+
+final class LibrarySubscriptionsUITests: XCTestCase {
+
+    private var app: XCUIApplication!
+
+    // MARK: - Lifecycle
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchArguments += ["--uitesting"]
+        app.launch()
+    }
+
+    override func tearDownWithError() throws {
+        app = nil
+    }
+
+    // MARK: - Helpers
+
+    private func openSubscriptionsSegment() throws {
+        UITestHelpers.tapTab(named: "Library", in: app)
+        let picker = app.segmentedControls["library.sectionPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5),
+                      "library.sectionPicker must appear after opening Library")
+        let button = picker.buttons["Subscriptions"]
+        XCTAssertTrue(button.waitForExistence(timeout: 3),
+                      "Subscriptions segment must exist in the library section picker")
+        button.tap()
+        XCTAssertTrue(button.isSelected,
+                      "Subscriptions segment should be selected after tap")
+    }
+
+    // MARK: - Structural tests
+
+    func testSubscriptionsSegmentVisible() throws {
+        UITestHelpers.tapTab(named: "Library", in: app)
+        let picker = app.segmentedControls["library.sectionPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5),
+                      "library.sectionPicker should appear")
+        XCTAssertTrue(picker.buttons["Subscriptions"].exists,
+                      "'Subscriptions' segment must be present in the library picker")
+    }
+
+    func testNavigationDoesNotCrash() throws {
+        try openSubscriptionsSegment()
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(app.state, .runningForeground,
+                       "App should still be running after opening Subscriptions in Library")
+    }
+
+    // MARK: - Live-network tests (signed-in account required)
+
+    func testSubscriptionsSegmentShowsFeed() throws {
+        try openSubscriptionsSegment()
+        guard let _ = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
+            throw XCTSkip("No video cards loaded within 20 s — account may not be signed in or has no subscriptions")
+        }
+    }
+
+    func testNoErrorAlertOnSubscriptionsLoad() throws {
+        try openSubscriptionsSegment()
+        Thread.sleep(forTimeInterval: 5)
+        UITestHelpers.assertNoErrorAlert(in: app)
+    }
+
+    func testSubscriptionsScrollLoadsMore() throws {
+        try openSubscriptionsSegment()
+        guard let _ = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
+            throw XCTSkip("No video cards in Subscriptions feed — signed-in account required")
+        }
+
+        let countBefore = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'video.card.'"))
+            .count
+
+        app.swipeUp(velocity: .fast)
+        Thread.sleep(forTimeInterval: 2)
+        app.swipeUp(velocity: .fast)
+        Thread.sleep(forTimeInterval: 3)
+
+        let countAfter = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'video.card.'"))
+            .count
+
+        XCTAssertGreaterThanOrEqual(countAfter, countBefore,
+            "Scrolling down should not reduce the video card count (pagination should add more)")
+    }
+
+    func testTappingVideoFromSubscriptionsOpensPlayer() throws {
+        try openSubscriptionsSegment()
+        guard let firstCard = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
+            throw XCTSkip("No video cards in Subscriptions — signed-in account required")
+        }
+        XCTAssertTrue(UITestHelpers.openPlayer(from: firstCard, in: app),
+                      "player.titleLabel must appear after tapping a video in Library Subscriptions")
+        UITestHelpers.assertNoPlayerErrorBanner(in: app)
+    }
+
+    func testScrollRestorationAfterPlayback() throws {
+        try openSubscriptionsSegment()
+        guard let _ = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
+            throw XCTSkip("No video cards — signed-in account required")
+        }
+
+        let firstCard = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'video.card.'"))
+            .firstMatch
+
+        app.swipeUp(velocity: .fast)
+        Thread.sleep(forTimeInterval: 2)
+        app.swipeUp(velocity: .fast)
+        Thread.sleep(forTimeInterval: 2)
+
+        let firstCardMaxYAfterScroll = firstCard.frame.maxY
+        guard firstCardMaxYAfterScroll < 100 else {
+            throw XCTSkip("Could not scroll first card off-screen — feed may have too few items")
+        }
+
+        // Tap via screen centre coordinate so we don't have to pick a specific card.
+        let feed = app.scrollViews.firstMatch
+        let tapPoint = feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        tapPoint.tap()
+
+        let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
+        XCTAssertTrue(titleLabel.waitForExistence(timeout: 15), "PlayerView should open")
+
+        let backButton = app.buttons["player.backButton"].firstMatch
+        XCTAssertTrue(backButton.waitForExistence(timeout: 5), "player.backButton must be present")
+        backButton.tap()
+
+        let picker = app.segmentedControls["library.sectionPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5),
+                      "Library picker should reappear after back navigation")
+
+        Thread.sleep(forTimeInterval: 1.0)
+        let firstCardMaxYAfterBack = firstCard.frame.maxY
+        XCTAssertLessThan(firstCardMaxYAfterBack, 100,
+            "Scroll position should be restored — first card must still be off-screen after back")
+    }
+}

@@ -502,7 +502,20 @@ public struct PlayerView: View {
                     let channelTitle = vm.playerInfo?.video.channelTitle ?? video.channelTitle
                     Button {
                         guard let cid = channelId, !cid.isEmpty else { return }
+                        #if os(iOS)
+                        // PlayerView is presented via fullScreenCover — there is no
+                        // NavigationStack, so setting channelDestination is a no-op.
+                        // Post the shared notification instead (same path as VideoCardView),
+                        // then dismiss the player so the parent can push ChannelView.
+                        NotificationCenter.default.post(
+                            name: .openChannel,
+                            object: nil,
+                            userInfo: ["channelId": cid]
+                        )
+                        dismiss()
+                        #else
                         channelDestination = ChannelDestination(channelId: cid)
+                        #endif
                     } label: {
                         Text(channelTitle)
                             .font(.subheadline)
@@ -517,6 +530,7 @@ public struct PlayerView: View {
                     #else
                     .buttonStyle(.plain)
                     #endif
+                    .accessibilityIdentifier("player.channelName")
                     .disabled(channelId == nil || channelId?.isEmpty == true)
                 }
                 Spacer()

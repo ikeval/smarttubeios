@@ -73,6 +73,7 @@ public struct SettingsView: View {
                 Button("Sign Out", role: .destructive) { auth.signOut() }
             } else {
                 Button("Sign in with Google") { showSignIn = true }
+                    .accessibilityIdentifier("settings.signInButton")
                     .sheet(isPresented: $showSignIn) { SignInView() }
             }
         }
@@ -155,12 +156,15 @@ public struct SettingsView: View {
                     Text(t.rawValue).tag(t)
                 }
             }
+            .accessibilityIdentifier("settings.themeRow")
             Toggle("Hide Shorts", isOn: $store.settings.hideShorts)
+                .accessibilityIdentifier("settings.hideShortsToggle")
             Toggle("Compact Thumbnails", isOn: $store.settings.compactThumbnails)
             NavigationLink("Visible Sections") {
                 SectionsSettingsView()
                     .environment(store)
             }
+            .accessibilityIdentifier("settings.visibleSectionsLink")
         }
     }
 
@@ -170,6 +174,7 @@ public struct SettingsView: View {
         @Bindable var store = store
         return Section {
             Toggle("Enable SponsorBlock", isOn: $store.settings.sponsorBlockEnabled)
+                .accessibilityIdentifier("settings.sponsorBlockToggle")
 
             if store.settings.sponsorBlockEnabled {
                 ForEach(SponsorSegment.Category.allCases, id: \.self) { cat in
@@ -248,6 +253,7 @@ public struct SettingsView: View {
             }
             #endif
             Button("Reset All Settings", role: .destructive) { store.reset() }
+                .accessibilityIdentifier("settings.resetAllButton")
         }
     }
 

@@ -85,6 +85,7 @@ public struct SearchView: View {
                 .focused($isSearchFocused)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
+                .accessibilityIdentifier("search.bar")
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
@@ -97,6 +98,7 @@ public struct SearchView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("search.clearButton")
             }
             Button {
                 showFilterSheet = true
@@ -105,6 +107,7 @@ public struct SearchView: View {
                     .foregroundStyle(vm.filter.isDefault ? .secondary : Color.accentColor)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("search.filterButton")
         }
         .padding(10)
         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
@@ -163,6 +166,7 @@ public struct SearchView: View {
                 ProgressView().frame(maxWidth: .infinity).padding()
             }
         }
+        .accessibilityIdentifier("search.results")
     }
 
     // MARK: - Suggestions list (recommended or live)
@@ -200,6 +204,7 @@ public struct SearchView: View {
             }
         }
         .listStyle(.plain)
+        .accessibilityIdentifier("search.suggestionsContainer")
     }
 
     private var placeholderView: some View {
@@ -333,5 +338,6 @@ struct SearchFilterSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .accessibilityIdentifier("search.filterSheet")
     }
 }

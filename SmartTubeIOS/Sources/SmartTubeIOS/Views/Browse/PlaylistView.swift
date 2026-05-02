@@ -61,11 +61,13 @@ public struct PlaylistView: View {
     private var content: some View {
         ScrollView {
             if store.settings.compactThumbnails {
+
                 LazyVStack(spacing: 0) {
                     ForEach(vm.videos) { video in
                         VideoCardView(video: video, compact: true)
                             .padding(.horizontal)
                             .padding(.vertical, 6)
+                            .accessibilityIdentifier("video.card.\(video.id)")
                             .onTapGesture { selectedVideo = video }
                         Divider().padding(.horizontal)
                     }
@@ -77,6 +79,7 @@ public struct PlaylistView: View {
                 LazyVGrid(columns: videoGridColumns, spacing: 12) {
                     ForEach(vm.videos) { video in
                         VideoCardView(video: video, compact: false)
+                            .accessibilityIdentifier("video.card.\(video.id)")
                             .onTapGesture { selectedVideo = video }
                     }
                 }
@@ -87,6 +90,7 @@ public struct PlaylistView: View {
                 }
             }
         }
+        .accessibilityIdentifier("playlistView.feed")
         .refreshable { vm.load(playlistId: playlistId, refresh: true) }
     }
 

@@ -86,6 +86,7 @@ public struct ChannelView: View {
                             systemImage: isExcluded ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.minus"
                         )
                     }
+                    .accessibilityIdentifier("channel.sponsorBlockButton")
                 }
                 #endif
             }
@@ -109,6 +110,7 @@ public struct ChannelView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
                 .padding(.vertical, 10)
+                .accessibilityIdentifier("channel.filterPicker")
 
                 let filtered = filteredVideos
                 if filter == .shorts {
@@ -145,6 +147,7 @@ public struct ChannelView: View {
                         VideoCardView(video: video, compact: true)
                             .padding(.horizontal)
                             .padding(.vertical, 6)
+                            .accessibilityIdentifier("video.card.\(video.id)")
                             .onTapGesture { selectedVideo = video }
                             .onAppear {
                                 if video.id == vm.videos.last?.id { vm.loadMore() }
@@ -156,6 +159,7 @@ public struct ChannelView: View {
                 LazyVGrid(columns: videoGridColumns, spacing: 12) {
                     ForEach(videos) { video in
                         VideoCardView(video: video, compact: false)
+                            .accessibilityIdentifier("video.card.\(video.id)")
                             .onTapGesture { selectedVideo = video }
                             .onAppear {
                                 if video.id == vm.videos.last?.id { vm.loadMore() }
@@ -180,9 +184,8 @@ public struct ChannelView: View {
             }
         }
         .padding(.horizontal)
+        .accessibilityIdentifier("channel.videoGrid")
     }
-
-    // MARK: - Selection
 
     private func selectShort(_ video: Video, from videos: [Video]) {
         let idx = videos.firstIndex(where: { $0.id == video.id }) ?? 0
@@ -211,6 +214,7 @@ public struct ChannelView: View {
                 Text(channel.title)
                     .font(.title2)
                     .fontWeight(.semibold)
+                    .accessibilityIdentifier("channel.title")
                 if let subs = channel.subscriberCount {
                     Text(subs)
                         .font(.subheadline)
@@ -227,7 +231,6 @@ public struct ChannelView: View {
         }
         .padding()
         .background(.background)
+        .accessibilityIdentifier("channel.header")
     }
 }
-
-
