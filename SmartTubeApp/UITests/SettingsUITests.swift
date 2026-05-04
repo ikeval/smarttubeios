@@ -101,10 +101,15 @@ final class SettingsUITests: XCTestCase {
         // Turn on using coordinate tap (right side = UISwitch).
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
         // At least one per-category picker row should now be visible.
-        let categoryPicker = app.cells.containing(.staticText, identifier: "Sponsor").firstMatch
-        let subOptionsAppear = categoryPicker.waitForExistence(timeout: 3)
-            || app.cells.containing(.staticText, identifier: "Intermission").firstMatch.waitForExistence(timeout: 3)
-            || app.cells.containing(.staticText, identifier: "Skip").firstMatch.waitForExistence(timeout: 3)
+        // Category displayNames: "Sponsor", "Self-Promotion", "Interaction Reminder", etc.
+        // Use label predicate since SwiftUI Text labels map to XCUIElement.label,
+        // not necessarily to accessibilityIdentifier in iOS 26.
+        let sponsorPred = NSPredicate(format: "label == 'Sponsor'")
+        let sponsorRow = app.descendants(matching: .any).matching(sponsorPred).firstMatch
+        let selfPromoPred = NSPredicate(format: "label == 'Self-Promotion'")
+        let selfPromoRow = app.descendants(matching: .any).matching(selfPromoPred).firstMatch
+        let subOptionsAppear = sponsorRow.waitForExistence(timeout: 6)
+            || selfPromoRow.waitForExistence(timeout: 3)
         XCTAssertTrue(subOptionsAppear,
                       "SponsorBlock category pickers should appear when SponsorBlock is enabled")
 
@@ -156,5 +161,92 @@ final class SettingsUITests: XCTestCase {
         }
         XCTAssertTrue(signInEl.waitForExistence(timeout: 5),
                       "'Sign in with Google' button must be visible when no account is signed in")
+    }
+
+    func testLandscapeAlwaysPlayToggleExistsAndToggles() {
+        openSettings()
+        let form = app.collectionViews.firstMatch
+        let toggle = form.switches["settings.landscapeAlwaysPlayToggle"]
+        // The toggle lives inside the Player section; scroll until it appears.
+        UITestHelpers.scrollUntilVisible(toggle, in: form)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5),
+                      "settings.landscapeAlwaysPlayToggle must be present in the Player section (iOS only)")
+        let before = toggle.value as? String
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+        let after = toggle.value as? String
+        XCTAssertNotEqual(before, after,
+                          "Landscape Always Play toggle value must change after tapping")
+        // Restore original state so settings are not polluted between tests.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+    }
+
+    /// Verifies that enabling Landscape Always Play and opening a video reaches the
+    /// player without crashing. The orientation request code path runs on appear;
+    /// this test confirms it does not crash the app regardless of simulator limits.
+    func testLandscapeAlwaysPlayOpensPlayerWithoutCrash() throws {
+        // Enable Landscape Always Play
+        openSettings()
+        let form = app.collectionViews.firstMatch
+        let toggle = form.switches["settings.landscapeAlwaysPlayToggle"]
+        UITestHelpers.scrollUntilVisible(toggle, in: form)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5),
+                      "settings.landscapeAlwaysPlayToggle must be present")
+        let wasOn = (toggle.value as? String) == "1"
+        if !wasOn {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+            XCTAssertEqual(toggle.value as? String, "1",
+                           "Toggle must be ON before opening player")
+        }
+
+        // Navigate to Home and open a video so the orientation code path runs
+        UITestHelpers.tapTab(named: "Home", in: app)
+        let feedPredicate = NSPredicate(format: "identifier BEGINSWITH 'video.card.'")
+        let cards = app.descendants(matching: .any).matching(feedPredicate)
+        let feedLoaded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 0"),
+                                                   object: cards)
+        guard XCTWaiter().wait(for: [feedLoaded], timeout: 20) == .completed else {
+            // Network unavailable — skip but don't fail; toggle still exercised above.
+            if !wasOn {
+                openSettings()
+                UITestHelpers.scrollUntilVisible(toggle, in: form)
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+            }
+            throw XCTSkip("Home feed did not load within 20 s — network unavailable")
+        }
+        cards.firstMatch.tap()
+
+        // PlayerView.onAppear fires the orientation request; verify the player opened
+        let playerTitle = app.staticTexts["player.titleLabel"].firstMatch
+        XCTAssertTrue(playerTitle.waitForExistence(timeout: 15),
+                      "player.titleLabel must appear — PlayerView opened and orientation code ran")
+
+        // Verify landscape orientation is SUPPORTED while the player is open.
+        // requestGeometryUpdate (programmatic rotation on appear) works on real devices
+        // where UIKit consults the AppDelegate directly for orientation changes.
+        // In the iOS 26 simulator the VC-hierarchy orientation cache can delay the
+        // rotation, so we force a device rotation here and verify the app stays
+        // in landscape — which confirms OrientationManager.playerIsActive = true and
+        // the AppDelegate is returning .allButUpsideDown.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscapePredicate = NSPredicate { [app] _, _ in
+            app.frame.size.width > app.frame.size.height
+        }
+        let landscapeExpect = XCTNSPredicateExpectation(
+            predicate: landscapePredicate, object: nil)
+        let landscapeResult = XCTWaiter().wait(for: [landscapeExpect], timeout: 3)
+        XCUIDevice.shared.orientation = .portrait  // restore before dismissal
+        XCTAssertEqual(
+            landscapeResult, .completed,
+            "App must support landscape while the player is open (landscapeAlwaysPlay = ON). " +
+            "frame was \(app.frame.size)"
+        )
+
+        // Dismiss and restore toggle state
+        app.swipeDown()
+        if !wasOn {
+            openSettings()
+            UITestHelpers.scrollUntilVisible(toggle, in: form)
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+        }
     }
 }

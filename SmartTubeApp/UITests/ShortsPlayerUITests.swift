@@ -166,10 +166,21 @@ final class ShortsPlayerUITests: XCTestCase {
 
     func testControlsOverlayAppearsOnTap() throws {
         try openFirstShort()
-        showShortsControls()
+
         let pred = NSPredicate(format: "identifier == 'shorts.controlsOverlay'")
         let overlay = app.descendants(matching: .any).matching(pred).firstMatch
-        XCTAssertTrue(overlay.exists,
+
+        // The player shows controls on initial load; wait for the auto-hide timer
+        // to fire so the overlay is definitely hidden before we test the tap.
+        let hiddenExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: overlay
+        )
+        _ = XCTWaiter().wait(for: [hiddenExpectation], timeout: 10)
+
+        // Tap to show controls and assert they appear.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(overlay.waitForExistence(timeout: 5),
                       "shorts.controlsOverlay should appear after tapping the Shorts player")
     }
 }

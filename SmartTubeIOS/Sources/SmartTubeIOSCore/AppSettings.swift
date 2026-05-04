@@ -12,6 +12,8 @@ public struct AppSettings: Codable {
     public var subtitlesEnabled: Bool
     public var subtitlesLanguage: String?
     public var backgroundPlaybackEnabled: Bool
+    /// When `true`, the player automatically rotates to landscape when a video starts on iPhone.
+    public var landscapeAlwaysPlay: Bool
     /// Seconds to seek backward (configurable; default 10 mirrors Android's default).
     public var seekBackSeconds: Int
     /// Seconds to seek forward (configurable; default 30 mirrors Android's default).
@@ -156,6 +158,7 @@ public struct AppSettings: Codable {
         subtitlesEnabled     = false
         subtitlesLanguage    = nil
         backgroundPlaybackEnabled = false
+        landscapeAlwaysPlay  = false
         seekBackSeconds      = 10
         seekForwardSeconds   = 30
         controlsHideTimeout  = 4

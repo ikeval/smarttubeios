@@ -35,6 +35,7 @@
 		D222FD43501FE20610A249CC /* PlaylistsNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AC502830145DD05002B5A2 /* PlaylistsNavigationUITests.swift */; };
 		D4F5A6B7C8D9E0F1A2B3C4D5 /* SubscriptionsPlaybackUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3E4F5A6B7C8D9E0F1A2B3C4 /* SubscriptionsPlaybackUITests.swift */; };
 		D9B2E782B8D7E9E750193022 /* SmartTubeDownloadWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 79E77E6DD18B12CA7A5341D0 /* SmartTubeDownloadWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		AB01CD23EF456789AB01CD23 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD23EF456789AB01CD24 /* AppDelegate.swift */; };
 		DD2551477B9F9B6D89AE6FCB /* AppEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29356C9641042E3DA5F16175 /* AppEntry.swift */; };
 		E3F4A5B6C7D8E9F0A1B2C3D4 /* CategoryChipHTTP400UITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A5B6C7D8E9F0A1B2C3D4E5 /* CategoryChipHTTP400UITests.swift */; };
 		E5F6A7B8C9D0E1F2A3B4C5D6 /* SubscriptionsScrollRestorationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5E6F7A8B9C0D1E2F3A4B5C6 /* SubscriptionsScrollRestorationUITests.swift */; };
@@ -92,6 +93,7 @@
 		161D597B9340722805A04592 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		1A2B3C4D5E6F1A2B3C4D5E61 /* SmartTubeTVUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SmartTubeTVUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A2B3C4D5E6F1A2B3C4D5E62 /* TVFocusChainUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVFocusChainUITests.swift; sourceTree = "<group>"; };
+		AB01CD23EF456789AB01CD24 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		29356C9641042E3DA5F16175 /* AppEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEntry.swift; sourceTree = "<group>"; };
 		43AC502830145DD05002B5A2 /* PlaylistsNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsNavigationUITests.swift; sourceTree = "<group>"; };
 		46FAE8C7AB41057B392DF731 /* DownloadLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DownloadLiveActivity.swift; sourceTree = "<group>"; };
@@ -260,6 +262,7 @@
 		9084B7F6DD70E282DD4342A7 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				AB01CD23EF456789AB01CD24 /* AppDelegate.swift */,
 				29356C9641042E3DA5F16175 /* AppEntry.swift */,
 			);
 			path = Sources;
@@ -594,6 +597,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB01CD23EF456789AB01CD23 /* AppDelegate.swift in Sources */,
 				DD2551477B9F9B6D89AE6FCB /* AppEntry.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

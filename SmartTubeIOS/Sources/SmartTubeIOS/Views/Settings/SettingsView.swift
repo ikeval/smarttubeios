@@ -132,6 +132,10 @@ public struct SettingsView: View {
             Toggle("Autoplay next video", isOn: $store.settings.autoplayEnabled)
             Toggle("Subtitles", isOn: $store.settings.subtitlesEnabled)
             Toggle("Background Playback", isOn: $store.settings.backgroundPlaybackEnabled)
+            #if os(iOS)
+            Toggle("Landscape Always Play", isOn: $store.settings.landscapeAlwaysPlay)
+                .accessibilityIdentifier("settings.landscapeAlwaysPlayToggle")
+            #endif
         }
     }
 

@@ -6,6 +6,10 @@ import SmartTubeIOSCore
 /// Unified entry point for iOS, iPadOS and macOS.
 @main
 struct AppEntry: App {
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #endif
+
     // Declared without default values so that init() can call FirebaseApp.configure()
     // before any of these objects are instantiated. @State default values are evaluated
     // before init() runs, which would trigger Firebase before it is configured.

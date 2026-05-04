@@ -953,9 +953,20 @@ public final class PlaybackViewModel {
             self.availableAudioTracks = tracks
 
             // Auto-apply the user's saved language preference (fuzzy-match on base language).
+            // When no preference is saved, prefer the device's language order over the HLS
+            // DEFAULT track — YouTube sets DEFAULT=YES based on the viewer's account language,
+            // not the video's original language, so blind DEFAULT selection gives wrong results
+            // (e.g. German for an English video when the account UI is in German).
             let preferred = self.settings.preferredAudioLanguage
             let autoSelect: AudioTrack? = {
-                guard let lang = preferred else { return tracks.first(where: \.isOriginal) }
+                guard let lang = preferred else {
+                    for deviceLang in Locale.preferredLanguages {
+                        if let exact = tracks.first(where: { $0.languageCode == deviceLang }) { return exact }
+                        let base = deviceLang.components(separatedBy: "-").first ?? deviceLang
+                        if let match = tracks.first(where: { $0.languageCode.hasPrefix(base) }) { return match }
+                    }
+                    return tracks.first(where: \.isOriginal)
+                }
                 if let exact = tracks.first(where: { $0.languageCode == lang }) { return exact }
                 let base = lang.components(separatedBy: "-").first ?? lang
                 return tracks.first(where: { $0.languageCode.hasPrefix(base) })

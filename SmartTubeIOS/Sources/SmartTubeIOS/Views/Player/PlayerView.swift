@@ -418,6 +418,14 @@ public struct PlayerView: View {
             #if os(tvOS)
             playerFocused = true
             #endif
+            #if os(iOS)
+            swipeLog.notice("[orientation] landscapeAlwaysPlay=\(store.settings.landscapeAlwaysPlay)")
+            if store.settings.landscapeAlwaysPlay {
+                swipeLog.notice("[orientation] requesting .landscape on appear")
+                OrientationManager.shared.playerIsActive = true
+                requestOrientation(.landscape)
+            }
+            #endif
             if vm.currentVideoId == video.id {
                 // Spurious appear (e.g. a sheet temporarily covered us) — only resume
                 // if playback was active before the view disappeared, so an intentional
@@ -437,6 +445,14 @@ public struct PlayerView: View {
             isVisible = false
             guard !isInBackground else { return }
             vm.suspend()
+            #if os(iOS)
+            swipeLog.notice("[orientation] landscapeAlwaysPlay=\(store.settings.landscapeAlwaysPlay) — restoring on disappear")
+            if store.settings.landscapeAlwaysPlay {
+                swipeLog.notice("[orientation] requesting .allButUpsideDown on disappear")
+                requestOrientation(.portrait)
+                OrientationManager.shared.playerIsActive = false
+            }
+            #endif
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -2314,3 +2330,54 @@ private extension AppSettings.VideoGravityMode {
         self == .fill ? .resizeAspectFill : .resizeAspect
     }
 }
+
+// MARK: - Orientation helpers (iOS only)
+
+#if os(iOS)
+@MainActor
+private func requestOrientation(_ orientations: UIInterfaceOrientationMask) {
+    guard let scene = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene }).first else {
+        swipeLog.error("[orientation] no UIWindowScene found — cannot rotate")
+        return
+    }
+    // Signal all VCs in the hierarchy to re-query supportedInterfaceOrientations.
+    // `keyWindow` can be nil in XCTest, so fall back to the first scene window
+    // with a rootViewController.
+    let window = scene.windows.first(where: { $0.rootViewController != nil })
+               ?? scene.windows.first
+    let rootVC = window?.rootViewController
+    // Call on root VC and topmost presented VC so all caches are invalidated.
+    rootVC?.setNeedsUpdateOfSupportedInterfaceOrientations()
+    var topVC = rootVC
+    while let presented = topVC?.presentedViewController { topVC = presented }
+    if topVC !== rootVC { topVC?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+
+    swipeLog.notice("[orientation] requesting mask=\(orientations.rawValue)")
+    let pref = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: orientations)
+
+    Task { @MainActor [weak scene] in
+        // Brief yield so UIKit can process the setNeedsUpdateOfSupportedInterfaceOrientations
+        // calls above before requestGeometryUpdate consults the updated mask.
+        try? await Task.sleep(for: .milliseconds(50))
+        guard let scene else {
+            swipeLog.error("[orientation] scene deallocated before requestGeometryUpdate")
+            return
+        }
+
+        var geometryFailed = false
+        scene.requestGeometryUpdate(pref) { error in
+            geometryFailed = true
+            swipeLog.error("[orientation] requestGeometryUpdate error: \(error.localizedDescription)")
+        }
+
+        if geometryFailed {
+            // requestGeometryUpdate failed — this can happen when UIKit's
+            // supportedInterfaceOrientations cache hasn't been refreshed yet.
+            // Log for debugging; the physical device correctly rotates via the
+            // AppDelegate path (playerIsActive = true → .allButUpsideDown).
+            swipeLog.error("[orientation] rotation was not applied programmatically; device rotation will still work")
+        }
+    }
+}
+#endif
