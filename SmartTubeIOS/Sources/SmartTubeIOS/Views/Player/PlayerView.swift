@@ -70,6 +70,10 @@ public struct PlayerView: View {
     /// Which playback control is visually highlighted in the overlay.
     /// nil = not in controls-nav mode; all remote input targets the video layer.
     @State private var highlightedControl: TVPlayerControl? = nil
+    /// True when any picker/menu overlay is open — player yields focus to the overlay.
+    private var isAnyOverlayVisible: Bool {
+        showMoreMenu || showQualityPicker || showSpeedPicker || showSleepTimerPicker
+    }
     #endif
 
     public init(video: Video, api: InnerTubeAPI) {
@@ -310,13 +314,14 @@ public struct PlayerView: View {
         }
         .background(Color.black.ignoresSafeArea())
         #if os(tvOS)
-        // Outer view is ALWAYS the focus target. All remote input is handled here.
-        // The controls overlay buttons are not SwiftUI-focusable — instead we track
-        // a `highlightedControl` manually and visually indicate the selection.
-        .focusable()
+        // When no overlay is open, the outer view is the exclusive focus target and
+        // handles all remote input via onMoveCommand / onTapGesture.
+        // When an overlay (more menu, quality, speed, sleep timer) is visible, focus is
+        // yielded so the overlay's buttons are reachable by the Siri Remote.
+        .focusable(!isAnyOverlayVisible)
         .focused($playerFocused)
         .onMoveCommand { direction in
-            guard !isTransitioning else { return }
+            guard !isAnyOverlayVisible, !isTransitioning else { return }
             if let current = highlightedControl {
                 // Controls-nav mode: move the highlight between buttons.
                 highlightedControl = tvNextControl(from: current, direction: direction)
@@ -335,6 +340,7 @@ public struct PlayerView: View {
             }
         }
         .onTapGesture {
+            guard !isAnyOverlayVisible else { return }
             if let current = highlightedControl {
                 tvActivateControl(current)
             } else if vm.controlsVisible {
@@ -347,6 +353,11 @@ public struct PlayerView: View {
         }
         .onPlayPauseCommand { vm.togglePlayPause() }
         .onExitCommand {
+            // Dismiss any open overlay first — Menu/Back is the tvOS dismiss convention.
+            if showMoreMenu      { showMoreMenu = false; return }
+            if showQualityPicker { showQualityPicker = false; return }
+            if showSpeedPicker   { showSpeedPicker = false; return }
+            if showSleepTimerPicker { showSleepTimerPicker = false; return }
             if highlightedControl != nil {
                 // Esc/Menu from nav mode → exit nav mode, controls stay until timer.
                 highlightedControl = nil
@@ -359,6 +370,13 @@ public struct PlayerView: View {
         }
         .onChange(of: vm.controlsVisible) { _, visible in
             if !visible {
+                highlightedControl = nil
+                playerFocused = true
+            }
+        }
+        .onChange(of: isAnyOverlayVisible) { _, overlayVisible in
+            if !overlayVisible {
+                // Overlay dismissed — reclaim focus and clear nav state.
                 highlightedControl = nil
                 playerFocused = true
             }
@@ -1004,6 +1022,9 @@ public struct PlayerView: View {
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            #if os(tvOS)
+            .focusSection()
+            #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
         }
@@ -1249,7 +1270,7 @@ public struct PlayerView: View {
         case .channel:
             let channelId = vm.playerInfo?.video.channelId ?? video.channelId
             if let cid = channelId, !cid.isEmpty { channelDestination = ChannelDestination(channelId: cid) }
-        case .more:        showMoreMenu = true
+        case .more:        showMoreMenu = true; highlightedControl = nil
         case .seekBack:    vm.seekRelative(seconds: -Double(store.settings.seekBackSeconds))
         case .playPause:   vm.togglePlayPause()
         case .seekForward: vm.seekRelative(seconds: Double(store.settings.seekForwardSeconds))
@@ -1572,6 +1593,9 @@ public struct PlayerView: View {
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            #if os(tvOS)
+            .focusSection()
+            #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
         }
@@ -1626,6 +1650,9 @@ public struct PlayerView: View {
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            #if os(tvOS)
+            .focusSection()
+            #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
         }
@@ -1696,6 +1723,9 @@ public struct PlayerView: View {
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            #if os(tvOS)
+            .focusSection()
+            #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
         }
