@@ -1,0 +1,417 @@
+import SwiftUI
+import AVKit
+import SmartTubeIOSCore
+#if canImport(UIKit)
+import UIKit
+#endif
+
+// MARK: - PlayerView picker overlays + share sheet
+//
+// Pure-SwiftUI bottom-sheet overlays for all media settings pickers.
+// Rendered inside the player's ZStack — no UIKit sheet presentation fires
+// onDisappear and tears down playback.
+//
+// Includes:
+//   • qualityPickerOverlay       — video quality selection
+//   • speedPickerOverlay         — playback speed selection
+//   • sleepTimerPickerOverlay    — sleep timer duration
+//   • captionPickerOverlay       — subtitle/caption track (iOS only)
+//   • audioTrackPickerOverlay    — audio track selection (iOS only)
+//   • presentShareSheet(url:)    — UIActivityViewController (iOS only)
+
+extension PlayerView {
+
+    // MARK: - Quality picker overlay
+
+    var qualityPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showQualityPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showQualityPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Quality")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Button {
+                            vm.selectFormat(nil)
+                            store.settings.preferredQuality = .auto
+                            showQualityPicker = false
+                        } label: {
+                            HStack {
+                                Text("Auto")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if vm.selectedFormat == nil {
+                                    Image(systemName: AppSymbol.checkmark)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                        ForEach(vm.availableFormats) { fmt in
+                            Button {
+                                vm.selectFormat(fmt)
+                                store.settings.preferredQuality = AppSettings.VideoQuality.from(height: fmt.height) ?? .auto
+                                showQualityPicker = false
+                            } label: {
+                                HStack {
+                                    Text(fmt.qualityLabel)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if vm.selectedFormat?.id == fmt.id {
+                                        Image(systemName: AppSymbol.checkmark)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 320)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            #if os(tvOS)
+            .focusSection()
+            #endif
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Speed picker overlay
+
+    var speedPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showSpeedPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showSpeedPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Playback Speed")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(AppSettings.availableSpeeds, id: \.self) { (speed: Double) in
+                            Button {
+                                store.settings.playbackSpeed = speed
+                                vm.setPlaybackSpeed(speed)
+                                showSpeedPicker = false
+                            } label: {
+                                HStack {
+                                    Text(speed == 1.0 ? "Normal (1\u{d7})" : "\(speed, specifier: "%.2g")\u{d7}")
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if abs(store.settings.playbackSpeed - speed) < 0.01 {
+                                        Image(systemName: AppSymbol.checkmark)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 320)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            #if os(tvOS)
+            .focusSection()
+            #endif
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Sleep timer picker overlay
+
+    var sleepTimerPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showSleepTimerPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showSleepTimerPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Sleep Timer")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                VStack(spacing: 0) {
+                    Button {
+                        vm.setSleepTimer(minutes: nil)
+                        showSleepTimerPicker = false
+                    } label: {
+                        HStack {
+                            Text("Off")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if vm.sleepTimerMinutes == nil {
+                                Image(systemName: AppSymbol.checkmark)
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.horizontal)
+                        .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    Divider()
+                    ForEach(PlaybackViewModel.sleepTimerOptions, id: \.self) { mins in
+                        Button {
+                            vm.setSleepTimer(minutes: mins)
+                            showSleepTimerPicker = false
+                        } label: {
+                            HStack {
+                                Text("\(mins) min")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if vm.sleepTimerMinutes == mins {
+                                    Image(systemName: AppSymbol.checkmark)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
+                }
+                .frame(maxHeight: 320)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            #if os(tvOS)
+            .focusSection()
+            #endif
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Caption picker overlay
+
+    #if !os(tvOS)
+    var captionPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showCaptionPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showCaptionPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Captions")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Off row
+                        Button {
+                            vm.selectCaption(nil)
+                            showCaptionPicker = false
+                        } label: {
+                            HStack {
+                                Text("Off")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if vm.selectedCaption == nil {
+                                    Image(systemName: AppSymbol.checkmark)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                        ForEach(vm.availableCaptions) { track in
+                            Button {
+                                vm.selectCaption(track)
+                                showCaptionPicker = false
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(track.name)
+                                            .foregroundStyle(.primary)
+                                        if track.isAutoGenerated {
+                                            Text("Auto-generated")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    if vm.selectedCaption?.id == track.id {
+                                        Image(systemName: AppSymbol.checkmark)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 360)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+        .ignoresSafeArea()
+    }
+    #endif
+
+    // MARK: - Audio track picker overlay
+
+    #if !os(tvOS)
+    var audioTrackPickerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showAudioTrackPicker = false }
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel") { showAudioTrackPicker = false }
+                        .padding()
+                    Spacer()
+                    Text("Audio Track")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Color.clear.frame(width: 70, height: 44)
+                }
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // "Auto" row — resets to HLS default and clears the saved preference
+                        Button {
+                            vm.selectAudioTrack(nil)
+                            showAudioTrackPicker = false
+                        } label: {
+                            HStack {
+                                Text("Auto")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if vm.selectedAudioTrack == nil {
+                                    Image(systemName: AppSymbol.checkmark)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                        ForEach(vm.availableAudioTracks) { track in
+                            Button {
+                                vm.selectAudioTrack(track)
+                                showAudioTrackPicker = false
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(track.name)
+                                            .foregroundStyle(.primary)
+                                        if track.isOriginal {
+                                            Text("Original")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    if vm.selectedAudioTrack?.id == track.id {
+                                        Image(systemName: AppSymbol.checkmark)
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.horizontal)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 360)
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("player.audioTrackPicker")
+        }
+        .ignoresSafeArea()
+    }
+    #endif
+
+    // MARK: - Share sheet
+
+    #if os(iOS)
+    func presentShareSheet(url: URL) {
+        let wasPlaying = vm.isPlaying
+        vm.suspend()
+        let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        vc.completionWithItemsHandler = { _, _, _, _ in
+            if wasPlaying { vm.resume() }
+        }
+        guard
+            let scene = UIApplication.shared.connectedScenes
+                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
+            let root = scene.windows.first(where: \.isKeyWindow)?.rootViewController
+        else { return }
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        top.present(vc, animated: true)
+    }
+    #endif
+}

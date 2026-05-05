@@ -60,11 +60,7 @@ public struct HomeView: View {
             Divider()
             #endif
             contentArea
-                #if os(iOS)
-                .fullScreenCover(item: $selectedVideo) { video in
-                    PlayerView(video: video, api: api)
-                }
-                #else
+                #if os(tvOS)
                 .navigationDestination(item: $selectedVideo) { video in
                     PlayerView(video: video, api: api)
                 }
@@ -80,6 +76,12 @@ public struct HomeView: View {
                 #endif
         }
         #if os(iOS)
+        // landscapePlayerCover is attached to the stable VStack (not contentArea) so
+        // the LandscapePresenter coordinator survives section/auth changes that cause
+        // contentArea to swap its identity.
+        .landscapePlayerCover(item: $selectedVideo) { video in
+            PlayerView(video: video, api: api)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(item: $shortsPresentation) { target in
             ShortsPlayerView(videos: target.videos, startIndex: target.startIndex, api: api)

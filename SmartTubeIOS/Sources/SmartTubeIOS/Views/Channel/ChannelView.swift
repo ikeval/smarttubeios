@@ -38,7 +38,11 @@ public struct ChannelView: View {
         }
         .navigationTitle(vm.channel?.title ?? "Channel")
         .onAppear { vm.load(channelId: channelId) }
-        #if !os(macOS)
+        #if os(iOS)
+        .landscapePlayerCover(item: $selectedVideo) { video in
+            PlayerView(video: video, api: api)
+        }
+        #elseif !os(macOS)
         .fullScreenCover(item: $selectedVideo) { video in
             PlayerView(video: video, api: api)
         }

@@ -32,7 +32,11 @@ public struct BrowseView: View {
         }
         .navigationTitle(vm.currentSection.title)
         .toolbar { sectionPicker }
-        #if !os(macOS)
+        #if os(iOS)
+        .landscapePlayerCover(item: $selectedVideo) { video in
+            PlayerView(video: video, api: api)
+        }
+        #elseif !os(macOS)
         .fullScreenCover(item: $selectedVideo) { video in
             PlayerView(video: video, api: api)
         }

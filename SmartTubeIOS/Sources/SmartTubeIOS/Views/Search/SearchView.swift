@@ -52,7 +52,7 @@ public struct SearchView: View {
         }
         #elseif os(iOS)
         .toolbar(.hidden, for: .navigationBar)
-        .fullScreenCover(item: $selectedVideo) { video in
+        .landscapePlayerCover(item: $selectedVideo) { video in
             PlayerView(video: video, api: api)
         }
         #endif

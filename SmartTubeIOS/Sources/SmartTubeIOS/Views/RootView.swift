@@ -31,7 +31,13 @@ public struct RootView: View {
             // can still browse without being signed in.
             SignInView()
         }
-        #if !os(macOS)
+        #if os(iOS)
+        .landscapePlayerCover(item: $browseVM.deepLinkedVideo) { video in
+            PlayerView(video: video, api: api)
+                .environment(store)
+                .environment(auth)
+        }
+        #elseif !os(macOS)
         .fullScreenCover(item: $browseVM.deepLinkedVideo) { video in
             PlayerView(video: video, api: api)
                 .environment(store)

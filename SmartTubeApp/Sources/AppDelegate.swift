@@ -1,6 +1,9 @@
 #if os(iOS)
 import UIKit
+import OSLog
 import SmartTubeIOS
+
+private let appDelegateLog = Logger(subsystem: "com.void.smarttube.app", category: "AppDelegate")
 
 /// Provides the per-screen orientation mask that UIKit queries on every
 /// orientation-change event. Returns `.allButUpsideDown` so that
@@ -22,7 +25,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         //    landscape when the player opens and portrait when it closes.
         // Proactive portrait↔landscape transitions are still managed by
         // OrientationManager via UIWindowScene.requestGeometryUpdate.
-        .allButUpsideDown
+        let mask = UIInterfaceOrientationMask.allButUpsideDown
+        appDelegateLog.notice("[AppDelegate] supportedInterfaceOrientationsFor — returning mask=\(mask.rawValue) playerIsActive=\(OrientationManager.shared.playerIsActive)")
+        return mask
     }
 }
 #endif

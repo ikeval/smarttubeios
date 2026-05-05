@@ -48,7 +48,7 @@ public struct LibraryView: View {
         .toolbar(.hidden, for: .navigationBar)
         #endif
         #if os(iOS)
-        .fullScreenCover(item: $selectedVideo) { video in
+        .landscapePlayerCover(item: $selectedVideo) { video in
             PlayerView(video: video, api: api)
         }
         #endif

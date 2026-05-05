@@ -247,4 +247,68 @@ final class SettingsUITests: XCTestCase {
             toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
         }
     }
+
+    /// Verifies that pressing the back button while Landscape Always Play is ON
+    /// returns the user to the Home feed and does NOT re-open the player in a loop.
+    func testLandscapeAlwaysPlayBackButtonReturnsHome() throws {
+        // Enable Landscape Always Play
+        openSettings()
+        let form = app.collectionViews.firstMatch
+        let toggle = form.switches["settings.landscapeAlwaysPlayToggle"]
+        UITestHelpers.scrollUntilVisible(toggle, in: form)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5),
+                      "settings.landscapeAlwaysPlayToggle must be present")
+        let wasOn = (toggle.value as? String) == "1"
+        if !wasOn {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+            XCTAssertEqual(toggle.value as? String, "1",
+                           "Toggle must be ON before opening player")
+        }
+
+        defer {
+            if !wasOn {
+                openSettings()
+                let f = app.collectionViews.firstMatch
+                let t = f.switches["settings.landscapeAlwaysPlayToggle"]
+                UITestHelpers.scrollUntilVisible(t, in: f)
+                t.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+            }
+        }
+
+        // Open a video from Home
+        UITestHelpers.tapTab(named: "Home", in: app)
+        let feedPredicate = NSPredicate(format: "identifier BEGINSWITH 'video.card.'")
+        let cards = app.descendants(matching: .any).matching(feedPredicate)
+        let feedLoaded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 0"),
+                                                   object: cards)
+        guard XCTWaiter().wait(for: [feedLoaded], timeout: 20) == .completed else {
+            throw XCTSkip("Home feed did not load within 20 s — network unavailable")
+        }
+        cards.firstMatch.tap()
+
+        let playerTitle = app.staticTexts["player.titleLabel"].firstMatch
+        XCTAssertTrue(playerTitle.waitForExistence(timeout: 15),
+                      "player.titleLabel must appear after tapping a video")
+
+        // Tap back button to dismiss the player
+        let backButton = app.buttons["player.backButton"].firstMatch
+        XCTAssertTrue(backButton.waitForExistence(timeout: 5),
+                      "player.backButton must be visible")
+        backButton.tap()
+
+        // Home chip bar must reappear promptly
+        let chipBar = app.scrollViews["home.chipBar"]
+        XCTAssertTrue(chipBar.waitForExistence(timeout: 8),
+                      "home.chipBar must reappear after pressing back — player did not dismiss")
+
+        // Player must not re-open (the dismiss/re-present loop fix).
+        // Wait 3 seconds and confirm playerTitle has gone away.
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertFalse(playerTitle.exists,
+                       "player.titleLabel must NOT reappear — dismiss/re-present loop detected")
+
+        // App must still be alive
+        XCTAssertEqual(app.state, .runningForeground,
+                       "App must still be running after back navigation")
+    }
 }

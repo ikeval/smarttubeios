@@ -39,7 +39,7 @@ public struct PlaylistView: View {
             vm.load(playlistId: playlistId)
         }
         #if os(iOS)
-        .fullScreenCover(item: $selectedVideo) { video in
+        .landscapePlayerCover(item: $selectedVideo) { video in
             PlayerView(video: video, api: api)
         }
         #elseif os(tvOS)
