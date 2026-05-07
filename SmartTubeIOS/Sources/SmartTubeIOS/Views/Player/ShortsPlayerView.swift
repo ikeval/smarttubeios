@@ -116,23 +116,6 @@ public struct ShortsPlayerView: View {
                     .animation(.easeInOut(duration: 0.2), value: vm.isLoading)
             }
 
-            if vm.controlsVisible {
-                shortsOverlay
-                    .accessibilityIdentifier("shorts.controlsOverlay")
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: vm.controlsVisible)
-            }
-
-            if let err = vm.error {
-                Text(err.localizedDescription)
-                    .font(.caption)
-                    .foregroundStyle(.white)
-                    .padding(12)
-                    .background(.black.opacity(0.6))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .accessibilityIdentifier("shorts.errorBanner")
-            }
-
             // Stats for Nerds overlay (toggled by two-finger tap)
             if vm.statsForNerdsVisible {
                 StatsForNerdsOverlay(snapshot: vm.statsSnapshot)
@@ -140,6 +123,13 @@ public struct ShortsPlayerView: View {
                     .animation(.easeInOut(duration: 0.2), value: vm.statsForNerdsVisible)
             }
         }
+        // SwiftUI tap gesture — fires when the player area is tapped.
+        // This complements the UIKit UITapGestureRecognizer in SwipeGestureOverlay,
+        // which can be unreliable in the XCTest simulator environment.
+        // Both paths call vm.showControls(), which is idempotent (second call
+        // simply resets the auto-hide timer).
+        .contentShape(Rectangle())
+        .onTapGesture { vm.showControls() }
         .offset(y: slideOffset)
         .background(Color.black.ignoresSafeArea())
         #if os(tvOS)
@@ -160,11 +150,35 @@ public struct ShortsPlayerView: View {
             }
         }
         #endif
-        // indexBadge is placed OUTSIDE the ZStack as an overlay so it lives at
-        // the top-level SwiftUI view layer, away from UIViewRepresentable elements
-        // inside the ZStack that can absorb the accessibility tree in fullScreenCover.
+        // indexBadge, controls overlay, and error banner are placed OUTSIDE the
+        // ZStack as overlays so UIViewRepresentable elements (SwipeGestureOverlay)
+        // inside the ZStack cannot absorb them from the accessibility tree.
         .overlay(alignment: .topTrailing) {
             indexBadge
+        }
+        .overlay {
+            if vm.controlsVisible {
+                shortsOverlay
+                    // .contain makes the VStack an explicit accessibility
+                    // container so its children keep their own identifiers
+                    // (e.g. shorts.backButton) instead of inheriting the
+                    // container's identifier.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("shorts.controlsOverlay")
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: vm.controlsVisible)
+            }
+        }
+        .overlay {
+            if let err = vm.error {
+                Text(err.localizedDescription)
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .padding(12)
+                    .background(.black.opacity(0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityIdentifier("shorts.errorBanner")
+            }
         }
         .overlay(alignment: .bottomTrailing) {
             if isFetchingMore {
@@ -192,6 +206,13 @@ public struct ShortsPlayerView: View {
                 if vm.wasPlayingBeforeSuspend { vm.resume() }
             } else {
                 loadVideo(at: currentIndex)
+            }
+            // UI testing only: show the controls overlay so tests can verify
+            // accessibility of the controls elements without relying on gesture
+            // delivery, which is unreliable in the simulator.
+            // Called AFTER loadVideo so it runs after controlsVisible is reset.
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-show-controls") {
+                vm.showControls()
             }
         }
         .onDisappear {
