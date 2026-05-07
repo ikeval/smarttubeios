@@ -48,13 +48,22 @@ final class ShortsPlayerUITests: XCTestCase {
         UITestHelpers.scrollChipIntoView(shortsChip, in: chipBar, app: app)
         shortsChip.tap()
 
+        // Wait for the Shorts section feed ScrollView to appear before querying
+        // cards. Without this guard the predicate below can match stale Home-feed
+        // cards that are still in the accessibility tree during the section-switch
+        // animation, causing the test to tap a non-Short video.
+        let sectionFeed = app.scrollViews["home.sectionFeed"]
+        guard sectionFeed.waitForExistence(timeout: 20) else {
+            throw XCTSkip("Shorts section feed did not appear within 20 s — network unavailable or Shorts empty")
+        }
+
         // Wait for the Shorts section feed to populate.
         let feedPredicate = NSPredicate(format: "identifier BEGINSWITH 'video.card.'")
         let cards = app.descendants(matching: .any).matching(feedPredicate)
         let feedLoaded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 0"),
                                                    object: cards)
-        guard XCTWaiter().wait(for: [feedLoaded], timeout: 20) == .completed else {
-            throw XCTSkip("Shorts feed did not load within 20 s — network unavailable or Shorts empty")
+        guard XCTWaiter().wait(for: [feedLoaded], timeout: 10) == .completed else {
+            throw XCTSkip("Shorts feed did not load within 10 s — network unavailable or Shorts empty")
         }
 
         cards.firstMatch.tap()
