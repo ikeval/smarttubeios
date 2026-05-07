@@ -13,6 +13,9 @@ public struct SearchView: View {
     @State private var channelDestination: ChannelDestination?
     @State private var showFilterSheet = false
     @FocusState private var isSearchFocused: Bool
+    #if os(iOS)
+    @Environment(PlayerStateStore.self) private var playerState
+    #endif
 
     public init() {}
 
@@ -52,9 +55,7 @@ public struct SearchView: View {
         }
         #elseif os(iOS)
         .toolbar(.hidden, for: .navigationBar)
-        .landscapePlayerCover(item: $selectedVideo) { video in
-            PlayerView(video: video, api: api)
-        }
+        // Player cover is centralised in MainTabView.
         #endif
         .navigationDestination(item: $channelDestination) { dest in
             ChannelView(channelId: dest.channelId)
@@ -159,7 +160,13 @@ public struct SearchView: View {
             }
             VideoGridSection(
                 videos: vm.results,
-                onSelect: { selectedVideo = $0 },
+                onSelect: {
+                    #if os(iOS)
+                    playerState.play(video: $0)
+                    #else
+                    selectedVideo = $0
+                    #endif
+                },
                 loadMore: vm.loadMore
             )
             if vm.isLoading && !vm.results.isEmpty {

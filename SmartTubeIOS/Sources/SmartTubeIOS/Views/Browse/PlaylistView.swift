@@ -16,6 +16,9 @@ public struct PlaylistView: View {
     @State private var vm: PlaylistViewModel
     @State private var selectedVideo: Video?
     @State private var channelDestination: ChannelDestination?
+    #if os(iOS)
+    @Environment(PlayerStateStore.self) private var playerState
+    #endif
 
     public init(playlistId: String, playlistTitle: String, api: InnerTubeAPI) {
         self.playlistId = playlistId
@@ -39,9 +42,7 @@ public struct PlaylistView: View {
             vm.load(playlistId: playlistId)
         }
         #if os(iOS)
-        .landscapePlayerCover(item: $selectedVideo) { video in
-            PlayerView(video: video, api: api)
-        }
+        // Player cover is centralised in MainTabView.
         #elseif os(tvOS)
         .navigationDestination(item: $selectedVideo) { video in
             PlayerView(video: video, api: api)
@@ -82,7 +83,13 @@ public struct PlaylistView: View {
                             .padding(.horizontal)
                             .padding(.vertical, 6)
                             .accessibilityIdentifier("video.card.\(video.id)")
-                            .onTapGesture { selectedVideo = video }
+                            .onTapGesture {
+                                #if os(iOS)
+                                playerState.play(video: video)
+                                #else
+                                selectedVideo = video
+                                #endif
+                            }
                             .onAppear { vm.loadMoreIfNeeded(lastVideo: video) }
                         #endif
                         Divider().padding(.horizontal)
@@ -125,7 +132,13 @@ public struct PlaylistView: View {
                     ForEach(vm.videos) { video in
                         VideoCardView(video: video, compact: false)
                             .accessibilityIdentifier("video.card.\(video.id)")
-                            .onTapGesture { selectedVideo = video }
+                            .onTapGesture {
+                                #if os(iOS)
+                                playerState.play(video: video)
+                                #else
+                                selectedVideo = video
+                                #endif
+                            }
                             .onAppear { vm.loadMoreIfNeeded(lastVideo: video) }
                     }
                 }

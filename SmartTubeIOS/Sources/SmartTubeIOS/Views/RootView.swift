@@ -32,11 +32,8 @@ public struct RootView: View {
             SignInView()
         }
         #if os(iOS)
-        .landscapePlayerCover(item: $browseVM.deepLinkedVideo) { video in
-            PlayerView(video: video, api: api)
-                .environment(store)
-                .environment(auth)
-        }
+        // Deep link is handled by MainTabView.onChange(of: browseVM.deepLinkedVideo)
+        // which calls playerState.play(video:). No landscapePlayerCover needed here.
         #elseif !os(macOS)
         .fullScreenCover(item: $browseVM.deepLinkedVideo) { video in
             PlayerView(video: video, api: api)
@@ -85,8 +82,18 @@ struct MainTabView: View {
     @State private var searchVM = SearchViewModel()
     @State private var selectedTab: AppSection = .home
     @Environment(\.innerTubeAPI) private var api
+    #if os(iOS)
+    @Environment(PlayerStateStore.self) private var playerState
+    @Environment(BrowseViewModel.self) private var browseVM
+    #endif
 
     var body: some View {
+        #if os(iOS)
+        let fullScreenBinding = Binding<Video?>(
+            get: { playerState.presentation == .fullScreen ? playerState.currentVideo : nil },
+            set: { if $0 == nil { playerState.minimize() } }
+        )
+        #endif
         TabView(selection: $selectedTab) {
             ForEach(AppSection.allCases) { section in
                 NavigationStack { section.destination(api: api) }
@@ -99,6 +106,23 @@ struct MainTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: .navigateToSearch)) { _ in
             selectedTab = .search
         }
+        #if os(iOS)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if playerState.presentation == .miniPlayer {
+                MiniPlayerView()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.2), value: playerState.presentation)
+            }
+        }
+        .landscapePlayerCover(item: fullScreenBinding) { video in
+            PlayerView(video: video, api: api)
+        }
+        .onChange(of: browseVM.deepLinkedVideo) { _, video in
+            guard let video else { return }
+            playerState.play(video: video)
+            browseVM.deepLinkedVideo = nil
+        }
+        #endif
     }
 }
 

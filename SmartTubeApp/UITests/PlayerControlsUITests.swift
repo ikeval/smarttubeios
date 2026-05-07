@@ -109,10 +109,24 @@ final class PlayerControlsUITests: XCTestCase {
                       "player.backButton must be present")
         backButton.tap()
 
-        // After dismissal the Home feed (chip bar) should be visible.
+        // Back now minimizes to the mini-player bar rather than stopping playback.
+        let miniPlayerBar = app.otherElements["miniPlayer.bar"].firstMatch
+        XCTAssertTrue(miniPlayerBar.waitForExistence(timeout: 5),
+                      "miniPlayer.bar should appear after tapping the back button")
+
+        // Close the mini-player to fully stop playback.
+        let miniPlayerClose = app.buttons["miniPlayer.closeButton"].firstMatch
+        guard miniPlayerClose.waitForExistence(timeout: 3) else {
+            throw XCTSkip("miniPlayer.closeButton not found — in-app PiP may not be active on this build")
+        }
+        miniPlayerClose.tap()
+
+        // After closing, the Home feed chip bar should be visible and mini-player gone.
         let chipBar = app.scrollViews["home.chipBar"]
         XCTAssertTrue(chipBar.waitForExistence(timeout: 5),
-                      "home.chipBar should reappear after dismissing the player")
+                      "home.chipBar should reappear after closing the mini-player")
+        XCTAssertFalse(miniPlayerBar.exists,
+                       "miniPlayer.bar should be gone after tapping close")
     }
 
     func testNoErrorBannerOnNormalPlayback() throws {

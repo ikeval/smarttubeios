@@ -17,7 +17,12 @@ private let swipeLog = CrashlyticsLogger(category: "Player")
 
 public struct PlayerView: View {
     public let video: Video
+    #if os(iOS)
+    @Environment(PlayerStateStore.self) private var playerState
+    private var vm: PlaybackViewModel { playerState.vm }
+    #else
     @State var vm: PlaybackViewModel
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) var dismiss
     @Environment(SettingsStore.self) var store
@@ -44,7 +49,7 @@ public struct PlayerView: View {
     @State private var pipController: AVPictureInPictureController?
     @State private var pipDelegate: PiPDelegate?
     @State private var isPiPActive: Bool = false
-    @State private var playerLayer: AVPlayerLayer?
+    private var playerLayer: AVPlayerLayer { playerState.playerHostView.playerLayer }
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
     /// True while the app is backgrounded. Prevents `onDisappear` from calling
@@ -77,7 +82,9 @@ public struct PlayerView: View {
 
     public init(video: Video, api: InnerTubeAPI) {
         self.video = video
+        #if !os(iOS)
         _vm = State(initialValue: PlaybackViewModel(api: api))
+        #endif
         _commentsAPI = State(initialValue: api)
         #if !os(tvOS)
         _downloadService = State(initialValue: VideoDownloadService(api: api))
@@ -89,16 +96,20 @@ public struct PlayerView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                #if os(iOS) || os(tvOS)
+                #if os(iOS)
+                // FullScreenPlayerLayerView: wraps PersistentPlayerHostView so the AVPlayerLayer
+                // survives PlayerView dismiss/re-present cycles (mini-player feature).
+                FullScreenPlayerLayerView(
+                    hostView: playerState.playerHostView,
+                    videoGravity: store.settings.videoGravityMode.avGravity
+                )
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+                #elseif os(tvOS)
                 // AVPlayerLayerView: bare AVPlayerLayer without AVPlayerViewController.
                 // AVPlayerViewController (VideoPlayer) dominates the UIKit accessibility
                 // tree, making all overlaid SwiftUI elements invisible to XCUITest.
-                // A bare AVPlayerLayer renders video with no accessibility interference.
-                AVPlayerLayerView(player: vm.player, videoGravity: store.settings.videoGravityMode.avGravity) { layer in
-                    #if os(iOS)
-                    playerLayer = layer
-                    #endif
-                }
+                AVPlayerLayerView(player: vm.player, videoGravity: store.settings.videoGravityMode.avGravity)
                 .ignoresSafeArea()
                 .accessibilityHidden(true)
                 #else
@@ -402,7 +413,13 @@ public struct PlayerView: View {
         // Also provides an always-accessible back button for UI automation.
         .overlay(alignment: .topLeading) {
             HStack(spacing: 0) {
-                Button { vm.stop(); withAnimation(.none) { dismiss() } } label: {
+                Button {
+                    #if os(iOS)
+                    playerState.minimize()
+                    #else
+                    vm.stop(); withAnimation(.none) { dismiss() }
+                    #endif
+                } label: {
                     Color.clear.frame(width: 60, height: 60)
                 }
                 .accessibilityIdentifier("player.backButton")
@@ -442,6 +459,13 @@ public struct PlayerView: View {
                 swipeLog.notice("[orientation] onAppear — landscapeAlwaysPlay=false, playerIsActive remains false")
             }
             #endif
+            #if os(iOS)
+            // On iOS, PlayerStateStore.play(video:) already called vm.load() before
+            // presenting. Only sync current user preferences; the video is already loading.
+            vm.setPlaybackSpeed(store.settings.playbackSpeed)
+            vm.updateSettings(store.settings)
+            vm.updateAuthToken(authService.accessToken)
+            #else
             if vm.currentVideoId == video.id {
                 // Spurious appear (e.g. a sheet temporarily covered us) — only resume
                 // if playback was active before the view disappeared, so an intentional
@@ -455,12 +479,12 @@ public struct PlayerView: View {
             vm.setPlaybackSpeed(store.settings.playbackSpeed)
             vm.updateSettings(store.settings)
             vm.updateAuthToken(authService.accessToken)
+            #endif
         }
         .onDisappear {
             swipeLog.notice("[PlayerView] onDisappear id=\(video.id) isInBackground=\(isInBackground)")
             isVisible = false
             guard !isInBackground else { return }
-            vm.suspend()
             #if os(iOS)
             let rawOrientationOnDisappear = UIDevice.current.orientation
             swipeLog.notice("[orientation] onDisappear — rawOrientation=\(rawOrientationOnDisappear.rawValue) isLandscape was \(vm.isLandscape), playerIsActive was \(OrientationManager.shared.playerIsActive)")
@@ -468,6 +492,11 @@ public struct PlayerView: View {
             vm.isLandscape = false
             swipeLog.notice("[orientation] onDisappear — playerIsActive=false isLandscape=false, calling endGeneratingDeviceOrientationNotifications")
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            // Skip suspend when minimizing to mini-player — playback should continue.
+            guard playerState.presentation != .miniPlayer else { return }
+            vm.suspend()
+            #else
+            vm.suspend()
             #endif
         }
         .onChange(of: scenePhase) { _, phase in
@@ -490,9 +519,8 @@ public struct PlayerView: View {
         .onChange(of: vm.isPlaying) { _, playing in
             guard playing, pipController == nil,
                   store.settings.pipEnabled,
-                  let layer = playerLayer,
                   AVPictureInPictureController.isPictureInPictureSupported() else { return }
-            let pip = AVPictureInPictureController(playerLayer: layer)
+            let pip = AVPictureInPictureController(playerLayer: playerLayer)
             pip?.canStartPictureInPictureAutomaticallyFromInline = true
             let delegate = PiPDelegate { active in isPiPActive = active }
             pip?.delegate = delegate
@@ -592,7 +620,13 @@ public struct PlayerView: View {
         VStack {
             // Top bar: back + title
             HStack {
-                Button { vm.stop(); withAnimation(.none) { dismiss() } } label: {
+                Button {
+                    #if os(iOS)
+                    playerState.minimize()
+                    #else
+                    vm.stop(); withAnimation(.none) { dismiss() }
+                    #endif
+                } label: {
                     Image(systemName: AppSymbol.chevronLeft)
                         .font(.title2)
                         .foregroundStyle(.white)
@@ -1106,6 +1140,39 @@ struct StatsForNerdsOverlay: View {
         .font(.system(.caption, design: .monospaced))
     }
 }
+
+// MARK: - FullScreenPlayerLayerView (iOS)
+
+#if os(iOS)
+/// UIViewRepresentable that embeds the shared PersistentPlayerHostView into the
+/// full-screen player context. UIView.addSubview transplants the hostView from
+/// the mini-player container automatically, keeping the AVPlayerLayer live.
+private struct FullScreenPlayerLayerView: UIViewRepresentable {
+    let hostView: PersistentPlayerHostView
+    var videoGravity: AVLayerVideoGravity
+
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .black
+        container.isAccessibilityElement = false
+        container.accessibilityElementsHidden = true
+        hostView.videoGravity = videoGravity
+        hostView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(hostView)
+        NSLayoutConstraint.activate([
+            hostView.topAnchor.constraint(equalTo: container.topAnchor),
+            hostView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            hostView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hostView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+        return container
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        hostView.videoGravity = videoGravity
+    }
+}
+#endif
 
 // MARK: - AVPlayerLayerView
 

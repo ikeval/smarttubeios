@@ -18,6 +18,9 @@ public struct HomeView: View {
     @Environment(\.innerTubeAPI) private var api
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(PlayerStateStore.self) private var playerState
+    #endif
 
     // "Home" is always first; its type is .home.
     @State private var selectedSection: BrowseSection = BrowseSection.allSections[0]
@@ -76,12 +79,7 @@ public struct HomeView: View {
                 #endif
         }
         #if os(iOS)
-        // landscapePlayerCover is attached to the stable VStack (not contentArea) so
-        // the LandscapePresenter coordinator survives section/auth changes that cause
-        // contentArea to swap its identity.
-        .landscapePlayerCover(item: $selectedVideo) { video in
-            PlayerView(video: video, api: api)
-        }
+        // Player cover is centralised in MainTabView; deep-link handled there too.
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(item: $shortsPresentation) { target in
             ShortsPlayerView(videos: target.videos, startIndex: target.startIndex, api: api)
@@ -376,7 +374,11 @@ public struct HomeView: View {
             let idx = shorts.firstIndex(where: { $0.id == video.id }) ?? 0
             shortsPresentation = ShortsPresentation(videos: shorts, startIndex: idx)
         } else {
+            #if os(iOS)
+            playerState.play(video: video)
+            #else
             selectedVideo = video
+            #endif
         }
     }
 }

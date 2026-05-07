@@ -56,6 +56,7 @@ private struct LandscapePresenter<Item: Identifiable & Hashable>: UIViewControll
     // Capture the env objects that PlayerView (and anything it hosts) needs.
     @Environment(SettingsStore.self) private var store
     @Environment(AuthService.self) private var authService
+    @Environment(PlayerStateStore.self) private var playerState
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -73,11 +74,13 @@ private struct LandscapePresenter<Item: Identifiable & Hashable>: UIViewControll
         // root gets the same env as the parent SwiftUI tree.
         let capturedStore = store
         let capturedAuth = authService
+        let capturedPlayerState = playerState
         coordinator.contentBuilder = { [content] item in
             AnyView(
                 content(item)
                     .environment(capturedStore)
                     .environment(capturedAuth)
+                    .environment(capturedPlayerState)
             )
         }
         coordinator.latestBinding = _item

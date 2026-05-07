@@ -15,13 +15,12 @@ public struct LibraryView: View {
     @State private var selectedVideo: Video?
     @State private var selectedPlaylist: Video?
     @State private var channelDestination: ChannelDestination?
-    /// KVO-based real-time scroll tracker — writes to a reference type so
-    /// every scroll tick does NOT trigger a SwiftUI re-render.
     @State private var scrollStore = ScrollOffsetStore()
-    /// Snapshot of the offset taken the moment the player sheet opens.
     @State private var savedScrollOffset: CGFloat? = nil
-    /// Non-nil while a restore is pending; cleared by `ScrollOffsetRestorer.onComplete`.
     @State private var restoreOffset: CGFloat? = nil
+    #if os(iOS)
+    @Environment(PlayerStateStore.self) private var playerState
+    #endif
     #if os(tvOS)
     @FocusState private var focusedSection: LibrarySection?
     #endif
@@ -51,9 +50,7 @@ public struct LibraryView: View {
         .toolbar(.hidden, for: .navigationBar)
         #endif
         #if os(iOS)
-        .landscapePlayerCover(item: $selectedVideo) { video in
-            PlayerView(video: video, api: api)
-        }
+        // Player cover is centralised in MainTabView.
         #endif
         #if os(tvOS)
         .navigationDestination(item: $selectedVideo) { video in
@@ -148,7 +145,11 @@ public struct LibraryView: View {
                                 if video.playlistId == video.id {
                                     selectedPlaylist = video
                                 } else {
+                                    #if os(iOS)
+                                    playerState.play(video: video)
+                                    #else
                                     selectedVideo = video
+                                    #endif
                                 }
                             },
                             loadMore: {

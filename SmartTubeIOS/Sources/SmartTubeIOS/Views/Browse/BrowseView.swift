@@ -16,6 +16,9 @@ public struct BrowseView: View {
     @State private var channelDestination: ChannelDestination?
     @State private var showSignIn = false
     @State private var showError = false
+    #if os(iOS)
+    @Environment(PlayerStateStore.self) private var playerState
+    #endif
 
     public init() {}
 
@@ -33,9 +36,7 @@ public struct BrowseView: View {
         .navigationTitle(vm.currentSection.title)
         .toolbar { sectionPicker }
         #if os(iOS)
-        .landscapePlayerCover(item: $selectedVideo) { video in
-            PlayerView(video: video, api: api)
-        }
+        // Player cover is centralised in MainTabView.
         #elseif !os(macOS)
         .fullScreenCover(item: $selectedVideo) { video in
             PlayerView(video: video, api: api)
@@ -201,7 +202,11 @@ public struct BrowseView: View {
             let idx = shorts.firstIndex(where: { $0.id == video.id }) ?? 0
             shortsPresentation = ShortsPresentation(videos: shorts, startIndex: idx)
         } else {
+            #if os(iOS)
+            playerState.play(video: video)
+            #else
             selectedVideo = video
+            #endif
         }
     }
 

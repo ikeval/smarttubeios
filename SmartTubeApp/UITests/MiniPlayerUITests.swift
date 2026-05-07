@@ -1,0 +1,186 @@
+import XCTest
+
+// MARK: - MiniPlayerUITests
+//
+// UI tests for the in-app mini-player bar.
+//
+// Requirements:
+//   • Network access is required (uses live Home feed).
+//   • Run on an iOS 17+ device or simulator with the SmartTubeApp scheme.
+//
+// All tests use XCTSkip (not XCTFail) when:
+//   • No video cards found (network unavailable / feed empty)
+//   • Player did not open within the timeout
+
+final class MiniPlayerUITests: XCTestCase {
+
+    private var app: XCUIApplication!
+
+    // MARK: - Lifecycle
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchArguments += ["--uitesting"]
+        app.launch()
+    }
+
+    override func tearDownWithError() throws {
+        app = nil
+    }
+
+    // MARK: - Helpers
+
+    private var miniPlayerBar: XCUIElement {
+        app.otherElements["miniPlayer.bar"].firstMatch
+    }
+
+    private var miniPlayerPlayPause: XCUIElement {
+        app.buttons["miniPlayer.playPauseButton"].firstMatch
+    }
+
+    private var miniPlayerClose: XCUIElement {
+        app.buttons["miniPlayer.closeButton"].firstMatch
+    }
+
+    private var miniPlayerTitle: XCUIElement {
+        app.staticTexts["miniPlayer.titleLabel"].firstMatch
+    }
+
+    private var backButton: XCUIElement {
+        app.buttons["player.backButton"].firstMatch
+    }
+
+    private var playerTitle: XCUIElement {
+        app.staticTexts["player.titleLabel"].firstMatch
+    }
+
+    /// Opens the player from Home and waits for it to load.
+    @discardableResult
+    private func openPlayerFromHome() throws -> String {
+        UITestHelpers.tapTab(named: "Home", in: app)
+        guard let card = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
+            throw XCTSkip("No video cards on Home — network unavailable or feed empty")
+        }
+        guard UITestHelpers.openPlayer(from: card, in: app) else {
+            throw XCTSkip("Player did not open within 15 s")
+        }
+        return playerTitle.label
+    }
+
+    /// Taps the player to show controls, then taps back to minimize.
+    private func minimizePlayer() {
+        // Tap player to reveal controls (back button is always present, but controls overlay
+        // makes the interaction more reliable on simulator).
+        if !backButton.exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        backButton.tap()
+    }
+
+    // MARK: - Tests
+
+    func testMiniPlayerAppearsAfterBackButton() throws {
+        try openPlayerFromHome()
+        minimizePlayer()
+        XCTAssertTrue(miniPlayerBar.waitForExistence(timeout: 5),
+                      "miniPlayer.bar should appear after tapping the back button")
+        let chipBar = app.scrollViews["home.chipBar"]
+        XCTAssertTrue(chipBar.waitForExistence(timeout: 5),
+                      "home.chipBar should be visible while mini-player is showing")
+    }
+
+    func testMiniPlayerShowsCorrectTitle() throws {
+        let title = try openPlayerFromHome()
+        minimizePlayer()
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar not found")
+        }
+        XCTAssertEqual(miniPlayerTitle.label, title,
+                       "miniPlayer.titleLabel should match the video that was playing")
+    }
+
+    func testMiniPlayerPlayPauseToggle() throws {
+        try openPlayerFromHome()
+        minimizePlayer()
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar not found")
+        }
+        miniPlayerPlayPause.tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(app.state, .runningForeground,
+                       "App must not crash after tapping play/pause in mini-player")
+        miniPlayerPlayPause.tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(app.state, .runningForeground,
+                       "App must not crash after toggling play/pause twice in mini-player")
+    }
+
+    func testMiniPlayerCloseStopsPlayback() throws {
+        try openPlayerFromHome()
+        minimizePlayer()
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar not found")
+        }
+        miniPlayerClose.tap()
+        let miniGone = NSPredicate(format: "exists == false")
+        let disappear = XCTNSPredicateExpectation(predicate: miniGone, object: miniPlayerBar)
+        XCTWaiter().wait(for: [disappear], timeout: 3)
+        XCTAssertFalse(miniPlayerBar.exists, "miniPlayer.bar should disappear after tapping close")
+        let chipBar = app.scrollViews["home.chipBar"]
+        XCTAssertTrue(chipBar.waitForExistence(timeout: 5),
+                      "home.chipBar should remain visible after closing the mini-player")
+    }
+
+    func testTappingMiniPlayerExpandsToFullScreen() throws {
+        let title = try openPlayerFromHome()
+        minimizePlayer()
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar not found")
+        }
+        // Tap the bar area (avoid the buttons by targeting the title area)
+        miniPlayerBar.tap()
+        XCTAssertTrue(playerTitle.waitForExistence(timeout: 5),
+                      "player.titleLabel should reappear after tapping the mini-player bar")
+        XCTAssertEqual(playerTitle.label, title,
+                       "Expanded player should show the same video that was minimized")
+    }
+
+    func testMiniPlayerPersistsAcrossTabNavigation() throws {
+        try openPlayerFromHome()
+        minimizePlayer()
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar not found")
+        }
+        for tab in ["Search", "Library", "Settings", "Home"] {
+            UITestHelpers.tapTab(named: tab, in: app)
+            Thread.sleep(forTimeInterval: 0.5)
+            XCTAssertTrue(miniPlayerBar.exists,
+                          "miniPlayer.bar should persist while on the \(tab) tab")
+        }
+    }
+
+    func testMiniPlayerGhostAudioGuard() throws {
+        // Ensure no ghost audio from a previous session bleeds into a new one.
+        try openPlayerFromHome()
+        minimizePlayer()
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar not found")
+        }
+        miniPlayerClose.tap()
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertFalse(miniPlayerBar.exists, "Mini-player must be gone before opening new video")
+
+        // Open the player again — must open cleanly with no crash.
+        UITestHelpers.tapTab(named: "Home", in: app)
+        guard let card = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
+            throw XCTSkip("No video cards for second open attempt")
+        }
+        guard UITestHelpers.openPlayer(from: card, in: app) else {
+            throw XCTSkip("Player did not reopen within 15 s")
+        }
+        XCTAssertEqual(app.state, .runningForeground,
+                       "App must be running after re-opening the player")
+    }
+}

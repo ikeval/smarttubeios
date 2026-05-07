@@ -17,6 +17,9 @@ struct AppEntry: App {
     @State private var authService: AuthService
     @State private var browseViewModel: BrowseViewModel
     @State private var settingsStore: SettingsStore
+    #if os(iOS)
+    @State private var playerStateStore: PlayerStateStore
+    #endif
     @Environment(\.scenePhase) private var scenePhase
 
     private static let appGroup   = "group.com.void.smarttube"
@@ -29,6 +32,9 @@ struct AppEntry: App {
         _authService     = State(initialValue: AuthService())
         _browseViewModel = State(initialValue: BrowseViewModel(api: api))
         _settingsStore   = State(initialValue: SettingsStore())
+        #if os(iOS)
+        _playerStateStore = State(initialValue: PlayerStateStore(api: api))
+        #endif
     }
 
     /// When launched with `--uitesting-shorts` the app skips the full navigation
@@ -117,7 +123,13 @@ struct AppEntry: App {
                     .environment(browseViewModel)
                     .environment(settingsStore)
                     .environment(\.innerTubeAPI, api)
+                    #if os(iOS)
+                    .environment(playerStateStore)
+                    #endif
                     .onChange(of: authService.accessToken, initial: true) { _, newToken in
+                        #if os(iOS)
+                        playerStateStore.vm.updateAuthToken(newToken)
+                        #endif
                         Task {
                             await api.setAuthToken(newToken)
                             await browseViewModel.updateAuthToken(newToken)
@@ -135,6 +147,17 @@ struct AppEntry: App {
                             consumePendingVideoID()
                             authService.handleForeground()
                             browseViewModel.refreshIfStale()
+                            #if os(iOS)
+                            if playerStateStore.presentation == .miniPlayer {
+                                playerStateStore.vm.handleForeground()
+                            }
+                            #endif
+                        } else if phase == .background {
+                            #if os(iOS)
+                            if playerStateStore.presentation == .miniPlayer {
+                                playerStateStore.vm.handleBackground()
+                            }
+                            #endif
                         }
                     }
                     .onAppear { enableShortsIfNeeded() }
