@@ -1,8 +1,11 @@
 import SwiftUI
 import SmartTubeIOSCore
+import os
 #if canImport(UIKit)
 import UIKit
 #endif
+
+private let menuLog = CrashlyticsLogger(category: "PlayerMenu")
 
 // MARK: - PlayerView overlay sheets
 //
@@ -25,15 +28,20 @@ extension PlayerView {
     /// fires onDisappear and teardowns the action sheet mid-animation.
     var moreMenuOverlay: some View {
         let currentVideo = vm.playerInfo?.video ?? video
+        menuLog.notice("[moreMenu] rendering — video=\(currentVideo.id) availableFormats=\(vm.availableFormats.count) isSignedIn=\(authService.isSignedIn)")
         return ZStack(alignment: .bottom) {
             Color.black.opacity(0.5)
                 .ignoresSafeArea()
-                .onTapGesture { showMoreMenu = false }
+                .onTapGesture {
+                    menuLog.notice("[moreMenu] background tap — dismissing")
+                    showMoreMenu = false
+                }
 
             GeometryReader { geo in
             VStack(spacing: 0) {
                 // Speed
                 Button {
+                    menuLog.notice("[moreMenu] Speed row tapped — closing moreMenu, opening speedPicker")
                     showMoreMenu = false
                     showSpeedPicker = true
                 } label: {
@@ -49,6 +57,11 @@ extension PlayerView {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.primary)
+                .accessibilityIdentifier("player.moreMenu.speedRow")
+                #if os(tvOS)
+                .prefersDefaultFocus(in: moreMenuNamespace)
+                .focused($moreMenuSpeedFocused)
+                #endif
                 Divider()
                 // Quality (only when formats are available)
                 if !vm.availableFormats.isEmpty {
@@ -126,6 +139,7 @@ extension PlayerView {
                 #endif
                 // Sleep timer
                 Button {
+                    menuLog.notice("[moreMenu] Sleep Timer row tapped — closing moreMenu, opening sleepTimerPicker")
                     showMoreMenu = false
                     showSleepTimerPicker = true
                 } label: {
@@ -145,6 +159,7 @@ extension PlayerView {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.primary)
+                .accessibilityIdentifier("player.moreMenu.sleepTimerRow")
                 Divider()
                 #if !os(tvOS)
                 // Download
@@ -243,7 +258,7 @@ extension PlayerView {
                 .buttonStyle(.plain)
                 .foregroundStyle(.primary)
                 Divider()
-                Button(role: .cancel) { showMoreMenu = false } label: {                    Text("Cancel")
+                Button { showMoreMenu = false } label: {                    Text("Cancel")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .fontWeight(.semibold)
@@ -251,13 +266,24 @@ extension PlayerView {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.primary)
+                .accessibilityIdentifier("player.moreMenu.cancel")
             }
             .frame(maxWidth: .infinity)
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .frame(maxHeight: geo.size.height * 0.75)
             #if os(tvOS)
-            .focusSection()
+            .focusScope(moreMenuNamespace)
+            .onExitCommand {
+                menuLog.notice("[moreMenu] onExitCommand fired — dismissing via Menu button")
+                showMoreMenu = false
+            }
+            .onAppear {
+                menuLog.notice("[moreMenu] overlay appeared — focusScope=moreMenuNamespace prefersDefaultFocus=speedRow")
+            }
+            .onDisappear {
+                menuLog.notice("[moreMenu] overlay disappeared")
+            }
             #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)

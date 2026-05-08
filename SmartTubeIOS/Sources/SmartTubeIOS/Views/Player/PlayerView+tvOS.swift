@@ -99,12 +99,16 @@ extension PlayerView {
 
     /// Executes the action for the currently highlighted control.
     func tvActivateControl(_ control: TVPlayerControl) {
+        let playerLog = CrashlyticsLogger(category: "Player")
+        playerLog.notice("[tv] tvActivateControl(\(String(describing: control)))")
         switch control {
         case .back:        vm.stop(); withAnimation(.none) { dismiss() }
         case .channel:
             let channelId = vm.playerInfo?.video.channelId ?? video.channelId
             if let cid = channelId, !cid.isEmpty { channelDestination = ChannelDestination(channelId: cid) }
-        case .more:        showMoreMenu = true; highlightedControl = nil
+        case .more:
+            playerLog.notice("[tv] .more activated — setting showMoreMenu=true")
+            showMoreMenu = true; highlightedControl = nil
         case .seekBack:    vm.seekRelative(seconds: -Double(store.settings.seekBackSeconds))
         case .playPause:   vm.togglePlayPause()
         case .seekForward: vm.seekRelative(seconds: Double(store.settings.seekForwardSeconds))

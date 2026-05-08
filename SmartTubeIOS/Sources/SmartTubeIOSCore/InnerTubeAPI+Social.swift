@@ -41,7 +41,7 @@ extension InnerTubeAPI {
         var body = makeBody(client: tvClientContext)
         body["playlistId"] = "WL"
         body["actions"] = [["addedVideoId": videoId, "action": "ACTION_ADD_VIDEO"]]
-        _ = try await postTV(endpoint: "browse_edit_playlist", body: body)
+        _ = try await postTV(endpoint: "browse/edit_playlist", body: body)
         tubeLog.notice("addToWatchLater videoId=\(videoId, privacy: .public)")
     }
 

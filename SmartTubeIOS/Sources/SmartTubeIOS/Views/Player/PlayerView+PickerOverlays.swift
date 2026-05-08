@@ -5,6 +5,8 @@ import SmartTubeIOSCore
 import UIKit
 #endif
 
+private let pickerLog = CrashlyticsLogger(category: "PlayerMenu")
+
 // MARK: - PlayerView picker overlays + share sheet
 //
 // Pure-SwiftUI bottom-sheet overlays for all media settings pickers.
@@ -60,6 +62,9 @@ extension PlayerView {
                             .padding(.vertical, 12)
                         }
                         .buttonStyle(.plain)
+                        #if os(tvOS)
+                        .prefersDefaultFocus(in: qualityPickerNamespace)
+                        #endif
                         Divider()
                         ForEach(vm.availableFormats) { fmt in
                             Button {
@@ -89,8 +94,9 @@ extension PlayerView {
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            .accessibilityIdentifier("player.qualityPicker")
             #if os(tvOS)
-            .focusSection()
+            .focusScope(qualityPickerNamespace)
             #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
@@ -143,11 +149,20 @@ extension PlayerView {
                     }
                 }
                 .frame(maxHeight: 320)
+                #if os(tvOS)
+                .prefersDefaultFocus(in: speedPickerNamespace)
+                .focused($speedPickerFocused)
+                #endif
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            .accessibilityIdentifier("player.speedPicker")
             #if os(tvOS)
-            .focusSection()
+            .focusScope(speedPickerNamespace)
+            .onExitCommand {
+                pickerLog.notice("[speedPicker] onExitCommand fired — dismissing")
+                showSpeedPicker = false
+            }
             #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
@@ -192,6 +207,10 @@ extension PlayerView {
                         .padding(.vertical, 12)
                     }
                     .buttonStyle(.plain)
+                    #if os(tvOS)
+                    .prefersDefaultFocus(in: sleepTimerNamespace)
+                    .focused($sleepTimerPickerFocused)
+                    #endif
                     Divider()
                     ForEach(PlaybackViewModel.sleepTimerOptions, id: \.self) { mins in
                         Button {
@@ -219,8 +238,13 @@ extension PlayerView {
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
+            .accessibilityIdentifier("player.sleepTimerPicker")
             #if os(tvOS)
-            .focusSection()
+            .focusScope(sleepTimerNamespace)
+            .onExitCommand {
+                pickerLog.notice("[sleepTimerPicker] onExitCommand fired — dismissing")
+                showSleepTimerPicker = false
+            }
             #endif
             .padding(.horizontal, 8)
             .padding(.bottom, 8)

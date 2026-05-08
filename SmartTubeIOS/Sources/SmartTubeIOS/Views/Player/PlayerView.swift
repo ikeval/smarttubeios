@@ -69,6 +69,22 @@ public struct PlayerView: View {
     /// Which playback control is visually highlighted in the overlay.
     /// nil = not in controls-nav mode; all remote input targets the video layer.
     @State var highlightedControl: TVPlayerControl? = nil
+    /// Namespace for the player ZStack itself, used with `.focusScope` +
+    /// `.prefersDefaultFocus` so the ZStack claims default focus when pushed via
+    /// NavigationStack — preventing any child view from stealing focus first.
+    @Namespace var playerBodyNamespace
+    /// Namespace IDs used with `.focusScope` on each overlay so the tvOS focus
+    /// engine moves focus into the overlay when it opens (replacing `.focusSection`
+    /// which only marks the container but does not actively claim focus).
+    @Namespace var moreMenuNamespace
+    /// Explicitly routes Siri Remote focus when overlays open programmatically,
+    /// since `prefersDefaultFocus` only fires when focus enters a scope naturally.
+    @FocusState var moreMenuSpeedFocused: Bool
+    @FocusState var speedPickerFocused: Bool
+    @FocusState var sleepTimerPickerFocused: Bool
+    @Namespace var qualityPickerNamespace
+    @Namespace var speedPickerNamespace
+    @Namespace var sleepTimerNamespace
     #endif
 
     /// Scales player control icon sizes up on iPad so they're easier to tap.
@@ -342,9 +358,15 @@ public struct PlayerView: View {
         // handles all remote input via onMoveCommand / onTapGesture.
         // When an overlay (more menu, quality, speed, sleep timer) is visible, focus is
         // yielded so the overlay's buttons are reachable by the Siri Remote.
+        // `.focusScope` + `.prefersDefaultFocus` ensure the ZStack actively claims
+        // default focus when pushed via NavigationStack, rather than waiting for the
+        // focus engine to pick a child element or leaving focus on the previous screen.
+        .focusScope(playerBodyNamespace)
+        .prefersDefaultFocus(in: playerBodyNamespace)
         .focusable(!isAnyOverlayVisible)
         .focused($playerFocused)
         .onMoveCommand { direction in
+            swipeLog.debug("[tv] onMoveCommand dir=\(String(describing: direction)) isAnyOverlayVisible=\(isAnyOverlayVisible) isTransitioning=\(isTransitioning) highlighted=\(String(describing: highlightedControl))")
             guard !isAnyOverlayVisible, !isTransitioning else { return }
             if let current = highlightedControl {
                 // Controls-nav mode: move the highlight between buttons.
@@ -364,6 +386,7 @@ public struct PlayerView: View {
             }
         }
         .onTapGesture {
+            swipeLog.notice("[tv] onTapGesture (select) — isAnyOverlayVisible=\(isAnyOverlayVisible) highlighted=\(String(describing: highlightedControl)) controlsVisible=\(vm.controlsVisible)")
             guard !isAnyOverlayVisible else { return }
             if let current = highlightedControl {
                 tvActivateControl(current)
@@ -377,6 +400,7 @@ public struct PlayerView: View {
         }
         .onPlayPauseCommand { vm.togglePlayPause() }
         .onExitCommand {
+            swipeLog.notice("[tv] onExitCommand — showMoreMenu=\(showMoreMenu) showQuality=\(showQualityPicker) showSpeed=\(showSpeedPicker) showSleep=\(showSleepTimerPicker) highlighted=\(String(describing: highlightedControl)) controlsVisible=\(vm.controlsVisible)")
             // Dismiss any open overlay first — Menu/Back is the tvOS dismiss convention.
             if showMoreMenu      { showMoreMenu = false; return }
             if showQualityPicker { showQualityPicker = false; return }
@@ -392,13 +416,51 @@ public struct PlayerView: View {
                 dismiss()
             }
         }
+        .onChange(of: playerFocused) { _, focused in
+            swipeLog.notice("[tv] playerFocused changed → \(focused) isAnyOverlayVisible=\(isAnyOverlayVisible)")
+        }
+        .onChange(of: showMoreMenu) { _, visible in
+            swipeLog.notice("[tv] showMoreMenu changed → \(visible) isAnyOverlayVisible=\(isAnyOverlayVisible) playerFocused=\(playerFocused)")
+            if visible {
+                // prefersDefaultFocus is consulted only when focus ENTERS a scope naturally.
+                // Since the overlay opens programmatically, we must explicitly route focus to
+                // the speed row so the Siri Remote Select button works immediately.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000) // one render cycle (~50 ms)
+                    moreMenuSpeedFocused = true
+                    swipeLog.notice("[tv] moreMenuSpeedFocused set → true")
+                }
+            }
+        }
+        .onChange(of: showSpeedPicker) { _, visible in
+            swipeLog.notice("[tv] showSpeedPicker changed → \(visible)")
+            if visible {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    speedPickerFocused = true
+                    swipeLog.notice("[tv] speedPickerFocused set → true")
+                }
+            }
+        }
+        .onChange(of: showSleepTimerPicker) { _, visible in
+            swipeLog.notice("[tv] showSleepTimerPicker changed → \(visible)")
+            if visible {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    sleepTimerPickerFocused = true
+                    swipeLog.notice("[tv] sleepTimerPickerFocused set → true")
+                }
+            }
+        }
         .onChange(of: vm.controlsVisible) { _, visible in
+            swipeLog.debug("[tv] controlsVisible changed → \(visible) highlighted=\(String(describing: highlightedControl))")
             if !visible {
                 highlightedControl = nil
                 playerFocused = true
             }
         }
         .onChange(of: isAnyOverlayVisible) { _, overlayVisible in
+            swipeLog.notice("[tv] isAnyOverlayVisible changed → \(overlayVisible) — moreMenu=\(showMoreMenu) quality=\(showQualityPicker) speed=\(showSpeedPicker) sleep=\(showSleepTimerPicker)")
             if !overlayVisible {
                 // Overlay dismissed — reclaim focus and clear nav state.
                 highlightedControl = nil
@@ -486,6 +548,32 @@ public struct PlayerView: View {
             vm.setPlaybackSpeed(store.settings.playbackSpeed)
             vm.updateSettings(store.settings)
             vm.updateAuthToken(authService.accessToken)
+            // UI testing only: force-show controls and/or the more menu so tests can
+            // verify focus routing without relying on gesture delivery, which is
+            // unreliable on the tvOS simulator.
+            // Called AFTER load() so it runs after controlsVisible is reset to false.
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-show-controls") {
+                swipeLog.notice("[tv] --uitesting-show-controls launch arg detected — calling showControls()")
+                vm.showControls()
+            }
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-open-more-menu") {
+                swipeLog.notice("[tv] --uitesting-open-more-menu launch arg detected — scheduling showMoreMenu=true after focus settles")
+                Task { @MainActor in
+                    // Brief delay lets the player body establish focus (via .prefersDefaultFocus)
+                    // before the overlay opens, so moreMenuNamespace can attract focus correctly.
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    swipeLog.notice("[tv] --uitesting-open-more-menu: setting showMoreMenu=true (playerFocused=\(playerFocused))")
+                    showMoreMenu = true
+                }
+            }
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-open-sleep-timer-picker") {
+                swipeLog.notice("[tv] --uitesting-open-sleep-timer-picker launch arg detected — scheduling showSleepTimerPicker=true")
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    swipeLog.notice("[tv] --uitesting-open-sleep-timer-picker: setting showSleepTimerPicker=true")
+                    showSleepTimerPicker = true
+                }
+            }
             #endif
         }
         .onDisappear {
@@ -791,6 +879,7 @@ public struct PlayerView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(tvOS)
+                    .focusable(false)
                     .scaleEffect(highlightedControl == .prevVideo ? 1.55 : 1.0)
                     .shadow(color: highlightedControl == .prevVideo ? .white.opacity(0.85) : .clear, radius: 14)
                     .animation(.easeInOut(duration: 0.15), value: highlightedControl)
@@ -808,6 +897,7 @@ public struct PlayerView: View {
                         }
                         .buttonStyle(.plain)
                         #if os(tvOS)
+                        .focusable(false)
                         .scaleEffect(highlightedControl == .prevChapter ? 1.55 : 1.0)
                         .shadow(color: highlightedControl == .prevChapter ? .white.opacity(0.85) : .clear, radius: 14)
                         .animation(.easeInOut(duration: 0.15), value: highlightedControl)
@@ -837,6 +927,7 @@ public struct PlayerView: View {
                         }
                         .buttonStyle(.plain)
                         #if os(tvOS)
+                        .focusable(false)
                         .scaleEffect(highlightedControl == .nextChapter ? 1.55 : 1.0)
                         .shadow(color: highlightedControl == .nextChapter ? .white.opacity(0.85) : .clear, radius: 14)
                         .animation(.easeInOut(duration: 0.15), value: highlightedControl)
@@ -855,6 +946,7 @@ public struct PlayerView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(tvOS)
+                    .focusable(false)
                     .scaleEffect(highlightedControl == .nextVideo ? 1.55 : 1.0)
                     .shadow(color: highlightedControl == .nextVideo ? .white.opacity(0.85) : .clear, radius: 14)
                     .animation(.easeInOut(duration: 0.15), value: highlightedControl)
@@ -902,6 +994,7 @@ public struct PlayerView: View {
         }
         .buttonStyle(.plain)
         #if os(tvOS)
+        .focusable(false)
         .scaleEffect(highlightedControl == .playPause ? 1.6 : 1.0)
         .shadow(color: highlightedControl == .playPause ? .white.opacity(0.9) : .clear, radius: 16)
         .animation(.easeInOut(duration: 0.15), value: highlightedControl)
@@ -917,6 +1010,7 @@ public struct PlayerView: View {
         }
         .buttonStyle(.plain)
         #if os(tvOS)
+        .focusable(false)
         .scaleEffect(tvHighlighted ? 1.55 : 1.0)
         .shadow(color: tvHighlighted ? .white.opacity(0.85) : .clear, radius: 14)
         .animation(.easeInOut(duration: 0.15), value: tvHighlighted)

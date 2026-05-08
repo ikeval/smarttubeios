@@ -37,7 +37,7 @@ public struct RootView: View {
         #if os(iOS)
         // Deep link is handled by MainTabView.onChange(of: browseVM.deepLinkedVideo)
         // which calls playerState.play(video:). No landscapePlayerCover needed here.
-        #elseif !os(macOS)
+        #elseif !os(macOS) && !os(tvOS)
         .fullScreenCover(item: $browseVM.deepLinkedVideo) { video in
             PlayerView(video: video, api: api)
                 .environment(store)

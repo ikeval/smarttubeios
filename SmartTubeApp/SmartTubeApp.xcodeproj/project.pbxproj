@@ -30,6 +30,7 @@
 		AA1100000000000000000AA2 /* AudioGhostStreamRegressionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000AA1 /* AudioGhostStreamRegressionUITests.swift */; };
 		AA1100000000000000000BA2 /* AudioOriginalTrackSelectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000BA1 /* AudioOriginalTrackSelectionUITests.swift */; };
 		AA1100000000000000000CA2 /* RecommendedChipUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000CA1 /* RecommendedChipUITests.swift */; };
+		AA1100000000000000000DA2 /* TVPlayerSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000DA1 /* TVPlayerSettingsUITests.swift */; };
 		AB01CD23EF456789AB01CD23 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD23EF456789AB01CD24 /* AppDelegate.swift */; };
 		B0C1D2E3F4A5B6C7D8E9F0A1 /* ShortsNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B0C1D2E3F4A5B6C7D8E9F0 /* ShortsNavigationUITests.swift */; };
 		C1D2E3F4A5B6C7D8E9F0A1B2 /* PlayerNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A3 /* PlayerNavigationUITests.swift */; };
@@ -121,6 +122,7 @@
 		AA1100000000000000000AA1 /* AudioGhostStreamRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioGhostStreamRegressionUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000000BA1 /* AudioOriginalTrackSelectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOriginalTrackSelectionUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000000CA1 /* RecommendedChipUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendedChipUITests.swift; sourceTree = "<group>"; };
+		AA1100000000000000000DA1 /* TVPlayerSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerSettingsUITests.swift; sourceTree = "<group>"; };
 		AB01CD23EF456789AB01CD24 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		AE55B486AFD7F51FEF1874FF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B2C3D4E5F6A7B8C9D0E1F2A3 /* PlayerNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerNavigationUITests.swift; sourceTree = "<group>"; };
@@ -216,6 +218,7 @@
 				AA1100000000000000000AA1 /* AudioGhostStreamRegressionUITests.swift */,
 				AA1100000000000000000BA1 /* AudioOriginalTrackSelectionUITests.swift */,
 				AA1100000000000000000CA1 /* RecommendedChipUITests.swift */,
+				AA1100000000000000000DA1 /* TVPlayerSettingsUITests.swift */,
 				67E2B0732FAD1BBE005F70E6 /* MiniPlayerUITests.swift */,
 			);
 			path = UITests;
@@ -552,6 +555,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A2B3C4D5E6F1A2B3C4D5E63 /* TVFocusChainUITests.swift in Sources */,
+				AA1100000000000000000DA2 /* TVPlayerSettingsUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
