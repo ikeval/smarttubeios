@@ -50,8 +50,11 @@ public actor URLVideoResolver {
     // MARK: - Public API
 
     /// Resolves `url` to a YouTube video ID.
-    /// Returns the video ID string, or `nil` if none was found.
-    public func resolve(url: URL) async -> String? {
+    /// - Parameter onProgress: Optional `@Sendable` closure called at the start of each
+    ///   network step. Invoked from the actor's executor — dispatch to `@MainActor` inside
+    ///   the closure for UI updates.
+    /// - Returns: The video ID string, or `nil` if none was found.
+    public func resolve(url: URL, onProgress: (@Sendable (String) -> Void)? = nil) async -> String? {
         resolverLog.notice("resolve: \(url.absoluteString, privacy: .public)")
 
         // Step 1 — Direct parse (no network)
@@ -61,12 +64,14 @@ public actor URLVideoResolver {
         }
 
         // Step 2 — HEAD redirect chain
-        if let id = await followRedirects(from: url) {
+        onProgress?("Following redirect links\u{2026}")
+        if let id = await followRedirects(from: url, onProgress: onProgress) {
             resolverLog.notice("step2 hit: \(id, privacy: .public)")
             return id
         }
 
         // Step 3 — Page scrape
+        onProgress?("Scanning page for video links\u{2026}")
         if let id = await scrape(url: url) {
             resolverLog.notice("step3 hit: \(id, privacy: .public)")
             return id
@@ -78,7 +83,7 @@ public actor URLVideoResolver {
 
     // MARK: - Step 2: HEAD redirect chain
 
-    private func followRedirects(from startURL: URL) async -> String? {
+    private func followRedirects(from startURL: URL, onProgress: (@Sendable (String) -> Void)? = nil) async -> String? {
         var current = startURL
         for hop in 1 ... URLVideoResolver.maxRedirects {
             guard isHTTP(current) else {
@@ -113,6 +118,7 @@ public actor URLVideoResolver {
             }
 
             resolverLog.notice("hop\(hop, privacy: .public) → \(next.absoluteString, privacy: .public)")
+            onProgress?("  ↳ \(next.host ?? next.absoluteString)")
             if let id = YouTubeLinkHandler.videoID(from: next) { return id }
             current = next
         }

@@ -18,11 +18,13 @@ private let shareLog = Logger(subsystem: "com.void.smarttube.app.shareextension"
 
 final class ShareViewController: UIViewController {
 
-    private static let appGroup   = "group.com.void.smarttube"
-    private static let pendingKey = "pendingVideoID"
+    private static let appGroup             = "group.com.void.smarttube"
+    private static let pendingKey           = "pendingVideoID"
+    private static let pendingWatchLaterKey = "pendingWatchLaterVideoID"
 
     // Set after successful URL extraction; nil means extraction failed or pending.
     private var deeplink: URL?
+    private var resolvedVideoID: String?
 
     // MARK: - UI
 
@@ -39,8 +41,31 @@ final class ShareViewController: UIViewController {
         config.baseBackgroundColor = UIColor(red: 0.40, green: 0.20, blue: 0.80, alpha: 1)
         let b = UIButton(configuration: config)
         b.translatesAutoresizingMaskIntoConstraints = false
-        b.isHidden = true
         return b
+    }()
+
+    private let watchLaterButton: UIButton = {
+        var config = UIButton.Configuration.bordered()
+        config.title = "Add to Watch Later"
+        config.cornerStyle = .large
+        config.baseForegroundColor = UIColor(red: 0.40, green: 0.20, blue: 0.80, alpha: 1)
+        config.image = UIImage(
+            systemName: "clock.badge.plus",
+            withConfiguration: UIImage.SymbolConfiguration(scale: .small)
+        )
+        config.imagePadding = 6
+        let b = UIButton(configuration: config)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        return b
+    }()
+
+    private let buttonStack: UIStackView = {
+        let sv = UIStackView()
+        sv.axis = .vertical
+        sv.spacing = 12
+        sv.translatesAutoresizingMaskIntoConstraints = false
+        sv.isHidden = true
+        return sv
     }()
 
     private let statusLabel: UILabel = {
@@ -53,41 +78,166 @@ final class ShareViewController: UIViewController {
         return l
     }()
 
+    private let titleLabel: UILabel = {
+        let l = UILabel()
+        l.text = "SmartTube"
+        l.font = .systemFont(ofSize: 15, weight: .semibold)
+        l.textColor = .label
+        l.translatesAutoresizingMaskIntoConstraints = false
+        return l
+    }()
+
+    private let closeButton: UIButton = {
+        let sym = UIImage(
+            systemName: "xmark.circle.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .regular)
+        )
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = sym
+        cfg.baseForegroundColor = .tertiaryLabel
+        let b = UIButton(configuration: cfg)
+        b.accessibilityLabel = "Close"
+        b.translatesAutoresizingMaskIntoConstraints = false
+        return b
+    }()
+
+    private let headerDivider: UIView = {
+        let v = UIView()
+        v.backgroundColor = .separator
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }()
+
+    private let logDivider: UIView = {
+        let v = UIView()
+        v.backgroundColor = .separator
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }()
+
+    private let logLabel: UILabel = {
+        let l = UILabel()
+        l.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        l.textColor = .tertiaryLabel
+        l.numberOfLines = 0
+        l.translatesAutoresizingMaskIntoConstraints = false
+        return l
+    }()
+
+    private var logLines: [String] = []
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        preferredContentSize = CGSize(width: view.bounds.width, height: 130)
+        preferredContentSize = CGSize(width: view.bounds.width, height: 310)
 
+        buttonStack.addArrangedSubview(openButton)
+        buttonStack.addArrangedSubview(watchLaterButton)
+
+        view.addSubview(titleLabel)
+        view.addSubview(closeButton)
+        view.addSubview(headerDivider)
         view.addSubview(spinner)
-        view.addSubview(openButton)
         view.addSubview(statusLabel)
+        view.addSubview(buttonStack)
+        view.addSubview(logDivider)
+        view.addSubview(logLabel)
 
+        let dividerH = 1.0 / UIScreen.main.scale
         NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinner.topAnchor.constraint(equalTo: view.centerYAnchor, constant: -24),
+            // Title bar
+            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
+            titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
 
-            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            closeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            closeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 44),
+            closeButton.heightAnchor.constraint(equalToConstant: 44),
+
+            // Header divider
+            headerDivider.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
+            headerDivider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headerDivider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            headerDivider.heightAnchor.constraint(equalToConstant: dividerH),
+
+            // Spinner — centred in the first-button zone while resolving
+            spinner.topAnchor.constraint(equalTo: headerDivider.bottomAnchor, constant: 52),
+            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            // Status label (shown during resolution)
             statusLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 8),
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
             statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
 
-            openButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            openButton.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            openButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
-            openButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            // Button stack (shown after resolution)
+            buttonStack.topAnchor.constraint(equalTo: headerDivider.bottomAnchor, constant: 24),
+            buttonStack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            buttonStack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
             openButton.heightAnchor.constraint(equalToConstant: 50),
+            watchLaterButton.heightAnchor.constraint(equalToConstant: 50),
+
+            // Log section divider
+            logDivider.topAnchor.constraint(equalTo: headerDivider.bottomAnchor, constant: 158),
+            logDivider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            logDivider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            logDivider.heightAnchor.constraint(equalToConstant: dividerH),
+
+            // Log label
+            logLabel.topAnchor.constraint(equalTo: logDivider.bottomAnchor, constant: 8),
+            logLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            logLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            logLabel.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -8),
         ])
 
         spinner.startAnimating()
         openButton.addTarget(self, action: #selector(openButtonTapped), for: .touchUpInside)
+        watchLaterButton.addTarget(self, action: #selector(watchLaterButtonTapped), for: .touchUpInside)
+        closeButton.addTarget(self, action: #selector(closeButtonTapped), for: .touchUpInside)
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         shareLog.notice("viewDidAppear — starting extraction")
+        logEntry("Looking for video\u{2026}")
         Task { @MainActor in await extractAndPrepare() }
+    }
+
+    // MARK: - Close
+
+    @objc private func closeButtonTapped() {
+        shareLog.notice("closeButtonTapped")
+        cancel()
+    }
+
+    // MARK: - Log
+
+    private func logEntry(_ message: String) {
+        logLines.append(message)
+        if logLines.count > 6 { logLines.removeFirst() }
+        logLabel.text = logLines.joined(separator: "\n")
+    }
+
+    // MARK: - Watch Later
+
+    @objc private func watchLaterButtonTapped() {
+        guard let videoID = resolvedVideoID else {
+            logEntry("⚠️ no video ID — cannot queue")
+            return
+        }
+        if let defaults = UserDefaults(suiteName: Self.appGroup) {
+            defaults.set(videoID, forKey: Self.pendingWatchLaterKey)
+            defaults.synchronize()
+            logEntry("✅ Queued for Watch Later")
+            watchLaterButton.isEnabled = false
+            var cfg = watchLaterButton.configuration
+            cfg?.title = "Added to Watch Later"
+            watchLaterButton.configuration = cfg
+        } else {
+            logEntry("❌ Could not write to shared storage")
+        }
     }
 
     // MARK: - User action
@@ -95,35 +245,56 @@ final class ShareViewController: UIViewController {
     @objc private func openButtonTapped() {
         guard let deeplink else {
             shareLog.error("openButtonTapped — deeplink is nil")
+            logEntry("⚠️ deeplink is nil — nothing to open")
             return
         }
+        logEntry("Tap → \(deeplink.absoluteString)")
         shareLog.notice("openButtonTapped — \(deeplink.absoluteString, privacy: .public)")
 
-        // Strategy 1: extensionContext?.open() — officially only for Today/iMessage but
-        // works for share extensions on iOS 14+ in practice when called user-initiated.
+        // Strategy 1: extensionContext?.open() — completion is called on main thread.
         if let ctx = extensionContext {
-            ctx.open(deeplink, completionHandler: nil)
-            shareLog.notice("dispatched via extensionContext.open")
+            logEntry("Trying extensionContext.open…")
+            ctx.open(deeplink) { [weak self] success in
+                if success {
+                    self?.logEntry("✅ extensionContext.open succeeded")
+                } else {
+                    self?.logEntry("❌ extensionContext.open returned false")
+                    guard let self else { return }
+                    self.openViaResponderChain(deeplink)
+                }
+            }
             return
         }
 
-        // Strategy 2: Walk the responder chain to find the extension's UIApplication
-        // and call the modern open(_:options:completionHandler:) on it. The extension
-        // process owns its own UIApplication which CAN dispatch URLs via the system.
+        logEntry("No extensionContext — trying responder chain")
+        openViaResponderChain(deeplink)
+    }
+
+    private func openViaResponderChain(_ deeplink: URL) {
         var responder: UIResponder? = self
+        var depth = 0
         while let r = responder {
+            depth += 1
             if let app = r as? UIApplication {
+                logEntry("UIApplication at depth \(depth), opening…")
                 shareLog.notice("dispatching via UIApplication responder chain")
-                app.open(deeplink, options: [:], completionHandler: nil)
-                extensionContext?.completeRequest(returningItems: nil)
+                // Completion is called on main thread per Apple docs.
+                app.open(deeplink, options: [:]) { [weak self] success in
+                    if success {
+                        self?.logEntry("✅ UIApplication.open succeeded")
+                    } else {
+                        self?.logEntry("❌ UIApplication.open returned false")
+                    }
+                    self?.extensionContext?.completeRequest(returningItems: nil)
+                }
                 return
             }
             responder = r.next
         }
 
-        shareLog.error("neither extensionContext nor UIApplication found — relying on App Group fallback")
-        // App Group write already happened in extractAndPrepare(). User will see the video
-        // next time they open SmartTube manually.
+        logEntry("❌ No UIApplication in chain (depth \(depth))")
+        logEntry("App Group written — open SmartTube manually")
+        shareLog.error("no UIApplication found after \(depth) hops — App Group fallback")
         extensionContext?.completeRequest(returningItems: nil)
     }
 
@@ -150,6 +321,7 @@ final class ShareViewController: UIViewController {
         }
 
         shareLog.notice("videoID: \(videoID, privacy: .public)")
+        resolvedVideoID = videoID
 
         // Write to App Group (reliable data-transfer fallback)
         if let defaults = UserDefaults(suiteName: Self.appGroup) {
@@ -167,11 +339,11 @@ final class ShareViewController: UIViewController {
 
         deeplink = link
 
-        // Show the button — user tap is required for extensionContext.open
+        // Show both action buttons — user tap required for extensionContext.open
         spinner.stopAnimating()
         spinner.isHidden = true
         statusLabel.isHidden = true
-        openButton.isHidden = false
+        buttonStack.isHidden = false
     }
 
     // MARK: - URL resolution
@@ -187,7 +359,11 @@ final class ShareViewController: UIViewController {
             for (j, provider) in attachments.enumerated() {
                 shareLog.notice("  provider[\(j, privacy: .public)] types: \(provider.registeredTypeIdentifiers.joined(separator: ", "), privacy: .public)")
                 guard let url = await loadURL(from: provider, index: j) else { continue }
-                if let id = await resolver.resolve(url: url) {
+                logEntry("Checking: \(url.host ?? url.absoluteString)\u{2026}")
+                let progress: @Sendable (String) -> Void = { [weak self] message in
+                    Task { @MainActor [weak self] in self?.logEntry(message) }
+                }
+                if let id = await resolver.resolve(url: url, onProgress: progress) {
                     guard let link = URL(string: "smarttube://video/\(id)") else { continue }
                     return (id, link)
                 }

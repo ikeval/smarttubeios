@@ -23,9 +23,18 @@ struct AppEntry: App {
     @State private var deepLinkLaunchArgConsumed = false
     @State private var pendingVideoArgConsumed = false
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @State private var watchLaterAlert: WatchLaterAlert?
+    private struct WatchLaterAlert: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+    }
+    #endif
 
-    private static let appGroup   = "group.com.void.smarttube"
-    private static let pendingKey = "pendingVideoID"
+    private static let appGroup             = "group.com.void.smarttube"
+    private static let pendingKey           = "pendingVideoID"
+    private static let pendingWatchLaterKey = "pendingWatchLaterVideoID"
 
     init() {
         FirebaseApp.configure()
@@ -152,6 +161,7 @@ struct AppEntry: App {
                             authService.handleForeground()
                             browseViewModel.refreshIfStale()
                             #if os(iOS)
+                            consumePendingWatchLaterID()
                             if playerStateStore.presentation == .miniPlayer {
                                 playerStateStore.vm.handleForeground()
                             }
@@ -165,6 +175,15 @@ struct AppEntry: App {
                         }
                     }
                     .onAppear { enableShortsIfNeeded() }
+                    #if os(iOS)
+                    .alert(item: $watchLaterAlert) { item in
+                        Alert(
+                            title: Text(item.title),
+                            message: Text(item.message),
+                            dismissButton: .default(Text("OK"))
+                        )
+                    }
+                    #endif
             }
         }
         #endif
@@ -205,6 +224,35 @@ struct AppEntry: App {
         defaults.synchronize()
         browseViewModel.deepLinkedVideo = Video(id: videoID, title: "", channelTitle: "")
     }
+
+    // MARK: - App Group Watch Later queue (from Share Extension)
+
+    #if os(iOS)
+    @MainActor
+    private func consumePendingWatchLaterID() {
+        guard let defaults = UserDefaults(suiteName: Self.appGroup),
+              let videoID = defaults.string(forKey: Self.pendingWatchLaterKey),
+              !videoID.isEmpty
+        else { return }
+
+        defaults.removeObject(forKey: Self.pendingWatchLaterKey)
+        defaults.synchronize()
+        Task {
+            do {
+                try await api.addToWatchLater(videoId: videoID)
+                watchLaterAlert = WatchLaterAlert(
+                    title: "Saved to Watch Later",
+                    message: "The video was added to your Watch Later playlist."
+                )
+            } catch {
+                watchLaterAlert = WatchLaterAlert(
+                    title: "Could Not Save",
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+    #endif
 
     /// Handles `--uitesting-deeplink-video=<id>` launch argument.
     ///
