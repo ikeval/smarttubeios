@@ -30,6 +30,7 @@ public struct LibraryView: View {
         case subscriptions = "Subscriptions"
         case history       = "History"
         case playlists     = "Playlists"
+        case rss           = "RSS Feeds"
 
         var id: String { rawValue }
         var browseSectionType: BrowseSection.SectionType {
@@ -37,6 +38,7 @@ public struct LibraryView: View {
             case .subscriptions: return .subscriptions
             case .history:       return .history
             case .playlists:     return .playlists
+            case .rss:           return .history  // not used — RSS renders its own view
             }
         }
     }
@@ -118,7 +120,9 @@ public struct LibraryView: View {
             #endif
 
             Group {
-                if !auth.isSignedIn && selectedSection != .subscriptions {
+                if selectedSection == .rss {
+                    RSSFeedsView()
+                } else if !auth.isSignedIn && selectedSection != .subscriptions {
                     segmentSignInPrompt
                 } else if browseVM.isLoading && browseVM.videoGroups.flatMap({ $0.videos }).isEmpty {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -185,6 +189,7 @@ public struct LibraryView: View {
             }
         }
         .onChange(of: selectedSection) { _, section in
+            guard section != .rss else { return }
             browseVM.select(section: BrowseSection(
                 id: section.id,
                 title: section.rawValue,
@@ -214,6 +219,7 @@ public struct LibraryView: View {
             #endif
         }
         .onAppear {
+            guard selectedSection != .rss else { return }
             browseVM.select(section: BrowseSection(
                 id: selectedSection.id,
                 title: selectedSection.rawValue,

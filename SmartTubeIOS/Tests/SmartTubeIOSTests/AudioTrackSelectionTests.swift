@@ -16,8 +16,11 @@ struct AudioTrackSelectionTests {
     /// Simulates the auto-selection waterfall from PlaybackViewModel+AudioTracks
     /// without an AVPlayer. Mirrors the exact logic in loadAudioTracks(from:).
     private func autoSelect(tracks: [AudioTrack], preferred: String?) -> AudioTrack? {
-        // 1. Saved preference
+        // 1. Saved preference / Settings-level independent language choice
         if let lang = preferred {
+            if lang == "original" {
+                return tracks.first(where: \.isOriginal) ?? tracks.first
+            }
             if let exact = tracks.first(where: { $0.languageCode == lang }) { return exact }
             let base = lang.components(separatedBy: "-").first ?? lang
             return tracks.first(where: { $0.languageCode.hasPrefix(base) })
@@ -79,5 +82,69 @@ struct AudioTrackSelectionTests {
             track("en", isOriginal: false),
         ]
         #expect(tracks.allSatisfy { !$0.isOriginal })
+    }
+
+    // MARK: - Task #19: "original" sentinel and independent language setting
+
+    /// When preferredAudioLanguage == "original", the HLS DEFAULT=YES track is selected.
+    @Test func originalSentinel_selectsHLSDefaultTrack() {
+        let tracks = [
+            track("ar", isOriginal: false),
+            track("en", isOriginal: true),
+            track("de", isOriginal: false),
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: "original")
+        #expect(selected?.languageCode == "en")
+    }
+
+    /// When preferredAudioLanguage == "original" and no DEFAULT=YES track exists, falls back to first track.
+    @Test func originalSentinel_fallsBackToFirstTrack_whenNoDefault() {
+        let tracks = [
+            track("ar", isOriginal: false),
+            track("de", isOriginal: false),
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: "original")
+        #expect(selected?.languageCode == "ar")
+    }
+
+    /// Independent language setting "de" overrides the original English track.
+    @Test func independentLanguageSetting_overridesOriginalTrack() {
+        let tracks = [
+            track("en", isOriginal: true),
+            track("de", isOriginal: false),
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: "de")
+        #expect(selected?.languageCode == "de")
+    }
+
+    /// Prefix matching: setting "en" matches "en-US".
+    @Test func independentLanguageSetting_prefixMatchesLocaleVariant() {
+        let tracks = [
+            track("de", isOriginal: false),
+            track("en-US", isOriginal: false),
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: "en")
+        #expect(selected?.languageCode == "en-US")
+    }
+
+    /// When preferred language has no match, falls back to original track.
+    @Test func independentLanguageSetting_fallsBackToOriginal_whenNoMatch() {
+        let tracks = [
+            track("en", isOriginal: true),
+            track("de", isOriginal: false),
+        ]
+        // "ja" not in list → fall back to original
+        let selected = autoSelect(tracks: tracks, preferred: "ja")
+        #expect(selected?.languageCode == "en")
+    }
+
+    /// System Default (nil) still picks the HLS DEFAULT=YES track first.
+    @Test func systemDefault_picksOriginalTrack() {
+        let tracks = [
+            track("de", isOriginal: false),
+            track("en", isOriginal: true),
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: nil)
+        #expect(selected?.languageCode == "en")
     }
 }

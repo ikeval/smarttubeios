@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
+
+    },
     "\"%@\" has been saved to your Photos library." : {
       "comment" : "Download success alert message. %@ = video title.",
       "extractionState" : "manual",
@@ -1336,7 +1339,22 @@
         }
       }
     },
+    "Add a feed from the RSS Feeds screen." : {
+
+    },
+    "Add a YouTube channel RSS feed to see videos here." : {
+
+    },
+    "Add Feed" : {
+
+    },
+    "Add RSS Feed" : {
+
+    },
     "Add to Queue" : {
+
+    },
+    "Adding…" : {
 
     },
     "All" : {
@@ -2430,6 +2448,9 @@
           }
         }
       }
+    },
+    "Chinese (Simplified)" : {
+
     },
     "Clear History" : {
 
@@ -3583,6 +3604,9 @@
     "Don't Recommend Channel" : {
 
     },
+    "Done" : {
+
+    },
     "Download Failed" : {
       "comment" : "Download failure alert title",
       "extractionState" : "manual",
@@ -4241,6 +4265,9 @@
         }
       }
     },
+    "English" : {
+
+    },
     "Error" : {
       "comment" : "Generic error alert title",
       "extractionState" : "manual",
@@ -4576,6 +4603,12 @@
           }
         }
       }
+    },
+    "Feed Details" : {
+
+    },
+    "Feed Title (e.g. Tech Reviews)" : {
+
     },
     "Fill (crop)" : {
       "comment" : "Video fit settings option — fills screen by cropping",
@@ -4919,6 +4952,9 @@
     "Follow channels to see their latest videos here" : {
 
     },
+    "French" : {
+
+    },
     "General" : {
       "comment" : "Settings section header",
       "extractionState" : "manual",
@@ -5002,6 +5038,9 @@
           }
         }
       }
+    },
+    "German" : {
+
     },
     "Go to:" : {
       "comment" : "Sign-in activation screen URL label",
@@ -5762,6 +5801,12 @@
         }
       }
     },
+    "Japanese" : {
+
+    },
+    "Korean" : {
+
+    },
     "Landscape Always Play" : {
 
     },
@@ -6479,6 +6524,9 @@
         }
       }
     },
+    "Manage RSS Feeds" : {
+
+    },
     "Max Resolution" : {
       "comment" : "Settings picker label for maximum video quality",
       "extractionState" : "manual",
@@ -7150,6 +7198,9 @@
           }
         }
       }
+    },
+    "No RSS Feeds" : {
+
     },
     "No videos in this playlist" : {
       "comment" : "Playlist view empty state",
@@ -8132,6 +8183,9 @@
         }
       }
     },
+    "Original Track Only" : {
+
+    },
     "Outro/Credits" : {
       "comment" : "SponsorBlock category display name",
       "extractionState" : "manual",
@@ -8644,6 +8698,12 @@
           }
         }
       }
+    },
+    "Portuguese (Brazil)" : {
+
+    },
+    "Preferred Audio Language" : {
+
     },
     "Preview/Hook" : {
       "comment" : "SponsorBlock category display name",
@@ -9658,6 +9718,9 @@
           }
         }
       }
+    },
+    "RSS Feed URL" : {
+
     },
     "Save to Watch Later" : {
 
@@ -12869,6 +12932,9 @@
         }
       }
     },
+    "Spanish" : {
+
+    },
     "Sponsor" : {
       "comment" : "SponsorBlock category display name",
       "extractionState" : "manual",
@@ -13442,6 +13508,9 @@
           }
         }
       }
+    },
+    "System Default" : {
+
     },
     "Theme" : {
       "comment" : "Settings picker label for app colour scheme",
@@ -15293,6 +15362,9 @@
           }
         }
       }
+    },
+    "YouTube RSS feed URLs look like:\n**youtube.com/feeds/videos.xml?channel_id=…**\n\nYou can also find a channel's RSS feed via their channel page URL." : {
+
     }
   },
   "version" : "1.0"

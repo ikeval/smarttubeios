@@ -26,6 +26,8 @@ public struct VideoCardView: View {
     @Environment(\.innerTubeAPI) private var api
     @State private var localProgress: Double?
     @State private var watchLaterAlert: DownloadAlertItem?
+    /// Index into `video.thumbnailFallbackURLs`. -1 = use primary `thumbnailURL`.
+    @State private var thumbnailFallbackIndex: Int = -1
     #if !os(tvOS)
     @State private var downloadService = VideoDownloadService()
     @State private var downloadAlertItem: DownloadAlertItem?
@@ -327,18 +329,34 @@ public struct VideoCardView: View {
         if video.thumbnailURL == nil, video.id == "WL" || video.id == "LL" {
             systemPlaylistThumbnail
         } else {
-            // Prefer the explicit thumbnailURL (set for playlist stubs and API-provided thumbs).
-            // Fall back to highQualityThumbnailURL only when no explicit URL was provided.
-            let url = video.thumbnailURL ?? video.highQualityThumbnailURL
+            // Walk a fallback chain on each successive failure:
+            //   -1 → thumbnailURL (API-provided, highest res — may be maxresdefault or signed)
+            //    0 → sddefault.jpg  (640×480, available for most videos)
+            //    1 → hqdefault.jpg  (480×360, always available)
+            //    2 → mqdefault.jpg  (320×180, always available — last resort)
+            let fallbacks = video.thumbnailFallbackURLs
+            let url: URL? = thumbnailFallbackIndex < 0
+                ? (video.thumbnailURL ?? fallbacks.first)
+                : (thumbnailFallbackIndex < fallbacks.count ? fallbacks[thumbnailFallbackIndex] : nil)
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let img):
                     img.resizable().scaledToFill()
                 case .failure:
-                    placeholderThumbnail
+                    let nextIndex = thumbnailFallbackIndex + 1
+                    if nextIndex < fallbacks.count {
+                        placeholderThumbnail
+                            .onAppear { thumbnailFallbackIndex = nextIndex }
+                    } else {
+                        placeholderThumbnail
+                    }
                 default:
                     placeholderThumbnail.overlay(ProgressView())
                 }
+            }
+            .task(id: video.id) {
+                // Reset so a reused card slot always tries the primary URL for the new video.
+                thumbnailFallbackIndex = -1
             }
         }
     }

@@ -22,6 +22,7 @@ final class ShareViewController: UIViewController {
     private static let pendingKey           = "pendingVideoID"
     private static let pendingWatchLaterKey = "pendingWatchLaterVideoID"
     private static let pendingQueueKey      = "pendingQueueVideoID"
+    private static let pendingRSSFeedKey    = "pendingRSSFeedURL"
 
     // Set after successful URL extraction; nil means extraction failed or pending.
     private var deeplink: URL?
@@ -72,6 +73,22 @@ final class ShareViewController: UIViewController {
         config.imagePadding = 6
         let b = UIButton(configuration: config)
         b.translatesAutoresizingMaskIntoConstraints = false
+        return b
+    }()
+
+    private let addToRSSButton: UIButton = {
+        var config = UIButton.Configuration.bordered()
+        config.title = "Add to RSS Feeds"
+        config.cornerStyle = .large
+        config.baseForegroundColor = UIColor(red: 0.20, green: 0.50, blue: 0.20, alpha: 1)
+        config.image = UIImage(
+            systemName: "dot.radiowaves.left.and.right",
+            withConfiguration: UIImage.SymbolConfiguration(scale: .small)
+        )
+        config.imagePadding = 6
+        let b = UIButton(configuration: config)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.isHidden = true
         return b
     }()
 
@@ -152,6 +169,7 @@ final class ShareViewController: UIViewController {
         buttonStack.addArrangedSubview(openButton)
         buttonStack.addArrangedSubview(watchLaterButton)
         buttonStack.addArrangedSubview(addToQueueButton)
+        buttonStack.addArrangedSubview(addToRSSButton)
 
         view.addSubview(titleLabel)
         view.addSubview(closeButton)
@@ -196,6 +214,7 @@ final class ShareViewController: UIViewController {
             openButton.heightAnchor.constraint(equalToConstant: 50),
             watchLaterButton.heightAnchor.constraint(equalToConstant: 50),
             addToQueueButton.heightAnchor.constraint(equalToConstant: 50),
+            addToRSSButton.heightAnchor.constraint(equalToConstant: 50),
 
             // Log section divider
             logDivider.topAnchor.constraint(equalTo: headerDivider.bottomAnchor, constant: 220),
@@ -214,6 +233,7 @@ final class ShareViewController: UIViewController {
         openButton.addTarget(self, action: #selector(openButtonTapped), for: .touchUpInside)
         watchLaterButton.addTarget(self, action: #selector(watchLaterButtonTapped), for: .touchUpInside)
         addToQueueButton.addTarget(self, action: #selector(addToQueueButtonTapped), for: .touchUpInside)
+        addToRSSButton.addTarget(self, action: #selector(addToRSSButtonTapped), for: .touchUpInside)
         closeButton.addTarget(self, action: #selector(closeButtonTapped), for: .touchUpInside)
     }
 
@@ -349,6 +369,11 @@ final class ShareViewController: UIViewController {
         shareLog.notice("inputItems count: \(items.count, privacy: .public)")
 
         guard let (videoID, _) = await resolveVideoID(from: items) else {
+            // Not a video URL — check if it's a YouTube RSS feed URL.
+            if let rssURL = await resolveRSSFeedURL(from: items) {
+                showRSSFeedUI(url: rssURL)
+                return
+            }
             shareLog.error("No YouTube URL found")
             spinner.stopAnimating()
             spinner.isHidden = true
@@ -383,6 +408,65 @@ final class ShareViewController: UIViewController {
         spinner.isHidden = true
         statusLabel.isHidden = true
         buttonStack.isHidden = false
+    }
+
+    // MARK: - RSS Feed detection
+
+    /// Returns the first YouTube RSS feed URL found in the extension items, or nil.
+    private func resolveRSSFeedURL(from items: [NSExtensionItem]) async -> URL? {
+        for item in items {
+            for provider in item.attachments ?? [] {
+                guard let url = await loadURL(from: provider, index: 0) else { continue }
+                if RSSFeedInfo.isYouTubeRSSFeed(url) { return url }
+                // Also accept channel page URLs: https://www.youtube.com/channel/CHANNEL_ID
+                if url.host == "www.youtube.com",
+                   url.pathComponents.count >= 3,
+                   url.pathComponents[1] == "channel",
+                   let channelId = url.pathComponents.dropFirst(2).first,
+                   !channelId.isEmpty,
+                   let rssURL = RSSFeedInfo.feedURL(for: channelId) {
+                    return rssURL
+                }
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    private func showRSSFeedUI(url: URL) {
+        spinner.stopAnimating()
+        spinner.isHidden = true
+        statusLabel.isHidden = true
+        // Show only the RSS button; hide video-specific buttons.
+        openButton.isHidden = true
+        watchLaterButton.isHidden = true
+        addToQueueButton.isHidden = true
+        addToRSSButton.isHidden = false
+        // Store URL in deeplink for reuse in button handler.
+        deeplink = url
+        buttonStack.isHidden = false
+        logEntry("RSS feed detected — tap to subscribe")
+        shareLog.notice("RSS feed URL: \(url.absoluteString, privacy: .public)")
+    }
+
+    // MARK: - Add to RSS Feeds
+
+    @objc private func addToRSSButtonTapped() {
+        guard let feedURL = deeplink else {
+            logEntry("⚠️ no feed URL")
+            return
+        }
+        if let defaults = UserDefaults(suiteName: Self.appGroup) {
+            defaults.set(feedURL.absoluteString, forKey: Self.pendingRSSFeedKey)
+            defaults.synchronize()
+            logEntry("✅ Queued for RSS Feeds")
+            addToRSSButton.isEnabled = false
+            var cfg = addToRSSButton.configuration
+            cfg?.title = "Added to RSS Feeds"
+            addToRSSButton.configuration = cfg
+        } else {
+            logEntry("❌ Could not write to shared storage")
+        }
     }
 
     // MARK: - URL resolution

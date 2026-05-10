@@ -386,6 +386,14 @@ extension PlaybackViewModel {
             // Build player item — preferredStreamURL is guaranteed non-nil here because
             // parsePlayerInfo throws APIError.unavailable when streamingData is absent.
             guard let masterStreamURL = info.preferredStreamURL else {
+                // iOS client returned adaptive-only formats (no HLS, no muxed stream).
+                // This happens for some long-form videos where YouTube does not send itag 18.
+                // Android client always returns an HLS manifest — reuse the fallback path.
+                if !info.formats.isEmpty {
+                    playerLog.notice("⚠️ adaptive-only iOS response — retrying with Android client for HLS")
+                    await retryWithFallbackPlayer(video: video, originalError: nil)
+                    return
+                }
                 playerLog.error("❌ No stream URL after successful parse (should not happen)")
                 throw APIError.decodingError("No stream URL")
             }
@@ -420,6 +428,7 @@ extension PlaybackViewModel {
                initialStreamURL == masterStreamURL {
                 let h = CGFloat(maxH)
                 item.preferredMaximumResolution = CGSize(width: h * 4, height: h)
+                item.preferredPeakBitRate = peakBitRate(for: maxH)
                 playerLog.notice("Initial quality \(maxH)p hint set (no variant URL)")
             }
             // Observe item status using async/await (withCheckedContinuation is not needed

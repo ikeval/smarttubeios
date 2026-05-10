@@ -36,6 +36,7 @@ struct AppEntry: App {
     private static let pendingKey           = "pendingVideoID"
     private static let pendingWatchLaterKey = "pendingWatchLaterVideoID"
     private static let pendingQueueKey      = "pendingQueueVideoID"
+    private static let pendingRSSFeedKey    = "pendingRSSFeedURL"
 
     init() {
         FirebaseApp.configure()
@@ -170,6 +171,7 @@ struct AppEntry: App {
                             consumeDeepLinkFromLaunchArgs()
                             authService.handleForeground()
                             browseViewModel.refreshIfStale()
+                            consumePendingRSSFeedURL()
                             #if os(iOS)
                             consumePendingWatchLaterID()
                             consumePendingQueueVideoID()
@@ -290,6 +292,25 @@ struct AppEntry: App {
         }
     }
     #endif
+
+    // MARK: - App Group pending RSS feed (from Share Extension)
+
+    @MainActor
+    private func consumePendingRSSFeedURL() {
+        guard let defaults = UserDefaults(suiteName: Self.appGroup),
+              let urlString = defaults.string(forKey: Self.pendingRSSFeedKey),
+              !urlString.isEmpty,
+              let feedURL = URL(string: urlString)
+        else { return }
+
+        defaults.removeObject(forKey: Self.pendingRSSFeedKey)
+        defaults.synchronize()
+        Task {
+            let title = RSSFeedInfo.channelId(from: feedURL).map { "Channel \($0)" } ?? "RSS Feed"
+            let feed = RSSFeedInfo(title: title, feedURL: feedURL)
+            await RSSFeedStore.shared.addFeed(feed)
+        }
+    }
 
     /// Handles `--uitesting-deeplink-video=<id>` launch argument.
     ///

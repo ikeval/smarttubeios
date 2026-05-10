@@ -12,7 +12,9 @@ struct ShortsCardView: View {
     let onTap: () -> Void
 
     var body: some View {
-        let url = video.thumbnailURL ?? video.highQualityThumbnailURL
+        // Prefer the native portrait thumbnail (oardefault.jpg) so we don't crop
+        // a landscape hqdefault into the 9:16 frame.
+        let url = video.portraitThumbnailURL ?? video.thumbnailURL ?? video.highQualityThumbnailURL
         ZStack(alignment: .bottom) {
             // Portrait thumbnail — scaledToFill so landscape thumbs fill the frame.
             AsyncImage(url: url) { phase in

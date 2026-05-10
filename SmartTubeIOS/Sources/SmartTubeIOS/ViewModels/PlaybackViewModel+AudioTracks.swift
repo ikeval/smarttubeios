@@ -67,8 +67,14 @@ extension PlaybackViewModel {
             // AI-dubbed tracks to be selected on non-English devices (issue #24).
             let preferred = self.settings.preferredAudioLanguage
             let autoSelect: AudioTrack? = {
-                // 1. Saved preference
+                // 1. Saved preference (or Settings-level independent language choice).
+                // "original" is a sentinel meaning "always pick the HLS DEFAULT=YES track".
                 if let lang = preferred {
+                    if lang == "original" {
+                        // Prefer the track marked DEFAULT=YES in the HLS manifest;
+                        // fall back to first track when no DEFAULT track exists.
+                        return tracks.first(where: \.isOriginal) ?? tracks.first
+                    }
                     if let exact = tracks.first(where: { $0.languageCode == lang }) { return exact }
                     let base = lang.components(separatedBy: "-").first ?? lang
                     return tracks.first(where: { $0.languageCode.hasPrefix(base) })

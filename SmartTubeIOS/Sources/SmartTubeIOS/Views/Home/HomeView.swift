@@ -261,10 +261,10 @@ public struct HomeView: View {
                                 .padding(.bottom, 4)
                             ShortsRowSection(
                                 videos: shortsVideos,
-                                onSelect: { selectVideo($0, from: shortsVideos) }
+                                onSelect: { selectVideo($0, from: shortsVideos) },
+                                accessibilityID: "home.shortsRow"
                             )
                         }
-                        .accessibilityIdentifier("home.shortsRow")
                     }
                     VideoGridSection(
                         videos: regularVideos,
@@ -427,9 +427,13 @@ public struct HomeView: View {
         if video.playlistId == video.id {
             selectedPlaylist = video
         } else if video.isShort {
+            #if os(iOS)
             let shorts = groupVideos.filter { $0.isShort }
             let idx = shorts.firstIndex(where: { $0.id == video.id }) ?? 0
             shortsPresentation = ShortsPresentation(videos: shorts, startIndex: idx)
+            #else
+            selectedVideo = video
+            #endif
         } else {
             #if os(iOS)
             playerState.play(video: video)

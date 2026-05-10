@@ -405,6 +405,7 @@ struct VideoRowSection: View {
 struct ShortsRowSection: View {
     let videos: [Video]
     let onSelect: (Video) -> Void
+    var accessibilityID: String = ""
 
     /// Card width: ~120pt on iOS/iPadOS; ~200pt on tvOS.
     #if os(tvOS)
@@ -434,6 +435,7 @@ struct ShortsRowSection: View {
             .padding(.horizontal)
             .padding(.vertical, 4)
         }
+        .accessibilityIdentifier(accessibilityID)
         #if os(tvOS)
         .focusSection()
         #endif

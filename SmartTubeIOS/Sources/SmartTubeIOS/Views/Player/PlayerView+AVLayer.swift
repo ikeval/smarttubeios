@@ -50,8 +50,8 @@ struct FullScreenPlayerLayerView: UIViewRepresentable {
 /// with the UIKit accessibility tree so SwiftUI overlays remain reachable.
 /// On tvOS, `AVPlayerViewController` would provide system transport controls
 /// but `AVPlayerLayer` is used here for layout consistency with iOS.
-/// Named `PlayerAVLayerView` to avoid a module-level clash with the
-/// identically-structured private copy in `ShortsPlayerView.swift`.
+/// Named `PlayerAVLayerView` to avoid a module-level name clash with
+/// `ShortsPlayerView`, which uses this type via `videoGravity: .resizeAspectFill`.
 struct PlayerAVLayerView: UIViewRepresentable {
     let player: AVPlayer?
     var videoGravity: AVLayerVideoGravity = .resizeAspect

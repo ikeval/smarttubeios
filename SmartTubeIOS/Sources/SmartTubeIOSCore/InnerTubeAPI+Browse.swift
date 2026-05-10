@@ -58,6 +58,11 @@ extension InnerTubeAPI {
         updateVisitorData(from: data)
         let rows = parseVideoGroupRows(from: data)
         tubeLog.notice("fetchHomeRows → \(rows.count, privacy: .public) shelves")
+        let rowShortsDetail = rows.map { row -> String in
+            let s = row.videos.filter { $0.isShort }.count
+            return "'\(row.title ?? "?")': \(s)/\(row.videos.count) shorts"
+        }.joined(separator: ", ")
+        tubeLog.notice("fetchHomeRows shelf detail: [\(rowShortsDetail, privacy: .public)]")
         return rows
     }
 
@@ -179,17 +184,35 @@ extension InnerTubeAPI {
     // MARK: - Category sections
 
     public func fetchShorts() async throws -> VideoGroup {
-        do {
-            // FEshorts requires TVHTML5 context on www.youtube.com (not googleapis.com).
-            var body = makeBody(client: tvClientContext)
-            body["browseId"] = "FEshorts"
-            let data = try await postTVCategory(endpoint: "browse", body: body)
-            let group = try parseVideoGroup(from: data, title: "Shorts")
-            if !group.videos.isEmpty { return group }
-        } catch {
-            tubeLog.notice("fetchShorts browse failed, falling back to search: \(error, privacy: .public)")
+        // Strategy:
+        //  1. FEshorts browse with WEB client + auth — works for signed-in users.
+        //     FEshorts returns HTTP 400 for all unauthenticated clients (WEB, TV, iOS, Android).
+        //  2. Fall back to searching "shorts" — returns ~15 videoRenderers with
+        //     reelWatchEndpoint in their navigationEndpoint, so parseVideoRenderer
+        //     marks them isShort = true. Verified via curl.
+        let isAuth = authToken != nil
+        if isAuth {
+            do {
+                var body = makeBody(client: webClientContext)
+                body["browseId"] = "FEshorts"
+                let data = try await post(endpoint: "browse", body: body, useAuth: true)
+                let group = try parseVideoGroup(from: data, title: "Shorts")
+                let shorts = group.videos.filter { $0.isShort }
+                tubeLog.notice("fetchShorts browse (auth) → \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts")
+                if !shorts.isEmpty {
+                    return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: group.nextPageToken)
+                }
+            } catch {
+                tubeLog.notice("fetchShorts browse failed (\(error, privacy: .public)), falling back to search")
+            }
         }
-        return try await search(query: "shorts")
+
+        // Search fallback: "shorts" query returns ~15 Shorts-tagged videoRenderers
+        // (each has reelWatchEndpoint → isShort = true). Works unauthenticated.
+        let searchGroup = try await search(query: "shorts")
+        let shorts = searchGroup.videos.filter { $0.isShort }
+        tubeLog.notice("fetchShorts search fallback → \(searchGroup.videos.count, privacy: .public) total, \(shorts.count, privacy: .public) shorts")
+        return VideoGroup(title: "Shorts", videos: shorts)
     }
 
     public func fetchMusic() async throws -> VideoGroup {

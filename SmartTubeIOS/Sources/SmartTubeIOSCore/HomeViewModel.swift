@@ -28,6 +28,8 @@ public final class HomeViewModel {
     // MARK: - State
 
     public private(set) var sections: [SectionState]
+    /// Shorts fetched explicitly via FEshorts (TV home feed never includes them).
+    public private(set) var shortsVideos: [Video] = []
     public private(set) var isRefreshing: Bool = false
     /// Timestamp of the last successful load. Used for staleness checks.
     public private(set) var loadedAt: Date? = nil
@@ -91,15 +93,19 @@ public final class HomeViewModel {
     /// Used by `homeShelves` to populate the main grid (Shorts are shown separately).
     public var homeRegularVideos: [Video] { mergedVideos.filter { !$0.isShort } }
 
-    /// Short videos from the interleaved home feed.
+    /// Short videos fetched from FEshorts.
     /// Used by `homeShelves` to populate the dedicated Shorts row.
-    public var homeShortsVideos: [Video] { mergedVideos.filter { $0.isShort } }
+    public var homeShortsVideos: [Video] { shortsVideos }
 
     // MARK: - Dependencies
 
     private let api: any InnerTubeAPIProtocol
     private var loadTask: Task<Void, Never>?
     private var hideObserverTasks: [Task<Void, Never>] = []
+    /// Tracks whether a non-nil auth token has been set. Used to distinguish a
+    /// sign-in event (nil → non-nil) from a token refresh (non-nil → new non-nil)
+    /// so that token refreshes during video playback do not trigger a feed reload.
+    private var hasAuthToken: Bool = false
 
     public init(api: any InnerTubeAPIProtocol = InnerTubeAPI()) {
         self.api = api
@@ -142,6 +148,7 @@ public final class HomeViewModel {
         loadTask?.cancel()
         loadedAt = nil
         isRefreshing = true
+        shortsVideos = []
         for i in sections.indices {
             sections[i].videos = []
             sections[i].isLoading = true
@@ -150,6 +157,10 @@ public final class HomeViewModel {
             sections[i].nextPageToken = nil
         }
         loadTask = Task {
+            // Fetch shorts via FEshorts in parallel with the home/subs feed.
+            // The TV home feed (FEwhat_to_watch) never includes a Shorts shelf.
+            async let fetchedShorts: [Video] = HomeViewModel.fetchShortsVideos(api: self.api)
+
             await withTaskGroup(of: (String, [Video], String?).self) { group in
                 for state in sections {
                     let sectionId = state.id
@@ -170,14 +181,24 @@ public final class HomeViewModel {
                     }
                 }
             }
+            shortsVideos = await fetchedShorts
             isRefreshing = false
             loadedAt = Date()
+            let merged = self.mergedVideos
+            homeLog.notice("load complete: merged=\(merged.count) regular=\(merged.count) shorts=\(shortsVideos.count)")
         }
     }
 
     public func updateAuthToken(_ token: String?) async {
+        let wasAuthenticated = hasAuthToken
+        hasAuthToken = token != nil
         await api.setAuthToken(token)
-        if token != nil { load() }
+        if token != nil && !wasAuthenticated {
+            // Only reload on sign-in (nil → token). Token refreshes that happen
+            // during video playback keep the same sign-in state and must not
+            // wipe and reload the home feed.
+            load()
+        }
     }
 
     /// Refreshes both shelves if the last successful load was more than
@@ -231,6 +252,19 @@ public final class HomeViewModel {
 
     // MARK: - Private fetch helpers
 
+    /// Fetches the FEshorts feed. Non-isolated so it runs concurrently with
+    /// the home/subs task group.
+    private static func fetchShortsVideos(api: any InnerTubeAPIProtocol) async -> [Video] {
+        do {
+            let group = try await api.fetchShorts()
+            homeLog.notice("fetchShortsVideos → \(group.videos.count) shorts")
+            return group.videos
+        } catch {
+            homeLog.error("fetchShortsVideos failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+
     /// Non-isolated so child tasks run on the global executor and network
     /// calls can overlap.
     private static func fetchVideos(type: BrowseSection.SectionType, api: any InnerTubeAPIProtocol) async -> ([Video], String?) {
@@ -244,6 +278,8 @@ public final class HomeViewModel {
                 let token = rows.last(where: { $0.nextPageToken != nil })?.nextPageToken
                 var seen = Set<String>()
                 let deduped = rows.flatMap(\.videos).filter { seen.insert($0.id).inserted }
+                let fetchedShortsCount = deduped.filter { $0.isShort }.count
+                homeLog.notice("fetchVideos home: total=\(deduped.count) shorts=\(fetchedShortsCount) regular=\(deduped.count - fetchedShortsCount)")
                 if deduped.isEmpty {
                     // Home feed empty (no watch history / feedNudgeRenderer) — fall back to popular
                     let popular = try await api.search(query: "popular")

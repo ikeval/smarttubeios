@@ -98,6 +98,24 @@ public struct SettingsView: View {
             }
 
             #if !os(tvOS)
+            Picker("Preferred Audio Language", selection: $store.settings.preferredAudioLanguage) {
+                Text("System Default").tag(nil as String?)
+                Divider()
+                Text("English").tag("en" as String?)
+                Text("Spanish").tag("es" as String?)
+                Text("French").tag("fr" as String?)
+                Text("German").tag("de" as String?)
+                Text("Japanese").tag("ja" as String?)
+                Text("Korean").tag("ko" as String?)
+                Text("Portuguese (Brazil)").tag("pt-BR" as String?)
+                Text("Chinese (Simplified)").tag("zh-Hans" as String?)
+                Divider()
+                Text("Original Track Only").tag("original" as String?)
+            }
+            .accessibilityIdentifier("settings.preferredAudioLanguageRow")
+            #endif
+
+            #if !os(tvOS)
             Stepper(
                 "Seek Back: \(store.settings.seekBackSeconds) s",
                 value: $store.settings.seekBackSeconds,

@@ -101,8 +101,30 @@ public extension Video {
         }
     }
 
-    /// High-quality thumbnail URL using YouTube's image CDN.
+    /// High-quality thumbnail URL using YouTube's image CDN (480×360, always available).
     var highQualityThumbnailURL: URL? {
         URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg")
+    }
+
+    /// Standard-definition thumbnail (640×480). Available for most videos.
+    var sdThumbnailURL: URL? {
+        URL(string: "https://i.ytimg.com/vi/\(id)/sddefault.jpg")
+    }
+
+    /// Medium-quality thumbnail (320×180, always available — last resort).
+    var mqThumbnailURL: URL? {
+        URL(string: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg")
+    }
+
+    /// Ordered static CDN fallbacks to try when `thumbnailURL` fails.
+    /// Priority: sddefault (640×480) → hqdefault (480×360) → mqdefault (320×180).
+    var thumbnailFallbackURLs: [URL] {
+        [sdThumbnailURL, highQualityThumbnailURL, mqThumbnailURL].compactMap { $0 }
+    }
+
+    /// Portrait (9:16) thumbnail used for Shorts cards.
+    /// YouTube generates `oardefault.jpg` (360×640) for every Short.
+    var portraitThumbnailURL: URL? {
+        URL(string: "https://i.ytimg.com/vi/\(id)/oardefault.jpg")
     }
 }

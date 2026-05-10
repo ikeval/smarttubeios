@@ -53,9 +53,10 @@ extension PlaybackViewModel {
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .spectral
         if let cap = qualityCap, hlsVariantURLs[cap] == nil {
-            // No direct variant URL — fall back to preferredMaximumResolution hint.
+            // No direct variant URL — fall back to preferredMaximumResolution + preferredPeakBitRate hints.
             let h = CGFloat(cap)
             item.preferredMaximumResolution = CGSize(width: h * 4, height: h)
+            item.preferredPeakBitRate = peakBitRate(for: cap)
         }
         itemObserverTask = Task { [weak self] in
             for await status in item.statusStream {
@@ -165,12 +166,21 @@ extension PlaybackViewModel {
                     variantURL = URL(string: trimmed, relativeTo: baseURL).map { URL(string: $0.absoluteString) } ?? nil
                 }
                 if let resolvedURL = variantURL {
-                    // Prefer avc1 (H.264) variants — store this URL if we don't have one yet,
-                    // or if what we have is non-H.264 and this one is H.264.
-                    let existingIsH264 = variantIsH264[height] ?? false
-                    if variants[height] == nil || (!existingIsH264 && pendingIsH264) {
+                    if variants[height] == nil {
+                        // Accept the first variant seen for this height.
                         variants[height] = resolvedURL
                         variantIsH264[height] = pendingIsH264
+                    } else {
+#if !os(tvOS)
+                        // iOS/macOS: upgrade to H.264 if the existing variant is non-H.264.
+                        // The iOS Simulator has HEVC decode issues; H.264 is the safe choice there.
+                        // On tvOS (real hardware) HEVC is fully supported — keep whichever variant
+                        // YouTube listed first, which is typically HEVC at high resolutions.
+                        if !(variantIsH264[height] ?? false) && pendingIsH264 {
+                            variants[height] = resolvedURL
+                            variantIsH264[height] = true
+                        }
+#endif
                     }
                 }
                 pendingHeight = nil
@@ -207,6 +217,18 @@ extension PlaybackViewModel {
             }
         }
         return result
+    }
+
+    /// Returns the recommended ABR peak bitrate hint for a given resolution tier.
+    /// Used when no direct variant URL is available and we fall back to the master URL.
+    func peakBitRate(for height: Int) -> Double {
+        switch height {
+        case 2160:  return 20_000_000   // 20 Mbps — HEVC 4K
+        case 1440:  return 12_000_000   // 12 Mbps — HEVC 1440p
+        case 1080:  return  8_000_000   // 8 Mbps  — 1080p
+        case  720:  return  5_000_000   // 5 Mbps  — 720p
+        default:    return  8_000_000
+        }
     }
 
     /// Last-resort recovery for Cannot-Decode failures on the HLS Auto master.
