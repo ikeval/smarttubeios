@@ -4,6 +4,24 @@ All notable changes to SmartTube are documented here.
 
 ---
 
+## [2.4] – 2026-05-10
+
+### Fixed
+- Audio cutting out when manually changing video resolution
+- Audio quality improved — spectral pitch algorithm matches official YouTube app
+- Duplicate video cards causing blank cells in Home and Subscriptions feeds
+- tvOS centre-zone double-tap and d-pad focus issues in player UI tests
+
+---
+
+## [2.3] – 2026-05-10
+
+### Added
+- Shorts section on home screen with portrait thumbnails
+- Per-device YouTube recommendations setting (toggle in Settings)
+
+---
+
 ## [2.2] – 2026-05-06/07
 
 ### Added
