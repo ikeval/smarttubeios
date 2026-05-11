@@ -40,7 +40,7 @@ final class RSSFeedsUITests: XCTestCase {
     private func openRSSFeedsTab() throws {
         UITestHelpers.tapTab(named: "Library", in: app)
 
-        let picker = app.otherElements["library.sectionPicker"].firstMatch
+        let picker = app.segmentedControls["library.sectionPicker"].firstMatch
         guard picker.waitForExistence(timeout: 5) else {
             throw XCTSkip("library.sectionPicker not found — Library tab may not have loaded")
         }
