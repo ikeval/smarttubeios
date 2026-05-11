@@ -63,7 +63,7 @@ public actor DeArrowService {
         self.session = URLSession(configuration: config)
     }
 
-    public struct BrandingInfo: Sendable {
+    public struct BrandingInfo: Sendable, Codable {
         public let title: String?
         public let thumbnailTimestamp: Double?
     }

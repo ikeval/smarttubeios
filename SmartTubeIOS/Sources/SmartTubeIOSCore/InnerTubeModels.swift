@@ -1,9 +1,18 @@
 import Foundation
 
+// MARK: - PoTokenProvider
+
+/// Implemented by objects that can generate a Proof-of-Origin token for a given video ID.
+/// The token is used in the `/player` POST body and appended to CDN stream URLs.
+/// All implementations must be safe to call concurrently for different video IDs.
+public protocol PoTokenProvider: Sendable {
+    func token(for videoId: String) async throws -> String
+}
+
 // MARK: - LikeStatus
 
 /// The user's current like state for a video.
-public enum LikeStatus: Sendable {
+public enum LikeStatus: Sendable, Codable {
     case like
     case dislike
     case none
@@ -12,7 +21,7 @@ public enum LikeStatus: Sendable {
 // MARK: - NextInfo
 
 /// Combined result from the `/next` InnerTube endpoint.
-public struct NextInfo: Sendable {
+public struct NextInfo: Sendable, Codable {
     public let relatedVideos: [Video]
     public let likeStatus: LikeStatus
     public let chapters: [Chapter]
@@ -35,8 +44,8 @@ public struct Comment: Sendable, Identifiable {
 
 /// A YouTube end-screen card shown in the final seconds of a video.
 /// Mirrors the `endscreen.endscreenRenderer.elements[].endscreenElementRenderer` shape.
-public struct EndCard: Sendable, Identifiable {
-    public enum Style: String, Sendable {
+public struct EndCard: Sendable, Identifiable, Codable {
+    public enum Style: String, Sendable, Codable {
         case video = "VIDEO"
         case playlist = "PLAYLIST"
         case subscribe = "SUBSCRIBE"
@@ -141,6 +150,39 @@ public struct PlayerInfo: Sendable {
         }
         return audioOnly.sorted { ($0.bitrate ?? 0) > ($1.bitrate ?? 0) }.first?.url
     }
+
+    /// Returns a copy of this `PlayerInfo` with `&pot=<token>` appended to every
+    /// non-nil format URL, `hlsURL`, and `dashURL`.
+    /// Call site in `PlaybackViewModel+Loading` applies this after `fetchPlayerInfo`
+    /// when `InnerTubeAPI.poToken` is valid. All injection is gated on `poToken != nil`
+    /// so the existing behaviour is unchanged until a provider is configured.
+    public func applyingPoToken(_ token: String) -> PlayerInfo {
+        func append(_ url: URL?) -> URL? {
+            guard let url else { return nil }
+            let sep = url.absoluteString.contains("?") ? "&" : "?"
+            return URL(string: url.absoluteString + "\(sep)pot=\(token)")
+        }
+        let patched = formats.map { fmt in
+            VideoFormat(
+                label: fmt.label,
+                width: fmt.width,
+                height: fmt.height,
+                fps: fmt.fps,
+                mimeType: fmt.mimeType,
+                url: append(fmt.url),
+                bitrate: fmt.bitrate
+            )
+        }
+        return PlayerInfo(
+            video: video,
+            formats: patched,
+            hlsURL: append(hlsURL),
+            dashURL: append(dashURL),
+            captionTracks: captionTracks,
+            trackingURLs: trackingURLs,
+            endCards: endCards
+        )
+    }
 }
 
 // MARK: - APIError
@@ -151,6 +193,10 @@ public enum APIError: LocalizedError {
     case notAuthenticated
     case unavailable(String)
     case invalidURL(String)
+    /// Thrown when YouTube's `/player` response indicates the request was blocked due to
+    /// the source IP address (VPN, proxy, shared datacenter IP). The associated value is
+    /// the raw `playabilityStatus.reason` string from the response.
+    case ipBlocked(String)
 
     public var errorDescription: String? {
         switch self {
@@ -159,6 +205,8 @@ public enum APIError: LocalizedError {
         case .notAuthenticated:          return "You are not signed in"
         case .unavailable(let reason):   return reason
         case .invalidURL(let endpoint):  return "Could not build URL for endpoint: \(endpoint)"
+        case .ipBlocked:
+            return "YouTube is temporarily blocking this network. Disable your VPN, try a different VPN server, or wait a few minutes and retry."
         }
     }
 }

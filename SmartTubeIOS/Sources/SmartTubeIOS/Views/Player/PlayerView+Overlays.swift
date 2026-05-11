@@ -326,7 +326,7 @@ extension PlayerView {
     }
 
     @ViewBuilder private var moreMenuQualityRow: some View {
-        if !vm.availableFormats.isEmpty {
+        if !vm.availableFormats.isEmpty && !vm.isAudioOnlyMode {
             Button {
                 showMoreMenu = false
                 showQualityPicker = true

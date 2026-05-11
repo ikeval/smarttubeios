@@ -46,6 +46,16 @@ package enum InnerTubeClients {
         package static let userAgent       = "com.google.android.youtube/\(version) (Linux; U; Android 11) gzip"
     }
 
+    /// Android VR client (Oculus Quest identity) — used as an unauthenticated fallback
+    /// for audio-only mode. Per yt-dlp research (May 2026), this client does not require
+    /// a Proof-of-Origin (PO) token for adaptive streams. Monitor for future enforcement.
+    package enum AndroidVR {
+        package static let name    = "ANDROID_VR"
+        package static let nameID  = "28"
+        package static let version = "1.65.10"
+        package static let userAgent = "com.google.android.apps.youtube.vr.oculus/\(version) (Linux; U; Android 12; Build/SQ3A.220705.001.B1) gzip"
+    }
+
     package enum TV {
         package static let name      = "TVHTML5"
         package static let nameID    = "7"

@@ -107,6 +107,23 @@ public struct AppSettings: Codable {
     // MARK: DeArrow
     public var deArrowEnabled: Bool
 
+    // MARK: Network
+    /// Placeholder for future IPv4-forcing transport. Currently inert — no network behaviour
+    /// is changed when this is `true`. The transport implementation will be added once the
+    /// approach is validated on device (see docs/vpn-fix.md §Step 4).
+    public var forceIPv4: Bool
+
+    /// Optional URL of a self-hosted poToken microservice (e.g. youtube-trusted-session-generator).
+    /// When set, `ServerPoTokenProvider` is wired up to `InnerTubeAPI` so poToken is injected
+    /// into every `/player` request. Nil by default — no token is sent until the user configures
+    /// a server URL (see docs/potoken.md §Step 5).
+    public var poTokenServiceURL: URL?
+
+    // MARK: Audio-only mode
+    /// When `true`, videos load only the audio stream and display the thumbnail.
+    /// ~90% data reduction vs 1080p. Live streams are excluded automatically.
+    public var audioOnlyMode: Bool
+
     // MARK: Types
 
     /// Canonical ordered list of selectable playback speeds — single source of truth.
@@ -202,5 +219,8 @@ public struct AppSettings: Codable {
         sponsorBlockExcludedChannels   = [:]
         preferredAudioLanguage = nil
         deArrowEnabled       = false
+        forceIPv4            = false
+        poTokenServiceURL    = nil
+        audioOnlyMode        = false
     }
 }

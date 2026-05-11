@@ -51,7 +51,8 @@ extension ShortsPlayerView {
                 await VideoPreloadCache.shared.prefetch(
                     videoId: videoId,
                     sponsorCategories: cats,
-                    authToken: token
+                    authToken: token,
+                    priority: .speculative
                 )
             }
         }

@@ -78,6 +78,8 @@ extension PlaybackViewModel {
         qualityTask?.cancel()
         qualityTask = nil
         hlsVariantURLs = [:]
+        phase2Task?.cancel()
+        phase2Task = nil
         loadTask = Task { await loadAsync(video: video) }
     }
 
@@ -180,7 +182,8 @@ extension PlaybackViewModel {
 
     func loadAsync(video: Video) async {
         isLoading = true
-        defer { isLoading = false }
+        // Note: isLoading = false is set explicitly after AVPlayer setup (Phase 1 end),
+        // not via defer, so Phase 2 background work does not delay the spinner dismissal.
         playerLog.notice("load video id=\(video.id) title=\(video.title)")
         do {
             // --- Cache-first load ---
@@ -212,11 +215,34 @@ extension PlaybackViewModel {
             if let cachedInfo = cached.playerInfo {
                 playerLog.notice("cache HIT: playerInfo (skipping network)")
                 info = cachedInfo
+            } else if let inFlight = await VideoPreloadCache.shared.inFlightPlayerFetch(videoId: video.id),
+                      let coalescedInfo = await inFlight.value {
+                // Coalesced: a background prefetch was in-flight — use its result.
+                playerLog.notice("coalescedPrefetch HIT: playerInfo (skipping network)")
+                info = coalescedInfo
             } else {
                 do {
                     info = try await api.fetchPlayerInfo(videoId: video.id)
                 } catch {
-                    if case APIError.unavailable = error, hasAuthToken {
+                    if case APIError.ipBlocked(let reason) = error {
+                        // Step 2: IP-block short-circuit. Every extra /player call from a
+                        // blocked IP extends the block duration. Skip the Android fallback.
+                        // If signed in, one TV-authenticated attempt is still worthwhile
+                        // (a logged-in session carries extra credibility with YouTube).
+                        playerLog.error("⚠️ iOS client detected IP block — reason: \(reason)")
+                        // Step 5: Crashlytics tag for production measurement.
+                        playerLog.recordNonFatal(error, userInfo: [
+                            "vpn_ip_block":       "true",
+                            "playability_reason": reason,
+                            "video_id":           video.id,
+                        ])
+                        if hasAuthToken {
+                            playerLog.notice("⚠️ IP block: attempting one TV-authenticated retry")
+                            info = try await api.fetchPlayerInfoAuthenticated(videoId: video.id)
+                        } else {
+                            throw error
+                        }
+                    } else if case APIError.unavailable = error, hasAuthToken {
                         playerLog.notice("⚠️ iOS client returned unavailable — retrying with authenticated TV client")
                         do {
                             info = try await api.fetchPlayerInfoAuthenticated(videoId: video.id)
@@ -251,99 +277,29 @@ extension PlaybackViewModel {
 
             // --- SponsorBlock ---
             // Segments from the cache are applied inline (fast path, zero network cost).
-            // When not cached, the network fetch runs in a background Task so it does not
-            // block the AVPlayer setup. Segments are applied to `sponsorSegments` when
-            // the fetch completes; the time observer picks them up on the next tick.
+            // Stale segments are applied immediately and revalidated in Phase 2.
+            // When not cached, the fetch is deferred to Phase 2 (runs concurrently with
+            // AVPlayer buffering) so it does not block the spinner.
             sponsorSegments = []
             let channelIsExcluded = video.channelId.map {
                 settings.sponsorBlockExcludedChannels.keys.contains($0)
             } ?? false
+            var sponsorCached = false
             if settings.sponsorBlockEnabled, !channelIsExcluded {
                 if let cachedSegments = cached.sponsorSegments {
-                    // Cache hit — apply immediately, no network needed.
-                    playerLog.notice("cache HIT: sponsorSegments (skipping network)")
+                    // Cache hit (fresh or stale) — apply immediately.
+                    let isStaleSponsor = cached.staleFields.contains(.sponsorSegments)
+                    playerLog.notice("cache \(isStaleSponsor ? "STALE" : "HIT"): sponsorSegments")
                     let minDur = settings.sponsorBlockMinSegmentDuration
                     sponsorSegments = minDur > 0
                         ? cachedSegments.filter { ($0.end - $0.start) >= minDur }
                         : cachedSegments
-                } else {
-                    // Cache miss — fetch in background so playback can start immediately.
-                    let videoId = video.id
-                    let cats = settings.activeSponsorCategories
-                    let minDur = settings.sponsorBlockMinSegmentDuration
-                    Task(priority: .utility) { [weak self] in
-                        guard let self else { return }
-                        var segments = await self.sponsorBlock.fetchSegments(
-                            videoId: videoId,
-                            categories: cats
-                        )
-                        await VideoPreloadCache.shared.store(sponsorSegments: segments, for: videoId)
-                        if minDur > 0 { segments = segments.filter { ($0.end - $0.start) >= minDur } }
-                        self.sponsorSegments = segments
-                    }
+                    // Mark as "not fully cached" only when stale so Phase 2 revalidates.
+                    sponsorCached = !isStaleSponsor
                 }
-            }
-
-            // --- Related videos + like status ---
-            let nextInfo: NextInfo?
-            if let cachedNext = cached.nextInfo {
-                playerLog.notice("cache HIT: nextInfo (skipping network)")
-                nextInfo = cachedNext
+                // Full miss or stale: Phase 2 will fetch or revalidate.
             } else {
-                nextInfo = try? await api.fetchNextInfo(videoId: video.id)
-                if let nextInfo { await VideoPreloadCache.shared.store(nextInfo: nextInfo, for: video.id) }
-            }
-
-            if let nextInfo, !nextInfo.relatedVideos.isEmpty {
-                relatedVideos = nextInfo.relatedVideos.filter { $0.id != video.id }
-                hasNext = !relatedVideos.isEmpty
-            } else {
-                // Fallback to search if /next returns nothing.
-                // Use video.title (from the original Video parameter) — info.video.title
-                // can be empty for ads/unplayable content where videoDetails is sparse.
-                let fallbackQuery = video.title.isEmpty ? nil : video.title
-                if let query = fallbackQuery {
-                    let searched = try? await api.search(query: query)
-                    relatedVideos = searched?.videos.filter { $0.id != video.id }.prefix(InnerTubeClients.maxVideoResults).map { $0 } ?? []
-                    hasNext = !relatedVideos.isEmpty
-                }
-            }
-            // Apply like status returned from the authenticated /next call
-            if let status = nextInfo?.likeStatus { likeStatus = status }
-            if let ch = nextInfo?.chapters, !ch.isEmpty { chapters = ch }
-
-            // --- End cards ---
-            if let cachedCards = cached.endCards {
-                playerLog.notice("cache HIT: endCards (skipping network)")
-                endCards = cachedCards
-            } else if !info.endCards.isEmpty {
-                endCards = info.endCards
-                playerLog.notice("endCards: \(info.endCards.count) from primary response")
-                await VideoPreloadCache.shared.store(endCards: info.endCards, for: video.id)
-            } else {
-                do {
-                    let webCards = try await api.fetchEndCards(videoId: video.id)
-                    endCards = webCards
-                    playerLog.notice("endCards: \(webCards.count) from web client fallback")
-                    await VideoPreloadCache.shared.store(endCards: webCards, for: video.id)
-                } catch {
-                    playerLog.error("endCards fetch failed: \(error.localizedDescription)")
-                    endCards = []
-                }
-            }
-
-            // --- Kick off neighbour pre-fetch now that relatedVideos is populated ---
-            let neighbourIds = Array(relatedVideos.prefix(3).map(\.id))
-            let prefetchToken = currentAuthToken
-            let sponsorCats = settings.activeSponsorCategories
-            Task(priority: .background) {
-                for videoId in neighbourIds {
-                    await VideoPreloadCache.shared.prefetch(
-                        videoId: videoId,
-                        sponsorCategories: sponsorCats,
-                        authToken: prefetchToken
-                    )
-                }
+                sponsorCached = true  // disabled/excluded — no fetch needed in Phase 2
             }
 
             // Restore saved watch position (mirrors VideoStateController)
@@ -352,20 +308,6 @@ extension PlaybackViewModel {
                 savedPositionToRestore = pos
                 playerLog.notice("Restoring position \(Int(pos))s for \(video.id)")
             }
-
-            // --- Tracking URLs ---
-            // Prefer account-bound TV-client URLs over the anonymous iOS-client URLs.
-            // Use the cached value if present; otherwise await the parallel task result.
-            let resolvedTrackingURLs: PlaybackTrackingURLs?
-            if let cachedTracking = cachedTrackingURLs {
-                resolvedTrackingURLs = cachedTracking
-                playerLog.notice("cache HIT: trackingURLs")
-            } else {
-                resolvedTrackingURLs = await authTrackingTask?.value ?? info.trackingURLs
-                await VideoPreloadCache.shared.store(trackingURLs: resolvedTrackingURLs, for: video.id)
-            }
-            tracker.setTrackingURLs(resolvedTrackingURLs)
-            playerLog.notice("activeTrackingURLs resolved: \(resolvedTrackingURLs != nil ? "account-bound" : "none")")
             // Filter the quality picker to only heights that the HLS manifest actually
             // offers. The iOS player response lists all adaptive CDN formats at every
             // quality, but the HLS variant playlist may omit qualities the CDN has not
@@ -498,6 +440,10 @@ extension PlaybackViewModel {
                 }
             }
 
+            // Audio-only mode: if enabled, replace the HLS item with an audio-only asset.
+            // Falls back to HLS (already in player) on any failure. No-op when disabled.
+            await loadAudioOnlyItemIfEnabled()
+
             #if canImport(UIKit)
             // Re-register lock screen commands before starting playback.
             // Commands are removed in suspend()/stop(); re-registering here
@@ -515,7 +461,32 @@ extension PlaybackViewModel {
             // was started by a user tap during loading, extending the visible window
             // unexpectedly and breaking UI tests that wait for the auto-hide.
             if controlsVisible { scheduleControlsHide() }
+
+            // Phase 1 complete — dismiss the spinner now that AVPlayer has its item.
+            // Phase 2 work (nextInfo, endCards, trackingURLs, sponsorBlock miss, prefetch)
+            // runs concurrently with buffering so it does not extend the loading window.
+            isLoading = false
+
+            // Launch Phase 2 as a cancellable utility Task. Cancelled on the next load()
+            // or stop() so stale network callbacks never write to a new video's state.
+            let p2Cached = cached
+            let p2Info = info
+            let p2CachedTracking = cachedTrackingURLs
+            let p2AuthTask = authTrackingTask
+            let p2SponsorCached = sponsorCached
+            let p2Video = video
+            phase2Task = Task(priority: .utility) { [weak self] in
+                await self?.loadAsyncPhase2(
+                    video: p2Video,
+                    cached: p2Cached,
+                    info: p2Info,
+                    cachedTrackingURLs: p2CachedTracking,
+                    authTrackingTask: p2AuthTask,
+                    sponsorCached: p2SponsorCached
+                )
+            }
         } catch {
+            isLoading = false
             playerLog.error("❌ loadAsync error: \(String(describing: error))")
             self.error = error
         }
@@ -537,12 +508,12 @@ extension PlaybackViewModel {
         player.pause()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
+        loadTask?.cancel()
+        loadTask = nil
+        phase2Task?.cancel()
+        phase2Task = nil
         #if canImport(UIKit)
         UIApplication.shared.isIdleTimerDisabled = false
-        #endif
-        controlsTimer?.cancel()
-        seekDebounceTask?.cancel()
-        #if canImport(UIKit)
         clearNowPlayingInfo()
         let center = MPRemoteCommandCenter.shared()
         center.playCommand.removeTarget(nil)
@@ -555,6 +526,152 @@ extension PlaybackViewModel {
         if let obs = audioSessionObserver {
             NotificationCenter.default.removeObserver(obs)
             audioSessionObserver = nil
+        }
+    }
+
+    // MARK: - Phase 2: Background enrichment
+
+    /// Runs concurrently with playback after Phase 1 completes.
+    /// Fetches data that is not needed to start AVPlayer: related videos, end cards,
+    /// SponsorBlock segments (cache miss only), tracking URLs, and neighbour prefetch.
+    /// All property assignments happen on @MainActor because PlaybackViewModel is @MainActor.
+    private func loadAsyncPhase2(
+        video: Video,
+        cached: CachedVideoData,
+        info: PlayerInfo,
+        cachedTrackingURLs: PlaybackTrackingURLs?,
+        authTrackingTask: Task<PlaybackTrackingURLs?, Never>?,
+        sponsorCached: Bool
+    ) async {
+        guard !Task.isCancelled else { return }
+
+        // --- SponsorBlock cache miss or stale ---
+        if !sponsorCached, settings.sponsorBlockEnabled {
+            let channelIsExcluded = video.channelId.map {
+                settings.sponsorBlockExcludedChannels.keys.contains($0)
+            } ?? false
+            if !channelIsExcluded {
+                let videoId = video.id
+                let cats = settings.activeSponsorCategories
+                let minDur = settings.sponsorBlockMinSegmentDuration
+                if cached.staleFields.contains(.sponsorSegments) {
+                    // Stale data was already applied in Phase 1 — revalidate silently.
+                    Task(priority: .background) { [weak self] in
+                        guard let self else { return }
+                        let segments = await self.sponsorBlock.fetchSegments(videoId: videoId, categories: cats)
+                        await VideoPreloadCache.shared.store(sponsorSegments: segments, for: videoId)
+                    }
+                } else {
+                    // Full miss — fetch now and apply.
+                    var segments = await sponsorBlock.fetchSegments(videoId: videoId, categories: cats)
+                    await VideoPreloadCache.shared.store(sponsorSegments: segments, for: videoId)
+                    guard !Task.isCancelled else { return }
+                    if minDur > 0 { segments = segments.filter { ($0.end - $0.start) >= minDur } }
+                    sponsorSegments = segments
+                }
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // --- Related videos + like status ---
+        // Fresh cache hit: use immediately (no network).
+        // Stale cache hit: stale data was already returned by consume() — revalidate silently in background.
+        // Full miss: live blocking fetch so relatedVideos is populated before the panel opens.
+        let nextInfo: NextInfo?
+        if let cachedNext = cached.nextInfo, !cached.staleFields.contains(.nextInfo) {
+            playerLog.notice("cache HIT: nextInfo (skipping network)")
+            nextInfo = cachedNext
+        } else if let staleNext = cached.nextInfo, cached.staleFields.contains(.nextInfo) {
+            playerLog.notice("SWR: nextInfo stale — using cached, revalidating in background")
+            nextInfo = staleNext
+            let videoId = video.id
+            Task(priority: .background) { [api = self.api] in
+                if let fresh = try? await api.fetchNextInfo(videoId: videoId) {
+                    await VideoPreloadCache.shared.store(nextInfo: fresh, for: videoId)
+                }
+            }
+        } else {
+            nextInfo = try? await api.fetchNextInfo(videoId: video.id)
+            if let nextInfo { await VideoPreloadCache.shared.store(nextInfo: nextInfo, for: video.id) }
+        }
+
+        guard !Task.isCancelled else { return }
+
+        if let nextInfo, !nextInfo.relatedVideos.isEmpty {
+            relatedVideos = nextInfo.relatedVideos.filter { $0.id != video.id }
+            hasNext = !relatedVideos.isEmpty
+        } else {
+            let fallbackQuery = video.title.isEmpty ? nil : video.title
+            if let query = fallbackQuery {
+                let searched = try? await api.search(query: query)
+                relatedVideos = searched?.videos.filter { $0.id != video.id }.prefix(InnerTubeClients.maxVideoResults).map { $0 } ?? []
+                hasNext = !relatedVideos.isEmpty
+            }
+        }
+        if let status = nextInfo?.likeStatus { likeStatus = status }
+        if let ch = nextInfo?.chapters, !ch.isEmpty { chapters = ch }
+
+        guard !Task.isCancelled else { return }
+
+        // --- End cards ---
+        if let cachedCards = cached.endCards, !cached.staleFields.contains(.endCards) {
+            playerLog.notice("cache HIT: endCards (skipping network)")
+            endCards = cachedCards
+        } else if let staleCards = cached.endCards, cached.staleFields.contains(.endCards) {
+            playerLog.notice("SWR: endCards stale — using cached, revalidating in background")
+            endCards = staleCards
+            let videoId = video.id
+            Task(priority: .background) { [api = self.api] in
+                if let fresh = try? await api.fetchEndCards(videoId: videoId) {
+                    await VideoPreloadCache.shared.store(endCards: fresh, for: videoId)
+                }
+            }
+        } else if !info.endCards.isEmpty {
+            endCards = info.endCards
+            playerLog.notice("endCards: \(info.endCards.count) from primary response")
+            await VideoPreloadCache.shared.store(endCards: info.endCards, for: video.id)
+        } else {
+            do {
+                let webCards = try await api.fetchEndCards(videoId: video.id)
+                guard !Task.isCancelled else { return }
+                endCards = webCards
+                playerLog.notice("endCards: \(webCards.count) from web client fallback")
+                await VideoPreloadCache.shared.store(endCards: webCards, for: video.id)
+            } catch {
+                playerLog.error("endCards fetch failed: \(error.localizedDescription)")
+                endCards = []
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // --- Tracking URLs ---
+        let resolvedTrackingURLs: PlaybackTrackingURLs?
+        if let cachedTracking = cachedTrackingURLs {
+            resolvedTrackingURLs = cachedTracking
+            playerLog.notice("cache HIT: trackingURLs")
+        } else {
+            resolvedTrackingURLs = await authTrackingTask?.value ?? info.trackingURLs
+            await VideoPreloadCache.shared.store(trackingURLs: resolvedTrackingURLs, for: video.id)
+        }
+        guard !Task.isCancelled else { return }
+        tracker.setTrackingURLs(resolvedTrackingURLs)
+        playerLog.notice("activeTrackingURLs resolved: \(resolvedTrackingURLs != nil ? "account-bound" : "none")")
+
+        // --- Kick off neighbour pre-fetch now that relatedVideos is populated ---
+        let neighbourIds = Array(relatedVideos.prefix(3).map(\.id))
+        let prefetchToken = currentAuthToken
+        let sponsorCats = settings.activeSponsorCategories
+        Task(priority: .background) {
+            for videoId in neighbourIds {
+                await VideoPreloadCache.shared.prefetch(
+                    videoId: videoId,
+                    sponsorCategories: sponsorCats,
+                    authToken: prefetchToken,
+                    priority: .speculative
+                )
+            }
         }
     }
 }

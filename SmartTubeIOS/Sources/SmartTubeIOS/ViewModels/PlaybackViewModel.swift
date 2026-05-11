@@ -61,7 +61,12 @@ public final class PlaybackViewModel {
             // URLs). These are never app bugs — log at notice level but don't inflate the
             // Crashlytics non-fatal list. Pattern-match directly on the type rather than
             // relying on NSError.code (which shifts when enum cases are reordered).
-            if let apiError = error as? APIError, case .unavailable = apiError { return }
+            // APIError.ipBlocked is handled with a dedicated non-fatal in the loading path
+            // (vpn_ip_block=true) — skip double-logging here.
+            if let apiError = error as? APIError {
+                if case .unavailable = apiError { return }
+                if case .ipBlocked = apiError { return }
+            }
             playerLog.recordNonFatal(error, userInfo: [
                 "video_id":          currentVideo?.id    ?? "unknown",
                 "video_title":       currentVideo?.title ?? "unknown",
@@ -86,6 +91,9 @@ public final class PlaybackViewModel {
     public internal(set) var statsSnapshot: StatsForNerdsSnapshot = .empty
     /// End-screen cards to overlay during the final seconds of the video.
     public internal(set) var endCards: [EndCard] = []
+    /// When `true`, the player loads only the audio-only adaptive stream and displays
+    /// the video thumbnail in place of the player layer. Updated from `AppSettings.audioOnlyMode`.
+    public var isAudioOnlyMode: Bool = false
 
     // MARK: - Captions
 
@@ -201,6 +209,9 @@ public final class PlaybackViewModel {
     var seekDebounceTask: Task<Void, Never>?
     /// Tracks the in-flight loadAsync so it can be cancelled if load() is called again.
     var loadTask: Task<Void, Never>?
+    /// Phase 2 background work: nextInfo, endCards, trackingURLs, neighbour prefetch.
+    /// Cancelled at the start of every new load() and in stop().
+    var phase2Task: Task<Void, Never>?
 
     // MARK: - Now Playing cache
     // Never read nowPlayingInfo back from MPNowPlayingInfoCenter — doing a
@@ -271,5 +282,6 @@ public final class PlaybackViewModel {
 
     public func updateSettings(_ newSettings: AppSettings) {
         settings = newSettings
+        isAudioOnlyMode = newSettings.audioOnlyMode
     }
 }

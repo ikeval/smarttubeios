@@ -13,12 +13,25 @@ extension InnerTubeAPI {
     // MARK: - Player stream URLs
 
     public func fetchPlayerInfo(videoId: String) async throws -> PlayerInfo {
-        var body = makeBody(client: iosClientContext)
+        // Refresh poToken if a provider is configured and the current token doesn't cover this videoId.
+        if let provider = poTokenProvider, poToken == nil || poTokenVideoId != videoId {
+            if let token = try? await provider.token(for: videoId) {
+                poToken = token
+                poTokenVideoId = videoId
+                poTokenExpiry = Date().addingTimeInterval(6 * 3600)
+            }
+        }
+        var body = makeBody(client: iosClientContext, includePoToken: true)
         body["videoId"] = videoId
         body["racyCheckOk"] = true
         body["contentCheckOk"] = true
         let data = try await postPlayer(body: body)
-        return try parsePlayerInfo(from: data, videoId: videoId)
+        var info = try parsePlayerInfo(from: data, videoId: videoId)
+        // Append &pot= to CDN URLs if we have a valid token.
+        if let pot = poToken, poTokenVideoId == videoId {
+            info = info.applyingPoToken(pot)
+        }
+        return info
     }
 
     /// Fetches player info using the Web client, which returns muxed (video+audio)
@@ -44,6 +57,18 @@ extension InnerTubeAPI {
         body["racyCheckOk"] = true
         body["contentCheckOk"] = true
         let data = try await postAndroid(endpoint: "player", body: body)
+        return try parsePlayerInfo(from: data, videoId: videoId)
+    }
+
+    /// Fetches player info using the Android VR (Oculus) client.
+    /// Used as a fallback in audio-only mode when the iOS client audio URL is inaccessible.
+    /// Per yt-dlp (May 2026), this client does not require a PO token for adaptive audio.
+    public func fetchPlayerInfoAndroidVR(videoId: String) async throws -> PlayerInfo {
+        var body = makeBody(client: androidVRClientContext)
+        body["videoId"] = videoId
+        body["racyCheckOk"] = true
+        body["contentCheckOk"] = true
+        let data = try await post(endpoint: "player", body: body)
         return try parsePlayerInfo(from: data, videoId: videoId)
     }
 
@@ -221,6 +246,15 @@ extension InnerTubeAPI {
         if streamingData == nil, playabilityStatus != "OK" {
             let reason = playabilityReason ?? "This video is unavailable (\(playabilityStatus))"
             tubeLog.error("❌ parsePlayerInfo: unplayable — \(reason, privacy: .public)")
+            // Check for IP-block signals before throwing the generic unavailable error.
+            // These keywords indicate YouTube is rejecting the request based on the source
+            // IP (VPN/proxy/shared datacenter). Throwing a distinct error type lets callers
+            // short-circuit the retry chain and show a targeted message.
+            let lower = reason.lowercased()
+            let ipBlockKeywords = ["your ip", "ip address", "vpn", "proxy", "bot", "sign in to confirm"]
+            if ipBlockKeywords.contains(where: { lower.contains($0) }) {
+                throw APIError.ipBlocked(reason)
+            }
             throw APIError.unavailable(reason)
         }
         var formats: [VideoFormat] = []

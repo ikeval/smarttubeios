@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Network
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -23,6 +24,26 @@ public actor InnerTubeAPI {
     let session: URLSession
     var visitorData: String?
     var authToken: String?
+
+    // MARK: - poToken storage (Step 1)
+    //
+    // Populated by a PoTokenProvider when configured; nil until then (zero behaviour change).
+    // All injection points are gated on `poToken != nil`.
+    var poToken: String?
+    var poTokenVideoId: String?
+    var poTokenExpiry: Date?
+
+    // MARK: - PoTokenProvider
+    let poTokenProvider: (any PoTokenProvider)?
+
+    // MARK: - Network path monitoring
+    //
+    // Resets `visitorData` when the network path changes (VPN connect/disconnect,
+    // WiFi switch, cellular handover). A fresh visitorData is issued on the next
+    // browse request and is tied to the new IP context, avoiding UNPLAYABLE responses
+    // caused by session/IP mismatch after a network transition.
+    nonisolated(unsafe) private let pathMonitor = NWPathMonitor()
+    private var lastPathStatus: NWPath.Status? = nil
 
     /// The web client context used to fetch home/search/channel feeds.
     let webClientContext: [String: Any] = [
@@ -83,6 +104,20 @@ public actor InnerTubeAPI {
         ]
     ]
 
+    /// The Android VR (Oculus Quest) client context used for audio-only fallback.
+    /// Per yt-dlp research (May 2026), this client does not require a PO token for
+    /// adaptive audio streams. Used exclusively by `fetchPlayerInfoAndroidVR`.
+    let androidVRClientContext: [String: Any] = [
+        "client": [
+            "hl": "en",
+            "gl": "US",
+            "clientName": InnerTubeClients.AndroidVR.name,
+            "clientVersion": InnerTubeClients.AndroidVR.version,
+            "osName": "Android",
+            "osVersion": "12",
+        ]
+    ]
+
     let baseURL = URL(string: "https://www.youtube.com/youtubei/v1")!
     let playerBaseURL = URL(string: "https://youtubei.googleapis.com/youtubei/v1")!
     // Public InnerTube API key embedded in YouTube's own web client JS — not a developer secret.
@@ -91,13 +126,33 @@ public actor InnerTubeAPI {
     let apiKey = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8" // gitleaks:allow
     // Note: TV key (AIzaSyDCU8...) is defined in Android as API_KEY_OLD and never used.
 
-    public init(authToken: String? = nil) {
+    public init(authToken: String? = nil, poTokenProvider: (any PoTokenProvider)? = nil) {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 20
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = true
         self.session = URLSession(configuration: config)
         self.authToken = authToken
+        self.poTokenProvider = poTokenProvider
+        // Start observing network path changes so visitorData is cleared on network transitions.
+        // Callbacks arrive on pathMonitor's private queue; actor re-entry via Task is safe.
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            Task { await self?.handlePathUpdate(path) }
+        }
+        pathMonitor.start(queue: .global(qos: .background))
+    }
+
+    // MARK: - Private: Network path handler
+
+    private func handlePathUpdate(_ path: NWPath) {
+        // Only reset visitorData when transitioning between satisfied states
+        // (e.g. VPN connect, WiFi switch). Ignore transient unsatisfied -> satisfied
+        // on first start by comparing to the previously recorded status.
+        let prev = lastPathStatus
+        lastPathStatus = path.status
+        guard path.status == .satisfied, prev == .satisfied else { return }
+        visitorData = nil
+        tubeLog.notice("visitorData cleared — network path changed (VPN/WiFi transition)")
     }
 
     // MARK: - Auth

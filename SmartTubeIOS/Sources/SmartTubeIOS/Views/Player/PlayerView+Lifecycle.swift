@@ -31,6 +31,11 @@ extension PlayerView {
                 )
                 .ignoresSafeArea()
                 .accessibilityHidden(true)
+                // Audio-only mode: overlay the thumbnail over the (hidden) player layer.
+                // The AVPlayerLayer stays in the hierarchy so PiP attachment is undisturbed.
+                if vm.isAudioOnlyMode {
+                    audioOnlyThumbnailOverlay
+                }
                 #elseif os(tvOS)
                 // PlayerAVLayerView: bare AVPlayerLayer without AVPlayerViewController.
                 // AVPlayerViewController (VideoPlayer) dominates the UIKit accessibility
@@ -600,5 +605,41 @@ extension PlayerView {
             vm: vm
         )
         #endif
+    }
+
+    // MARK: - Audio-only thumbnail overlay
+
+    /// Shown in place of the video layer when `vm.isAudioOnlyMode == true`.
+    /// The AVPlayerLayer is kept in the hierarchy (for PiP continuity) but covered by this view.
+    @ViewBuilder
+    var audioOnlyThumbnailOverlay: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let thumb = vm.playerInfo?.video.thumbnailURL {
+                AsyncImage(url: thumb) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 280)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    case .failure:
+                        Image(systemName: "music.note")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.white.opacity(0.6))
+                    default:
+                        ProgressView()
+                            .tint(.white)
+                    }
+                }
+            } else {
+                Image(systemName: "music.note")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .ignoresSafeArea()
+        .accessibilityLabel("Audio only — thumbnail")
     }
 }

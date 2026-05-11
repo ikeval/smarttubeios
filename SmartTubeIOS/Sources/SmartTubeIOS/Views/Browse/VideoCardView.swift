@@ -65,7 +65,8 @@ public struct VideoCardView: View {
             await VideoPreloadCache.shared.prefetch(
                 videoId: video.id,
                 sponsorCategories: store.settings.activeSponsorCategories,
-                authToken: authService.accessToken
+                authToken: authService.accessToken,
+                priority: .visible
             )
         }
         .contextMenu {

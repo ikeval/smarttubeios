@@ -72,7 +72,7 @@ public struct Video: Identifiable, Hashable, Codable, Sendable {
 
 /// A named time-range bookmark within a video.
 /// Mirrors Android's Chapter data class in YouTubeMediaItem.
-public struct Chapter: Identifiable, Hashable, Sendable {
+public struct Chapter: Identifiable, Hashable, Sendable, Codable {
     public let id: UUID
     public let title: String
     public let startTime: TimeInterval  // seconds from the start

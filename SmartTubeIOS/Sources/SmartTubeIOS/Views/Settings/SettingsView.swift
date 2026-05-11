@@ -157,6 +157,8 @@ public struct SettingsView: View {
                 .accessibilityIdentifier("settings.pipToggle")
             Toggle("In-App Mini Player", isOn: $store.settings.miniPlayerEnabled)
                 .accessibilityIdentifier("settings.miniPlayerToggle")
+            Toggle("Audio Only", isOn: $store.settings.audioOnlyMode)
+                .accessibilityIdentifier("settings.audioOnlyToggle")
             #endif
         }
     }
@@ -170,6 +172,8 @@ public struct SettingsView: View {
                 Text("Enabled").tag(AppSettings.HistoryState.enabled)
                 Text("Disabled").tag(AppSettings.HistoryState.disabled)
             }
+            Toggle("Force IPv4 (VPN users)", isOn: $store.settings.forceIPv4)
+                .accessibilityIdentifier("settings.forceIPv4Toggle")
         }
     }
 
