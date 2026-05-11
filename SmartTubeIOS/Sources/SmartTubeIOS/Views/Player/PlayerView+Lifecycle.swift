@@ -1,0 +1,604 @@
+import SwiftUI
+import AVFoundation
+import AVKit
+import SmartTubeIOSCore
+import os
+#if canImport(UIKit)
+import UIKit
+#endif
+
+private let swipeLog = CrashlyticsLogger(category: "Player")
+
+// MARK: - PlayerView Lifecycle
+extension PlayerView {
+
+    // MARK: - Full player body with lifecycle modifiers
+    //
+    // Extracted from body so the compiled symbol for `body` shrinks from ~16 KB to ~100 bytes.
+    // All lifecycle wiring (onAppear, onChange, tvOS focus, navigation, alerts) lives here
+    // as its own compiled function, keeping the type tree out of PlayerView.body.
+    var bodyWithLifecycleModifiers: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                #if os(iOS)
+                // FullScreenPlayerLayerView: wraps PersistentPlayerHostView so the AVPlayerLayer
+                // survives PlayerView dismiss/re-present cycles (mini-player feature).
+                FullScreenPlayerLayerView(
+                    hostView: playerState.playerHostView,
+                    videoGravity: store.settings.videoGravityMode.avGravity
+                )
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+                #elseif os(tvOS)
+                // PlayerAVLayerView: bare AVPlayerLayer without AVPlayerViewController.
+                // AVPlayerViewController (VideoPlayer) dominates the UIKit accessibility
+                // tree, making all overlaid SwiftUI elements invisible to XCUITest.
+                PlayerAVLayerView(player: vm.player, videoGravity: store.settings.videoGravityMode.avGravity)
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+                #else
+                Color.black.ignoresSafeArea()
+                #endif
+
+                #if os(iOS)
+                // Horizontal swipe layer: left → next video, right → previous video.
+                // Uses UIKit-level UIPanGestureRecognizer so it fires above AVPlayerLayer.
+                PlayerSwipeGestureOverlay(
+                    onSwipeLeft: {
+                        swipeLog.debug("[swipe-overlay] onSwipeLeft — isTransitioning=\(isTransitioning) isScrubbing=\(vm.isScrubbing) controlsVisible=\(vm.controlsVisible) hasNext=\(vm.hasNext)")
+                        guard !isTransitioning else { return }
+                        if vm.hasNext { performHorizontalTransition(direction: -1, screenWidth: geo.size.width) { vm.playNext() } }
+                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { slideOffset = 0 } }
+                    },
+                    onSwipeRight: {
+                        swipeLog.debug("[swipe-overlay] onSwipeRight — isTransitioning=\(isTransitioning) isScrubbing=\(vm.isScrubbing) controlsVisible=\(vm.controlsVisible) hasPrevious=\(vm.hasPrevious)")
+                        guard !isTransitioning else { return }
+                        if vm.hasPrevious { performHorizontalTransition(direction: 1, screenWidth: geo.size.width) { vm.playPrevious() } }
+                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { slideOffset = 0 } }
+                    },
+                    onTap: {
+                        // Suppress toggle-controls when end cards are active — taps belong to the cards.
+                        if !vm.hasVisibleEndCards { vm.toggleControls() }
+                    },
+                    onDoubleTap: { normalizedX in
+                        if normalizedX < 1.0 / 3.0 {
+                            vm.seekRelative(seconds: -Double(store.settings.seekBackSeconds))
+                            seekToastMessage = "← \(store.settings.seekBackSeconds)s"
+                        } else if normalizedX > 2.0 / 3.0 {
+                            vm.seekRelative(seconds: Double(store.settings.seekForwardSeconds))
+                            seekToastMessage = "\(store.settings.seekForwardSeconds)s →"
+                        } else {
+                            let newMode: AppSettings.VideoGravityMode =
+                                store.settings.videoGravityMode == .fit ? .fill : .fit
+                            store.settings.videoGravityMode = newMode
+                            scaleToast = newMode == .fill ? "Fill" : "Fit"
+                            seekToastMessage = newMode == .fill ? "Fill" : "Fit"  // diagnostic: also set seekToast
+                        }
+                    },
+                    onTwoFingerTap: { vm.toggleStatsForNerds() },
+                    onPanChanged: { dx in
+                        guard !isTransitioning else { return }
+                        if (dx < 0 && vm.hasNext) || (dx > 0 && vm.hasPrevious) {
+                            slideOffset = dx
+                        } else {
+                            slideOffset = dx * 0.15
+                        }
+                    },
+                    onSwipeCancelled: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { slideOffset = 0 }
+                    },
+                    onLongPressStart: { vm.beginHoldSpeed() },
+                    onLongPressEnd:   { vm.endHoldSpeed() },
+                    onSwipeDown: { store.settings.miniPlayerEnabled ? playerState.minimize() : playerState.stop() },
+                    // Disabled during scrubbing so the Slider can claim touches uncontested.
+                    // Also disabled when controls are visible so SwiftUI buttons (Menu, etc.)
+                    // receive touches directly without UIKit gesture interference.
+                    isEnabled: !vm.isScrubbing && !vm.controlsVisible
+                )
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+                #endif
+
+                // Loading spinner
+                if vm.isLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .scaleEffect(1.5)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: vm.isLoading)
+                        .allowsHitTesting(false)
+                }
+
+                // Hold-to-speed badge — shown while user long-presses to boost to 2×
+                #if os(iOS) || os(tvOS)
+                if vm.isHoldingToSpeed {
+                    HoldSpeedBadge()
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        .animation(.easeOut(duration: 0.15), value: vm.isHoldingToSpeed)
+                }
+                #endif
+
+                // Custom overlay controls
+                if vm.controlsVisible {
+                    makeControlsOverlay(size: geo.size, safeAreaInsets: geo.safeAreaInsets)
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.25), value: vm.controlsVisible)
+                        #if os(iOS)
+                        // Allow horizontal swipe navigation even when the controls overlay is
+                        // on screen.  .simultaneousGesture fires alongside button taps so the
+                        // controls remain fully interactive; only clear horizontal drags
+                        // (abs(dx) > abs(dy), distance > 50 pt) trigger navigation.
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 50, coordinateSpace: .global)
+                                .onEnded { value in
+                                    let dx = value.translation.width
+                                    let dy = value.translation.height
+                                    guard !isTransitioning, !vm.isScrubbing else { return }
+                                    // Swipe-down → minimize to mini-player (or stop if disabled)
+                                    if dy > 50, abs(dy) > abs(dx) {
+                                        store.settings.miniPlayerEnabled ? playerState.minimize() : playerState.stop()
+                                        return
+                                    }
+                                    guard abs(dx) > abs(dy) else { return }
+                                    if dx < 0, vm.hasNext {
+                                        performHorizontalTransition(direction: -1, screenWidth: geo.size.width) { vm.playNext() }
+                                    } else if dx > 0, vm.hasPrevious {
+                                        performHorizontalTransition(direction: 1, screenWidth: geo.size.width) { vm.playPrevious() }
+                                    }
+                                }
+                        )
+                        #endif
+                }
+
+                // Error banner
+                if let err = vm.error {
+                    errorBanner(err)
+                }
+
+                // SponsorBlock skip toast
+                sponsorSkipToast
+
+                // Caption cue overlay — shown when a track is selected and a cue is active
+                #if !os(tvOS)
+                if let cue = vm.currentCaptionCue {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        CaptionCueView(text: cue.text)
+                            .padding(.bottom, 72)
+                    }
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                }
+                #endif
+
+                // End cards — shown in the final seconds of a video.
+                // Displayed regardless of controls visibility, matching official YouTube behaviour.
+                #if !os(tvOS)
+                if !vm.endCards.isEmpty {
+                    EndCardOverlay(
+                        cards: vm.endCards,
+                        currentTime: vm.currentTime,
+                        onSelect: { card in
+                            guard let videoId = card.videoId else { return }
+                            let video = Video(
+                                id: videoId,
+                                title: card.title,
+                                channelTitle: "",
+                                thumbnailURL: card.thumbnailURL
+                            )
+                            vm.load(video: video)
+                        }
+                    )
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.25), value: vm.controlsVisible)
+                }
+                #endif
+
+                // Stats for Nerds overlay (toggled by two-finger tap)
+                if vm.statsForNerdsVisible {
+                    StatsForNerdsOverlay(snapshot: vm.statsSnapshot)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: vm.statsForNerdsVisible)
+                }
+
+                // Picker / sheet overlays — see PlayerView+Overlays.swift
+                overlayStack
+            }
+            .offset(x: slideOffset)
+        }
+        .background(Color.black.ignoresSafeArea())
+        #if os(iOS)
+        .toast(message: $scaleToast)
+        .toast(message: $seekToastMessage)
+        #endif
+        #if os(tvOS)
+        // When no overlay is open, the outer view is the exclusive focus target and
+        // handles all remote input via onMoveCommand / onTapGesture.
+        // When an overlay (more menu, quality, speed, sleep timer) is visible, focus is
+        // yielded so the overlay's buttons are reachable by the Siri Remote.
+        // `.focusScope` + `.prefersDefaultFocus` ensure the ZStack actively claims
+        // default focus when pushed via NavigationStack, rather than waiting for the
+        // focus engine to pick a child element or leaving focus on the previous screen.
+        .focusScope(playerBodyNamespace)
+        .prefersDefaultFocus(in: playerBodyNamespace)
+        .focusable(!isAnyOverlayVisible)
+        .focused($playerFocused)
+        .modifier(ConditionalMoveCommand(enabled: !isAnyOverlayVisible) { direction in
+            swipeLog.debug("[tv] onMoveCommand dir=\(String(describing: direction)) isTransitioning=\(isTransitioning) highlighted=\(String(describing: highlightedControl))")
+            guard !isTransitioning else { return }
+            if let current = highlightedControl {
+                // Controls-nav mode: move the highlight between buttons.
+                highlightedControl = tvNextControl(from: current, direction: direction)
+                vm.showControls()
+            } else if vm.controlsVisible {
+                // Controls visible but nav not started yet.
+                // Left/right seeks directly (Siri Remote gen 1 edge-tap and D-pad seek UX);
+                // up/down enters control-navigation mode so the user can reach other buttons.
+                switch direction {
+                case .left:  vm.seekRelative(seconds: -Double(store.settings.seekBackSeconds))
+                case .right: vm.seekRelative(seconds: Double(store.settings.seekForwardSeconds))
+                default:
+                    highlightedControl = .playPause
+                    vm.showControls()
+                }
+            } else {
+                // Controls hidden: left/right seek, up/down shows controls.
+                switch direction {
+                case .left:  vm.seekRelative(seconds: -10)
+                case .right: vm.seekRelative(seconds: 10)
+                default:     vm.showControls(); highlightedControl = .playPause
+                }
+            }
+        })
+        .onTapGesture {
+            swipeLog.notice("[tv] onTapGesture (select) — isAnyOverlayVisible=\(isAnyOverlayVisible) highlighted=\(String(describing: highlightedControl)) controlsVisible=\(vm.controlsVisible)")
+            guard !isAnyOverlayVisible else { return }
+            if let current = highlightedControl {
+                tvActivateControl(current)
+            } else if vm.controlsVisible {
+                highlightedControl = .playPause
+                vm.showControls()
+            } else {
+                vm.showControls()
+                highlightedControl = .playPause
+            }
+        }
+        .onPlayPauseCommand { vm.togglePlayPause() }
+        .onExitCommand {
+            swipeLog.notice("[tv] onExitCommand — showMoreMenu=\(showMoreMenu) showQuality=\(showQualityPicker) showSpeed=\(showSpeedPicker) showSleep=\(showSleepTimerPicker) highlighted=\(String(describing: highlightedControl)) controlsVisible=\(vm.controlsVisible)")
+            // Dismiss any open overlay first — Menu/Back is the tvOS dismiss convention.
+            if showMoreMenu      { showMoreMenu = false; return }
+            if showQualityPicker { showQualityPicker = false; return }
+            if showSpeedPicker   { showSpeedPicker = false; return }
+            if showSleepTimerPicker { showSleepTimerPicker = false; return }
+            if highlightedControl != nil {
+                // Esc/Menu from nav mode → exit nav mode, controls stay until timer.
+                highlightedControl = nil
+            } else if vm.controlsVisible {
+                vm.toggleControls()
+            } else {
+                vm.stop()
+                dismiss()
+            }
+        }
+        .onChange(of: playerFocused) { _, focused in
+            swipeLog.notice("[tv] playerFocused changed → \(focused) isAnyOverlayVisible=\(isAnyOverlayVisible)")
+        }
+        .onChange(of: showMoreMenu) { _, visible in
+            swipeLog.notice("[tv] showMoreMenu changed → \(visible) isAnyOverlayVisible=\(isAnyOverlayVisible) playerFocused=\(playerFocused)")
+            if visible {
+                // prefersDefaultFocus is consulted only when focus ENTERS a scope naturally.
+                // Since the overlay opens programmatically, we must explicitly route focus to
+                // the speed row so the Siri Remote Select button works immediately.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000) // one render cycle (~50 ms)
+                    moreMenuFocusedRow = .speed
+                    swipeLog.notice("[tv] moreMenuFocusedRow set → .speed")
+                }
+            } else {
+                moreMenuFocusedRow = nil
+            }
+        }
+        .onChange(of: showSpeedPicker) { _, visible in
+            swipeLog.notice("[tv] showSpeedPicker changed → \(visible)")
+            if visible {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    speedPickerFocused = true
+                    swipeLog.notice("[tv] speedPickerFocused set → true")
+                }
+            }
+        }
+        .onChange(of: showSleepTimerPicker) { _, visible in
+            swipeLog.notice("[tv] showSleepTimerPicker changed → \(visible)")
+            if visible {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    sleepTimerPickerFocused = true
+                    swipeLog.notice("[tv] sleepTimerPickerFocused set → true")
+                }
+            }
+        }
+        .onChange(of: vm.controlsVisible) { _, visible in
+            swipeLog.debug("[tv] controlsVisible changed → \(visible) highlighted=\(String(describing: highlightedControl)) isAnyOverlayVisible=\(isAnyOverlayVisible)")
+            if !visible {
+                highlightedControl = nil
+                // Only reclaim player focus when no overlay is open.
+                // focusScope(moreMenuNamespace) keeps focus inside the menu when
+                // controls hide, so no re-assertion is needed (and re-asserting
+                // would steal focus back from whichever row the user navigated to).
+                if !isAnyOverlayVisible {
+                    playerFocused = true
+                }
+            }
+        }
+        .onChange(of: isAnyOverlayVisible) { _, overlayVisible in
+            swipeLog.notice("[tv] isAnyOverlayVisible changed → \(overlayVisible) — moreMenu=\(showMoreMenu) quality=\(showQualityPicker) speed=\(showSpeedPicker) sleep=\(showSleepTimerPicker)")
+            if overlayVisible {
+                // Pause the controls auto-hide timer so transport controls stay
+                // visible behind the overlay while it is open.
+                vm.cancelControlsHide()
+            } else {
+                // Overlay dismissed — reclaim focus and clear nav state.
+                highlightedControl = nil
+                playerFocused = true
+            }
+        }
+        #endif
+        #if os(iOS)
+        .navigationBarHidden(true)
+        .statusBarHidden(true)
+        .toolbar(.hidden, for: .tabBar)
+        #elseif os(tvOS)
+        .toolbar(.hidden, for: .tabBar)
+        #endif
+        // Always-visible title badge so XCUITest can read the current video title
+        // without waiting for the controls overlay to be shown.
+        // Also provides an always-accessible back button for UI automation.
+        .overlay(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                Button {
+                    #if os(iOS)
+                    swipeLog.notice("[PlayerView] backButton tapped — miniPlayerEnabled=\(store.settings.miniPlayerEnabled) presentation=\(String(describing: playerState.presentation))")
+                    if store.settings.miniPlayerEnabled { playerState.minimize() } else { playerState.stop() }
+                    swipeLog.notice("[PlayerView] backButton — done, presentation=\(String(describing: playerState.presentation))")
+                    #else
+                    vm.stop(); withAnimation(.none) { dismiss() }
+                    #endif
+                } label: {
+                    Color.clear.frame(width: 60, height: 60)
+                }
+                .accessibilityIdentifier("player.backButton")
+                #if os(tvOS)
+                .buttonStyle(.plain)
+                .focusable(false)
+                #endif
+                Text(vm.playerInfo?.video.title ?? video.title)
+                    .font(.caption)
+                    .opacity(0)   // visually invisible (including emoji), accessible
+                    .accessibilityIdentifier("player.titleLabel")
+                    .allowsHitTesting(false)
+            }
+            #if !os(tvOS)
+            .padding(.top, 60)
+            #endif
+        }
+        .onAppear {
+            swipeLog.notice("[PlayerView] onAppear id=\(video.id)")
+            isVisible = true
+            #if os(tvOS)
+            playerFocused = true
+            #endif
+            #if os(iOS)
+            swipeLog.notice("[orientation] onAppear — calling beginGeneratingDeviceOrientationNotifications")
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            let rawOrientation = UIDevice.current.orientation
+            let physicallyLandscape = rawOrientation.isLandscape
+            let alwaysPlayOnAppear = store.settings.landscapeAlwaysPlay
+            let isLandscapeOnAppear = alwaysPlayOnAppear || physicallyLandscape
+            vm.isLandscape = isLandscapeOnAppear
+            swipeLog.notice("[orientation] onAppear — rawOrientation=\(rawOrientation.rawValue) physicallyLandscape=\(physicallyLandscape) landscapeAlwaysPlay=\(alwaysPlayOnAppear) → isLandscape=\(isLandscapeOnAppear)")
+            if alwaysPlayOnAppear {
+                swipeLog.notice("[orientation] onAppear — landscapeAlwaysPlay=true, setting playerIsActive=true")
+                OrientationManager.shared.playerIsActive = true
+            } else {
+                swipeLog.notice("[orientation] onAppear — landscapeAlwaysPlay=false, playerIsActive remains false")
+            }
+            #endif
+            #if os(iOS)
+            // On iOS, PlayerStateStore.play(video:) already called vm.load() before
+            // presenting. Only sync current user preferences; the video is already loading.
+            vm.setPlaybackSpeed(store.settings.playbackSpeed)
+            vm.updateSettings(store.settings)
+            vm.updateAuthToken(authService.accessToken)
+            #else
+            if vm.currentVideoId == video.id {
+                // Spurious appear (e.g. a sheet temporarily covered us) — only resume
+                // if playback was active before the view disappeared, so an intentional
+                // user pause is not overridden (e.g. pause → background → foreground).
+                if vm.wasPlayingBeforeSuspend {
+                    vm.resume()
+                }
+            } else {
+                vm.load(video: video)
+            }
+            vm.setPlaybackSpeed(store.settings.playbackSpeed)
+            vm.updateSettings(store.settings)
+            vm.updateAuthToken(authService.accessToken)
+            // UI testing only: force-show controls and/or the more menu so tests can
+            // verify focus routing without relying on gesture delivery, which is
+            // unreliable on the tvOS simulator.
+            // Called AFTER load() so it runs after controlsVisible is reset to false.
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-show-controls") {
+                swipeLog.notice("[tv] --uitesting-show-controls launch arg detected — calling showControls()")
+                vm.showControls()
+            }
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-open-more-menu") {
+                swipeLog.notice("[tv] --uitesting-open-more-menu launch arg detected — scheduling showMoreMenu=true after focus settles")
+                Task { @MainActor in
+                    // Brief delay lets the player body establish focus (via .prefersDefaultFocus)
+                    // before the overlay opens, so moreMenuNamespace can attract focus correctly.
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    swipeLog.notice("[tv] --uitesting-open-more-menu: setting showMoreMenu=true")
+                    showMoreMenu = true
+                }
+            }
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-open-sleep-timer-picker") {
+                swipeLog.notice("[tv] --uitesting-open-sleep-timer-picker launch arg detected — scheduling showSleepTimerPicker=true")
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    swipeLog.notice("[tv] --uitesting-open-sleep-timer-picker: setting showSleepTimerPicker=true")
+                    showSleepTimerPicker = true
+                }
+            }
+            #endif
+        }
+        .onDisappear {
+            swipeLog.notice("[PlayerView] onDisappear id=\(video.id) isInBackground=\(isInBackground)")
+            isVisible = false
+            guard !isInBackground else { return }
+            #if os(iOS)
+            let rawOrientationOnDisappear = UIDevice.current.orientation
+            swipeLog.notice("[orientation] onDisappear — rawOrientation=\(rawOrientationOnDisappear.rawValue) isLandscape was \(vm.isLandscape), playerIsActive was \(OrientationManager.shared.playerIsActive)")
+            OrientationManager.shared.playerIsActive = false
+            vm.isLandscape = false
+            swipeLog.notice("[orientation] onDisappear — playerIsActive=false isLandscape=false, calling endGeneratingDeviceOrientationNotifications")
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            // Skip suspend when minimizing to mini-player — playback should continue.
+            guard playerState.presentation != .miniPlayer else { return }
+            vm.suspend()
+            #else
+            vm.suspend()
+            #endif
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                isInBackground = true
+                if isVisible { vm.handleBackground() }
+            case .active:
+                isInBackground = false
+                if isVisible { vm.handleForeground() }
+            default:
+                break
+            }
+        }
+        #if os(iOS)
+        // Create the PiP controller the first time the player actually starts
+        // playing — AVPlayer must have a ready item for isPictureInPicturePossible
+        // to ever become true. Creating it at view-appear time (before any item
+        // is loaded) means it stays permanently inert.
+        .onChange(of: vm.isPlaying) { _, playing in
+            guard playing, pipController == nil,
+                  store.settings.pipEnabled,
+                  AVPictureInPictureController.isPictureInPictureSupported() else { return }
+            let pip = AVPictureInPictureController(playerLayer: playerLayer)
+            pip?.canStartPictureInPictureAutomaticallyFromInline = true
+            let delegate = PiPDelegate { active in isPiPActive = active }
+            pip?.delegate = delegate
+            pipDelegate = delegate
+            pipController = pip
+        }
+        // Update isLandscape when the device physically rotates.
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            let orientation = UIDevice.current.orientation
+            swipeLog.notice("[orientation] orientationDidChange — rawValue=\(orientation.rawValue) isValidInterfaceOrientation=\(orientation.isValidInterfaceOrientation) isLandscape=\(orientation.isLandscape) isPortrait=\(orientation.isPortrait)")
+            guard orientation.isValidInterfaceOrientation else {
+                swipeLog.notice("[orientation] orientationDidChange — skipped (not a valid interface orientation, e.g. face-up/face-down/unknown)")
+                return
+            }
+            let alwaysLandscape = store.settings.landscapeAlwaysPlay
+            let physicalLandscape = orientation.isLandscape
+            let newIsLandscape = alwaysLandscape || physicalLandscape
+            let prevIsLandscape = vm.isLandscape
+            let prevPlayerIsActive = OrientationManager.shared.playerIsActive
+            vm.isLandscape = newIsLandscape
+            OrientationManager.shared.playerIsActive = newIsLandscape
+            swipeLog.notice("[orientation] orientationDidChange — landscapeAlwaysPlay=\(alwaysLandscape) physicalLandscape=\(physicalLandscape) isLandscape: \(prevIsLandscape) → \(newIsLandscape) playerIsActive: \(prevPlayerIsActive) → \(newIsLandscape)")
+        }
+        // Keep isLandscape in sync when the user toggles "Landscape Always Play" while
+        // the player is on screen.
+        .onChange(of: store.settings.landscapeAlwaysPlay) { oldValue, alwaysLandscape in
+            let rawOrientation = UIDevice.current.orientation
+            let physicallyLandscape = rawOrientation.isLandscape
+            let newIsLandscape = alwaysLandscape || physicallyLandscape
+            let prevIsLandscape = vm.isLandscape
+            let prevPlayerIsActive = OrientationManager.shared.playerIsActive
+            vm.isLandscape = newIsLandscape
+            OrientationManager.shared.playerIsActive = alwaysLandscape
+            swipeLog.notice("[orientation] landscapeAlwaysPlay: \(oldValue) → \(alwaysLandscape) rawOrientation=\(rawOrientation.rawValue) physicallyLandscape=\(physicallyLandscape) isLandscape: \(prevIsLandscape) → \(newIsLandscape) playerIsActive: \(prevPlayerIsActive) → \(alwaysLandscape)")
+        }
+        #endif
+        .navigationDestination(item: $channelDestination) { dest in
+            ChannelView(channelId: dest.channelId)
+        }
+        #if !os(tvOS)
+        .onChange(of: downloadService.state) { _, newState in
+            switch newState {
+            case .done:
+                let title = vm.playerInfo?.video.title ?? video.title
+                downloadAlertItem = DownloadAlertItem(
+                    title: String(localized: "Saved to Gallery", bundle: .module),
+                    message: String(localized: "\"\(title)\" has been saved to your Photos library.", bundle: .module)
+                )
+                downloadService.reset()
+            case .failed(let reason):
+                downloadAlertItem = DownloadAlertItem(
+                    title: String(localized: "Download Failed", bundle: .module),
+                    message: reason
+                )
+                downloadService.reset()
+            default:
+                break
+            }
+        }
+        .alert(item: $downloadAlertItem) { item in
+            Alert(title: Text(item.title), message: Text(item.message), dismissButton: .default(Text("OK")))
+        }
+        #endif
+    }
+
+    // MARK: - Controls overlay
+
+    /// Constructs the platform-appropriate `PlayerControlsOverlay` for this view.
+    @ViewBuilder
+    private func makeControlsOverlay(size: CGSize, safeAreaInsets: EdgeInsets) -> some View {
+        #if os(iOS)
+        PlayerControlsOverlay(
+            size: size,
+            safeAreaInsets: safeAreaInsets,
+            video: video,
+            controlScale: controlScale,
+            showMoreMenu: $showMoreMenu,
+            channelDestination: $channelDestination,
+            pipController: $pipController,
+            isPiPActive: $isPiPActive
+        )
+        #elseif os(tvOS)
+        PlayerControlsOverlay(
+            size: size,
+            safeAreaInsets: safeAreaInsets,
+            video: video,
+            controlScale: controlScale,
+            showMoreMenu: $showMoreMenu,
+            channelDestination: $channelDestination,
+            vm: vm,
+            highlightedControl: $highlightedControl
+        )
+        #else
+        PlayerControlsOverlay(
+            size: size,
+            safeAreaInsets: safeAreaInsets,
+            video: video,
+            controlScale: controlScale,
+            showMoreMenu: $showMoreMenu,
+            channelDestination: $channelDestination,
+            vm: vm
+        )
+        #endif
+    }
+}
