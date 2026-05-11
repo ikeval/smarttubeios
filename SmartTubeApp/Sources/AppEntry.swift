@@ -148,9 +148,12 @@ struct AppEntry: App {
         #else
         WindowGroup {
             if isShortsUITesting {
-                ShortsPlayerView(videos: AppEntry.shortsForUITesting(), startIndex: 0, api: InnerTubeAPI())
+                ShortsPlayerView(videos: AppEntry.shortsForUITesting(), startIndex: 0, api: api)
                     .environment(authService)
                     .environment(settingsStore)
+                    .environment(\.innerTubeAPI, api)
+                    .environment(playerStateStore)
+                    .environment(cardDownloadService)
             } else {
                 RootView()
                     .environment(authService)

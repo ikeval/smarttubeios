@@ -80,6 +80,24 @@ extension PlaybackViewModel {
         hlsVariantURLs = [:]
         phase2Task?.cancel()
         phase2Task = nil
+
+        // UI-testing synchronous inject for related videos.
+        // Checked here (before the Task is created) so that hasNext = true is set
+        // before the first XCTest accessibility-tree snapshot.  The async path in
+        // loadAsync contains the same check and is kept as a belt-and-suspenders
+        // guard in case load() is ever called without going through this entry point.
+        if let relArg = ProcessInfo.processInfo.arguments.first(where: {
+            $0.hasPrefix("--uitesting-inject-related-video-ids=")
+        }) {
+            let raw = String(relArg.dropFirst("--uitesting-inject-related-video-ids=".count))
+            let ids = raw.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+            if !ids.isEmpty {
+                relatedVideos = ids.map { Video(id: $0, title: $0, channelTitle: "Test Channel") }
+                hasNext = true
+                playerLog.notice("UI-testing sync inject: set \(ids.count) related videos before Task")
+            }
+        }
+
         loadTask = Task { await loadAsync(video: video) }
     }
 

@@ -37,6 +37,7 @@ public struct ChannelView: View {
             if vm.isLoading && vm.channel == nil {
                 ProgressView("Loading channel…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("channel.view")
             } else {
                 content
             }
@@ -134,6 +135,7 @@ public struct ChannelView: View {
             }
         }
         .refreshable { vm.load(channelId: channelId) }
+        .accessibilityIdentifier("channel.view")
     }
 
     // MARK: - Filtered data
