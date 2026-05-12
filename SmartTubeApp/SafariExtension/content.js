@@ -1,7 +1,9 @@
 // content.js — SmartTube Safari Extension
 //
-// Intercepts YouTube watch/shorts URLs in Safari and redirects to the
-// smarttube://video/<id> deep link before the page renders.
+// Detects YouTube watch/shorts URLs and sends the video ID to the background
+// service worker, which navigates the tab to smarttube://video/<id> via
+// browser.tabs.update. Direct window.location navigation of custom URL schemes
+// is blocked by Safari without a user gesture, so we delegate to the background.
 //
 // Mirrors the URL formats supported by YouTubeLinkHandler.videoID(from:):
 //   - https://www.youtube.com/watch?v=VIDEO_ID
@@ -41,6 +43,6 @@
   }
 
   if (videoID && /^[A-Za-z0-9_-]{11}$/.test(videoID)) {
-    window.location.href = 'smarttube://video/' + videoID;
+    browser.runtime.sendMessage({ action: 'openInSmartTube', videoID: videoID });
   }
 })();

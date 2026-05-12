@@ -124,19 +124,6 @@ struct PlayerControlsOverlay: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("player.pipButton")
                 }
-                // Landscape lock button — tap to lock/unlock landscape orientation
-                Button {
-                    isLandscapeLocked.toggle()
-                } label: {
-                    Image(systemName: isLandscapeLocked ? "lock.rotation" : "lock.rotation.open")
-                        .font(.system(size: 18 * controlScale))
-                        .foregroundStyle(.white)
-                        .padding(8)
-                        .background(.black.opacity(0.4))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("player.landscapeLockButton")
                 // AirPlay route picker
                 AirPlayRoutePickerView()
                     .frame(width: 40, height: 40)
@@ -278,6 +265,36 @@ struct PlayerControlsOverlay: View {
                         .disabled(!vm.hasNextChapter || vm.isLoading)
                         .accessibilityIdentifier("player.nextChapterBtn")
                     }
+
+                    #if os(iOS)
+                    // Landscape lock button
+                    Button {
+                        isLandscapeLocked.toggle()
+                    } label: {
+                        Image(systemName: isLandscapeLocked ? "lock.rotation" : "lock.rotation.open")
+                            .font(.system(size: 18 * controlScale))
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.black.opacity(0.4))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("player.landscapeLockButton")
+
+                    // Audio-only button
+                    Button {
+                        store.settings.audioOnlyMode.toggle()
+                    } label: {
+                        Image(systemName: store.settings.audioOnlyMode ? AppSymbol.audioOnly : "video")
+                            .font(.system(size: 18 * controlScale))
+                            .foregroundStyle(store.settings.audioOnlyMode ? Color.accentColor : .white)
+                            .padding(8)
+                            .background(.black.opacity(0.4))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("player.audioOnlyButton")
+                    #endif
 
                     // Next video button
                     Button {

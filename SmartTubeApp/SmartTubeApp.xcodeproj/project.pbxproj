@@ -12,6 +12,7 @@
 		1A2B3C4D5E6F1A2B3C4D5E63 /* TVFocusChainUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F1A2B3C4D5E62 /* TVFocusChainUITests.swift */; };
 		494A17316084B602873D7C05 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AE55B486AFD7F51FEF1874FF /* Assets.xcassets */; };
 		673C1D012F7F20340021583B /* Launch Screen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 673C1D002F7F20340021583B /* Launch Screen.storyboard */; };
+		67A5E80B2FB3932400C53D61 /* SafariExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 67A5E7F32FB3932400C53D61 /* SafariExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		67AEAB0F2FAF96BC00820F4D /* VideoDownloadUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67AEAB0E2FAF96BC00820F4D /* VideoDownloadUITests.swift */; };
 		67B1B1732FA5384E0059D847 /* VideoPlaybackRegressionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B1B1722FA5384E0059D847 /* VideoPlaybackRegressionUITests.swift */; };
 		67E2B0742FAD1BBE005F70E6 /* MiniPlayerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67E2B0732FAD1BBE005F70E6 /* MiniPlayerUITests.swift */; };
@@ -78,6 +79,13 @@
 			remoteGlobalIDString = 5A4C56D3A7C36BE68C3C3CE0;
 			remoteInfo = SmartTube;
 		};
+		67A5E8092FB3932400C53D61 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CF958B49C3E80CFAE3F092E3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 67A5E7F22FB3932400C53D61;
+			remoteInfo = SafariExtension;
+		};
 		AA01000000000000000000AF /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = CF958B49C3E80CFAE3F092E3 /* Project object */;
@@ -96,6 +104,7 @@
 			files = (
 				D9B2E782B8D7E9E750193022 /* SmartTubeDownloadWidget.appex in Embed Foundation Extensions */,
 				AA01000000000000000000A6 /* SmartTubeShareExtension.appex in Embed Foundation Extensions */,
+				67A5E80B2FB3932400C53D61 /* SafariExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -110,6 +119,7 @@
 		43AC502830145DD05002B5A2 /* PlaylistsNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsNavigationUITests.swift; sourceTree = "<group>"; };
 		46FAE8C7AB41057B392DF731 /* DownloadLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DownloadLiveActivity.swift; sourceTree = "<group>"; };
 		673C1D002F7F20340021583B /* Launch Screen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = "Launch Screen.storyboard"; sourceTree = "<group>"; };
+		67A5E7F32FB3932400C53D61 /* SafariExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SafariExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		67AEAB0E2FAF96BC00820F4D /* VideoDownloadUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDownloadUITests.swift; sourceTree = "<group>"; };
 		67B1B1722FA5384E0059D847 /* VideoPlaybackRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackRegressionUITests.swift; sourceTree = "<group>"; };
 		67E2B0732FAD1BBE005F70E6 /* MiniPlayerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerUITests.swift; sourceTree = "<group>"; };
@@ -157,7 +167,25 @@
 		SE000000000000000000002A /* ShareExtensionE2EUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtensionE2EUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		67A5E80C2FB3932400C53D61 /* Exceptions for "SafariExtension" folder in "SafariExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 67A5E7F22FB3932400C53D61 /* SafariExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		67A5E7F42FB3932400C53D61 /* SafariExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				67A5E80C2FB3932400C53D61 /* Exceptions for "SafariExtension" folder in "SafariExtension" target */,
+			);
+			path = SafariExtension;
+			sourceTree = "<group>";
+		};
 		67E6B67C2F9535CD00CD372F /* Smart Tube */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Smart Tube";
@@ -171,6 +199,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				06412259452CCFBF300F2D4B /* SmartTubeIOS in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		67A5E7F02FB3932400C53D61 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -210,6 +245,7 @@
 				9084B7F6DD70E282DD4342A7 /* Sources */,
 				30B4BA37D4FD93516937E9D9 /* UITests */,
 				67E6B67C2F9535CD00CD372F /* Smart Tube */,
+				67A5E7F42FB3932400C53D61 /* SafariExtension */,
 				5EF0B6AF2643BF476B25C7C0 /* Products */,
 				A6606018E9CE8927C08D84DF /* Frameworks */,
 				3A6CBA986681DD6D6BBFD4EA /* DownloadWidget */,
@@ -285,6 +321,7 @@
 				AA01000000000000000000A3 /* SmartTubeShareExtension.appex */,
 				67E6B67B2F9535CD00CD372F /* Smart Tube.app */,
 				1A2B3C4D5E6F1A2B3C4D5E61 /* SmartTubeTVUITests.xctest */,
+				67A5E7F32FB3932400C53D61 /* SafariExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -384,6 +421,7 @@
 			dependencies = (
 				0FBA651F0825F996F27B7476 /* PBXTargetDependency */,
 				AA01000000000000000000B0 /* PBXTargetDependency */,
+				67A5E80A2FB3932400C53D61 /* PBXTargetDependency */,
 			);
 			name = SmartTube;
 			packageProductDependencies = (
@@ -392,6 +430,28 @@
 			productName = SmartTube;
 			productReference = 6ACA5CEA633CF065619F786C /* SmartTube.app */;
 			productType = "com.apple.product-type.application";
+		};
+		67A5E7F22FB3932400C53D61 /* SafariExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 67A5E80D2FB3932400C53D61 /* Build configuration list for PBXNativeTarget "SafariExtension" */;
+			buildPhases = (
+				67A5E7EF2FB3932400C53D61 /* Sources */,
+				67A5E7F02FB3932400C53D61 /* Frameworks */,
+				67A5E7F12FB3932400C53D61 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				67A5E7F42FB3932400C53D61 /* SafariExtension */,
+			);
+			name = SafariExtension;
+			packageProductDependencies = (
+			);
+			productName = SafariExtension;
+			productReference = 67A5E7F32FB3932400C53D61 /* SafariExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		67E6B67A2F9535CD00CD372F /* Smart Tube */ = {
 			isa = PBXNativeTarget;
@@ -475,6 +535,9 @@
 					5A4C56D3A7C36BE68C3C3CE0 = {
 						ProvisioningStyle = Automatic;
 					};
+					67A5E7F22FB3932400C53D61 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 					67E6B67A2F9535CD00CD372F = {
 						CreatedOnToolsVersion = 26.4;
 					};
@@ -503,6 +566,7 @@
 				AA01000000000000000000A7 /* SmartTubeShareExtension */,
 				67E6B67A2F9535CD00CD372F /* Smart Tube */,
 				1A2B3C4D5E6F1A2B3C4D5E64 /* SmartTubeTVUITests */,
+				67A5E7F22FB3932400C53D61 /* SafariExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -519,6 +583,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		2700A04D56CBFAD56656C383 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		67A5E7F12FB3932400C53D61 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -589,6 +660,13 @@
 			files = (
 				1A2B3C4D5E6F1A2B3C4D5E63 /* TVFocusChainUITests.swift in Sources */,
 				AA1100000000000000000DA2 /* TVPlayerSettingsUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		67A5E7EF2FB3932400C53D61 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -675,6 +753,11 @@
 			isa = PBXTargetDependency;
 			target = 67E6B67A2F9535CD00CD372F /* Smart Tube */;
 			targetProxy = 1A2B3C4D5E6F1A2B3C4D5E69 /* PBXContainerItemProxy */;
+		};
+		67A5E80A2FB3932400C53D61 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 67A5E7F22FB3932400C53D61 /* SafariExtension */;
+			targetProxy = 67A5E8092FB3932400C53D61 /* PBXContainerItemProxy */;
 		};
 		AA01000000000000000000B0 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -803,7 +886,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -861,6 +944,93 @@
 				TEST_TARGET_NAME = SmartTube;
 			};
 			name = Debug;
+		};
+		67A5E80E2FB3932400C53D61 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = SafariExtension/SmartTubeSafariExtension.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 5A4JA438MW;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = SafariExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SafariExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.void.smarttube.app.SafariExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		67A5E80F2FB3932400C53D61 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = SafariExtension/SmartTubeSafariExtension.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 5A4JA438MW;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INFOPLIST_FILE = SafariExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SafariExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.void.smarttube.app.SafariExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
 		};
 		67E6B6832F9535CD00CD372F /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1145,7 +1315,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -1187,6 +1357,15 @@
 			buildConfigurations = (
 				1A2B3C4D5E6F1A2B3C4D5E66 /* Debug */,
 				1A2B3C4D5E6F1A2B3C4D5E67 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		67A5E80D2FB3932400C53D61 /* Build configuration list for PBXNativeTarget "SafariExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				67A5E80E2FB3932400C53D61 /* Debug */,
+				67A5E80F2FB3932400C53D61 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

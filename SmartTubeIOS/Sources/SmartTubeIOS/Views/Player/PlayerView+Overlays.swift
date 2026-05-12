@@ -94,7 +94,9 @@ extension PlayerView {
                     moreMenuLikeDislikeRow
                     moreMenuShareRow
                     moreMenuSleepTimerRow
+                    #if os(tvOS)
                     moreMenuAudioOnlyRow
+                    #endif
                     moreMenuDownloadRow
                     moreMenuCaptionsRow
                     moreMenuAudioTrackRow

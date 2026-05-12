@@ -2,7 +2,9 @@ import XCTest
 
 // MARK: - AudioOnlyMenuRowUITests
 //
-// Verifies the Audio-Only row appears in the player More Menu and toggles the setting.
+// Verifies the Audio-Only button appears in the player on-screen controls (bottom bar)
+// and toggles the setting. The button was moved from the More Menu to the bottom bar
+// in task #41.
 //
 // Network access is required — the player opens a real video via deeplink.
 
@@ -21,57 +23,42 @@ final class AudioOnlyMenuRowUITests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func openPlayerAndMoreMenu(timeout: TimeInterval = 20) throws {
+    private func openPlayer(timeout: TimeInterval = 20) throws {
         app.launchArguments = [
             "--uitesting",
-            "--uitesting-deeplink-video=dQw4w9WgXcQ",
-            "--uitesting-open-more-menu"
+            "--uitesting-deeplink-video=dQw4w9WgXcQ"
         ]
         app.launch()
 
-        let speedRow = app.buttons["player.moreMenu.speedRow"].firstMatch
-        guard speedRow.waitForExistence(timeout: timeout) else {
-            throw XCTSkip("More menu did not open within \(timeout) s — network unavailable or video inaccessible")
+        let playerTitle = app.staticTexts["player.titleLabel"].firstMatch
+        guard playerTitle.waitForExistence(timeout: timeout) else {
+            throw XCTSkip("Player did not open within \(timeout) s — network unavailable or video inaccessible")
         }
+        // Ensure controls are visible by tapping the player
+        app.otherElements["player.view"].firstMatch.tap()
     }
 
     // MARK: - Tests
 
-    /// The Audio-Only row must appear in the player More Menu.
+    /// The Audio-Only button must appear in the player bottom-bar on-screen controls.
     func testAudioOnlyRowExistsInMoreMenu() throws {
-        try openPlayerAndMoreMenu()
+        try openPlayer()
 
-        let audioOnlyRow = app.buttons["player.moreMenu.audioOnlyRow"].firstMatch
-        let scrollView = app.scrollViews["player.moreMenu.scrollView"].firstMatch
-
-        // Scroll down until the row appears or the menu bottom is reached.
-        var found = audioOnlyRow.waitForExistence(timeout: 2)
-        if !found {
-            for _ in 0..<5 {
-                scrollView.swipeUp()
-                if audioOnlyRow.waitForExistence(timeout: 1) { found = true; break }
-            }
-        }
-        XCTAssertTrue(found, "Audio-Only row must be present in the More Menu")
+        let audioOnlyBtn = app.buttons["player.audioOnlyButton"].firstMatch
+        XCTAssertTrue(audioOnlyBtn.waitForExistence(timeout: 5),
+                      "player.audioOnlyButton must be present in the player bottom-bar controls")
     }
 
-    /// Tapping Audio-Only must close the menu without crashing the app.
+    /// Tapping Audio-Only must not crash the app.
     func testAudioOnlyRowToggleDoesNotCrash() throws {
-        try openPlayerAndMoreMenu()
+        try openPlayer()
 
-        let audioOnlyRow = app.buttons["player.moreMenu.audioOnlyRow"].firstMatch
-        let scrollView = app.scrollViews["player.moreMenu.scrollView"].firstMatch
-
-        var found = audioOnlyRow.waitForExistence(timeout: 2)
-        if !found {
-            for _ in 0..<5 {
-                scrollView.swipeUp()
-                if audioOnlyRow.waitForExistence(timeout: 1) { found = true; break }
-            }
+        let audioOnlyBtn = app.buttons["player.audioOnlyButton"].firstMatch
+        guard audioOnlyBtn.waitForExistence(timeout: 5) else {
+            throw XCTSkip("player.audioOnlyButton not visible — skipping toggle test")
         }
-        guard found else { throw XCTSkip("Audio-Only row not visible — skipping toggle test") }
 
-        audioOnlyRow.tap()
+        audioOnlyBtn.tap()
 
         let player = app.otherElements["player.view"].firstMatch
         XCTAssertTrue(player.waitForExistence(timeout: 5),

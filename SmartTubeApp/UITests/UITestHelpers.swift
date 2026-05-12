@@ -14,12 +14,18 @@ enum UITestHelpers {
     static func tapTab(named label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
         let tabBarButton = app.tabBars.buttons[label]
         if tabBarButton.waitForExistence(timeout: min(timeout, 3)) {
+            let hittablePredicate = NSPredicate(format: "hittable == true")
+            let hittableExpectation = XCTNSPredicateExpectation(predicate: hittablePredicate, object: tabBarButton)
+            _ = XCTWaiter().wait(for: [hittableExpectation], timeout: timeout)
             tabBarButton.tap()
             return
         }
         let sidebarButton = app.buttons[label].firstMatch
         XCTAssertTrue(sidebarButton.waitForExistence(timeout: timeout),
                       "'\(label)' navigation item not found in tab bar or sidebar")
+        let hittablePredicate = NSPredicate(format: "hittable == true")
+        let hittableExpectation = XCTNSPredicateExpectation(predicate: hittablePredicate, object: sidebarButton)
+        _ = XCTWaiter().wait(for: [hittableExpectation], timeout: timeout)
         sidebarButton.tap()
     }
 

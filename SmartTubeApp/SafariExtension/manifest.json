@@ -30,7 +30,7 @@
       "all_frames": false
     }
   ],
-  "permissions": [],
+  "permissions": ["tabs"],
   "background": {
     "service_worker": "background.js"
   }

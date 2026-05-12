@@ -1777,9 +1777,6 @@
         }
       }
     },
-    "Audio Only" : {
-
-    },
     "Audio only — thumbnail" : {
 
     },
@@ -5820,6 +5817,9 @@
 
     },
     "Korean" : {
+
+    },
+    "Landscape Always Play" : {
 
     },
     "Last hour" : {

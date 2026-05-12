@@ -340,4 +340,20 @@ final class SettingsUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground,
                        "App must still be running after back navigation")
     }
+
+    /// Verifies that the audio-only toggle has been removed from the Settings screen
+    /// (it was moved to the in-player controls in task #39; task #40 removes it here).
+    func testAudioOnlyToggleAbsentFromSettings() {
+        openSettings()
+        let form = app.collectionViews.firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5),
+                      "Settings form must be visible")
+        // Scroll through the entire form to ensure the toggle is not present anywhere.
+        for _ in 0..<8 {
+            form.swipeUp()
+        }
+        let toggle = form.switches["settings.audioOnlyToggle"]
+        XCTAssertFalse(toggle.exists,
+                       "settings.audioOnlyToggle must NOT exist in Settings — it was moved to the player overlay (task #39)")
+    }
 }
