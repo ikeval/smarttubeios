@@ -263,7 +263,20 @@ extension PlaybackViewModel {
                     } else if case APIError.unavailable = error, hasAuthToken {
                         playerLog.notice("⚠️ iOS client returned unavailable — retrying with authenticated TV client")
                         do {
-                            info = try await api.fetchPlayerInfoAuthenticated(videoId: video.id)
+                            var tvInfo = try await api.fetchPlayerInfoAuthenticated(videoId: video.id)
+                            // NW-3-FIX: TV client may return no HLS manifest and no adaptive
+                            // streams for DRM/protected or region-locked content
+                            // (hlsURL=nil, bestAdaptiveVideoURL=nil). Attempting to play the
+                            // TV muxed direct URL (itag=18, c=TVHTML5) fails with
+                            // AVFoundationErrorDomain -11828 / NSOSStatusErrorDomain -12847.
+                            // Skip the unnecessary AVPlayer attempt and go straight to the
+                            // Android client.
+                            if tvInfo.hlsURL == nil,
+                               tvInfo.bestAdaptiveVideoURL == nil || tvInfo.bestAdaptiveAudioURL == nil {
+                                playerLog.notice("⚠️ TV client returned no HLS/adaptive streams — falling through to Android client")
+                                tvInfo = try await api.fetchPlayerInfoAndroid(videoId: video.id)
+                            }
+                            info = tvInfo
                         } catch {
                             if case APIError.unavailable = error {
                                 // TV client also returned unavailable / cipher-protected formats.

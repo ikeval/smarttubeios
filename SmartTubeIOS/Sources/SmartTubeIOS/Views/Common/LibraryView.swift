@@ -11,6 +11,7 @@ public struct LibraryView: View {
     @Environment(AuthService.self) private var auth
     @Environment(BrowseViewModel.self) private var browseVM
     @Environment(\.innerTubeAPI) private var api
+    @Environment(SettingsStore.self) private var store
     @State private var selectedSection: LibrarySection = .subscriptions
     @State private var selectedVideo: Video?
     @State private var selectedPlaylist: Video?
@@ -130,6 +131,7 @@ public struct LibraryView: View {
                     emptyLibraryView
                 } else {
                     let videos = browseVM.videoGroups.flatMap { $0.videos }
+                        .filter { !store.settings.hideShorts || !$0.isShort }
                     ScrollView {
                         // KVO reader — always present; writes to ScrollOffsetStore
                         // without triggering SwiftUI re-renders on every scroll tick.

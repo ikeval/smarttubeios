@@ -10,6 +10,7 @@ import Foundation
 /// - `https://www.youtube.com/shorts/VIDEO_ID`
 /// - `https://www.youtube.com/v/VIDEO_ID`
 /// - `https://m.youtube.com/watch?v=VIDEO_ID`
+/// - `https://music.youtube.com/watch?v=VIDEO_ID`
 /// - `youtube://watch?v=VIDEO_ID`
 /// - `youtube://VIDEO_ID`
 /// - `vnd.youtube://VIDEO_ID`
@@ -28,7 +29,8 @@ public enum YouTubeLinkHandler {
         // Web URLs
         guard scheme == "https" || scheme == "http" else { return nil }
         guard let host = url.host?.lowercased() else { return nil }
-        guard host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com" || host == "youtu.be" else {
+        guard host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com"
+                || host == "youtu.be" || host == "music.youtube.com" else {
             return nil
         }
 

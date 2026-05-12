@@ -140,7 +140,15 @@ struct MainTabView: View {
         let _ = rootLog.notice("[MainTabView] body re-render — presentation=\(String(describing: playerState.presentation)) fullScreenVideo=\(fullScreenVideo?.id ?? "nil")")
         let fullScreenBinding = Binding<Video?>(
             get: { fullScreenVideo },
-            set: { if $0 == nil { playerState.minimize() } }
+            set: { newValue in
+                // Only transition to mini player when the cover is dismissed while
+                // presentation is still .fullScreen. If stop() already moved us to
+                // .hidden, the async onDismiss callback must not resurrect the mini
+                // player by calling minimize() — that is the race condition that
+                // caused the mini-player X button to unexpectedly restore fullscreen.
+                guard newValue == nil, playerState.presentation == .fullScreen else { return }
+                playerState.minimize()
+            }
         )
         #endif
         TabView(selection: $selectedTab) {

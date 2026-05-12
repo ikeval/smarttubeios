@@ -50,6 +50,7 @@ public struct PlayerView: View {
     @State var isPiPActive: Bool = false
     var playerLayer: AVPlayerLayer { playerState.playerHostView.playerLayer }
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.verticalSizeClass) var verticalSizeClass
     #endif
     /// True while the app is backgrounded. Prevents `onDisappear` from calling
     /// `suspend()` when iOS fires it as a side-effect of backgrounding rather

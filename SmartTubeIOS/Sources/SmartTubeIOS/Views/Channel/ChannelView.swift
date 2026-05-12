@@ -142,7 +142,7 @@ public struct ChannelView: View {
 
     private var filteredVideos: [Video] {
         switch filter {
-        case .all:    return vm.videos
+        case .all:    return vm.videos.filter { !store.settings.hideShorts || !$0.isShort }
         case .shorts: return vm.videos.filter { $0.isShort }
         }
     }

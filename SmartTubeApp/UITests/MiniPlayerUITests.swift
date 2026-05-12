@@ -226,4 +226,45 @@ final class MiniPlayerUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground,
                        "App must be running after re-opening the player")
     }
+
+    // MARK: - Regression: mini player X must not restore fullscreen (task #34)
+
+    /// Regression test for the race condition where tapping the mini-player X button
+    /// immediately after minimising from fullscreen caused the fullscreen cover to
+    /// reappear.
+    ///
+    /// Root cause: the async `onDismiss` callback from the UIKit dismiss animation
+    /// (triggered by `minimize()`) fired after `stop()` had already moved
+    /// `presentation` to `.hidden`. The binding setter `set: { minimize() }` fired
+    /// and called `minimize()` a second time, restoring the mini-player —
+    /// which SwiftUI interpreted as a request to re-present the fullscreen cover.
+    ///
+    /// Fix: the binding setter now guards on `presentation == .fullScreen` before
+    /// calling `minimize()`, so a stale `onDismiss` after `stop()` is a no-op.
+    func testMiniPlayerCloseDoesNotRestoreFullScreen() throws {
+        try openPlayerFromHome()
+
+        // Show controls so the back button is hittable.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(backButton.waitForExistence(timeout: 5))
+
+        // Minimize to mini player.
+        backButton.tap()
+        XCTAssertTrue(miniPlayerBar.waitForExistence(timeout: 5),
+                      "miniPlayer.bar must appear after minimizing")
+
+        // Immediately tap close — simulates the user tapping X while the UIKit
+        // dismiss animation might still be in flight.
+        miniPlayerClose.tap()
+
+        // Allow the animation window to expire.
+        Thread.sleep(forTimeInterval: 3)
+
+        // Neither the mini player nor the fullscreen player must exist.
+        XCTAssertFalse(miniPlayerBar.exists,
+                       "miniPlayer.bar must not exist after tapping close")
+        XCTAssertFalse(backButton.exists,
+                       "player.backButton (fullscreen indicator) must not reappear after close — " +
+                       "regression for task #34 fullscreen-restore bug")
+    }
 }

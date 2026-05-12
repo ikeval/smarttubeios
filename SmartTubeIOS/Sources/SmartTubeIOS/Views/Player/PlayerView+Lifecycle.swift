@@ -420,6 +420,14 @@ extension PlayerView {
             vm.setPlaybackSpeed(store.settings.playbackSpeed)
             vm.updateSettings(store.settings)
             vm.updateAuthToken(authService.accessToken)
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-open-more-menu") {
+                swipeLog.notice("[PlayerView] --uitesting-open-more-menu launch arg detected — scheduling showMoreMenu=true")
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    swipeLog.notice("[PlayerView] --uitesting-open-more-menu: setting showMoreMenu=true")
+                    showMoreMenu = true
+                }
+            }
             #else
             if vm.currentVideoId == video.id {
                 // Spurious appear (e.g. a sheet temporarily covered us) — only resume

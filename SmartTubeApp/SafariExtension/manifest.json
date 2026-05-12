@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "SmartTube for YouTube",
+  "version": "1.0",
+  "description": "Opens YouTube videos automatically in SmartTube.",
+  "icons": {
+    "16":  "icons/Icon-16.png",
+    "48":  "icons/Icon-48.png",
+    "96":  "icons/Icon-96.png",
+    "128": "icons/Icon-128.png"
+  },
+  "content_scripts": [
+    {
+      "js": ["content.js"],
+      "matches": [
+        "*://www.youtube.com/watch*",
+        "*://m.youtube.com/watch*",
+        "*://www.youtube.com/shorts/*",
+        "*://music.youtube.com/watch*"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "js": ["content.js"],
+      "matches": [
+        "*://youtu.be/*"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "permissions": [],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

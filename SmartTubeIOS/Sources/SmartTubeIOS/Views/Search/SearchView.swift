@@ -9,6 +9,7 @@ import SmartTubeIOSCore
 public struct SearchView: View {
     @Environment(SearchViewModel.self) private var vm
     @Environment(\.innerTubeAPI) private var api
+    @Environment(SettingsStore.self) private var store
     @State private var selectedVideo: Video?
     @State private var channelDestination: ChannelDestination?
     @State private var showFilterSheet = false
@@ -153,12 +154,15 @@ public struct SearchView: View {
     // MARK: - Results
 
     private var resultsView: some View {
-        ScrollView {
+        let displayResults = store.settings.hideShorts
+            ? vm.results.filter { !$0.isShort }
+            : vm.results
+        return ScrollView {
             if vm.isLoading && vm.results.isEmpty {
                 ProgressView().frame(maxWidth: .infinity).padding()
             }
             VideoGridSection(
-                videos: vm.results,
+                videos: displayResults,
                 onSelect: {
                     #if os(iOS)
                     playerState.play(video: $0)

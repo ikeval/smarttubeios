@@ -32,6 +32,9 @@ public final class SettingsStore {
         if ProcessInfo.processInfo.arguments.contains("--uitesting-disable-sponsorblock") {
             self.settings.sponsorBlockEnabled = false
         }
+        if ProcessInfo.processInfo.arguments.contains("--uitesting-audio-only-mode") {
+            self.settings.audioOnlyMode = true
+        }
     }
 
     private func save() {

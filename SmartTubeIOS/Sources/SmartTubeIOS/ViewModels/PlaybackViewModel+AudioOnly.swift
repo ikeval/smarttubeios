@@ -45,6 +45,34 @@ extension PlaybackViewModel {
 
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .spectral
+
+        // Set up an item observer before replacing the current item, matching the
+        // pattern used by every other load path. Without this the audio item's
+        // .failed status is never observed, causing silent playback stalls.
+        itemObserverTask?.cancel()
+        itemObserverTask = Task { [weak self] in
+            for await status in item.statusStream {
+                guard let self, !Task.isCancelled else { return }
+                switch status {
+                case .readyToPlay:
+                    audioOnlyLog.notice("✅ Audio-only AVPlayerItem readyToPlay")
+                    self.loadAudioTracks(from: item)
+                case .failed:
+                    let err = item.error.map { "\($0)" } ?? "nil"
+                    audioOnlyLog.error("❌ Audio-only AVPlayerItem failed: \(err)")
+                    // Reset the flag so the UI re-shows the video layer.
+                    // The HLS item placed by the primary load path is no longer the
+                    // current item at this point, so also clear the error display.
+                    self.isAudioOnlyMode = false
+                    self.error = item.error
+                case .unknown:
+                    audioOnlyLog.notice("Audio-only: AVPlayerItem status unknown (loading)")
+                @unknown default:
+                    break
+                }
+            }
+        }
+
         player.replaceCurrentItem(with: item)
         audioOnlyLog.notice("Audio-only: loaded \(url.absoluteString.prefix(80))")
         return true

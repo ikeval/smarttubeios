@@ -4,6 +4,16 @@ All notable changes to SmartTube are documented here.
 
 ---
 
+## [Unreleased] – 2026-05-12
+
+### Fixed
+- Audio-only mode silently stalling on playback start — `tryLoadAudioURL` now sets up an `itemObserverTask` before replacing the current `AVPlayerItem`, so `.failed` status is caught and falls back to HLS instead of hanging
+- Mini player X button sometimes restoring fullscreen — `RootView` binding setter now guards `presentation == .fullScreen` before calling `minimize()`, preventing a stale async `onDismiss` from overriding `stop()`
+- Audio track selection not working after fallback recovery — `retryWithFallbackPlayer`, `retryWithAdaptiveComposition`, and `retryWith403Recovery` now call `loadAudioTracks(from:)` in their `.readyToPlay` observers, keeping `audioSelectionGroup` in sync with the active player item
+- More menu overflowing and unusable in landscape mode — `moreMenuOverlay` now uses a compact max-height (320 pt) in `verticalSizeClass == .compact` and adds horizontal safe-area + landscape padding so the menu stays within the live area and is scrollable
+
+---
+
 ## [2.4] – 2026-05-10
 
 ### Fixed

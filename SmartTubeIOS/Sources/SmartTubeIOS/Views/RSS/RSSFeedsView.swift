@@ -102,9 +102,12 @@ struct RSSFeedsView: View {
     // MARK: - Video List
 
     private var videoList: some View {
-        ScrollView {
+        let displayVideos = store.settings.hideShorts
+            ? vm.videos.filter { !$0.isShort }
+            : vm.videos
+        return ScrollView {
             VideoGridSection(
-                videos: vm.videos,
+                videos: displayVideos,
                 onSelect: { video in
                     #if os(iOS)
                     playerState.play(video: video)

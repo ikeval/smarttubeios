@@ -103,11 +103,12 @@ extension PlayerView {
                 }
                 .frame(maxWidth: .infinity)
             }
+            .accessibilityIdentifier("player.moreMenu.scrollView")
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             // Static max height avoids GeometryReader/containerRelativeFrame feedback
             // loops that crash SwiftUI's AttributeGraph (SIGSEGV/SIGBUS recursion).
-            .frame(maxHeight: 520)
+            .frame(maxHeight: moreMenuMaxHeight)
             #if os(tvOS)
             .onMoveCommand { direction in
                 let rows = moreMenuVisibleRows
@@ -142,6 +143,8 @@ extension PlayerView {
             }
             #endif
             .padding(.horizontal, 8)
+            .safeAreaPadding(.horizontal)
+            .padding(.horizontal, moreMenuAdditionalHorizontalPadding)
             .safeAreaPadding(.bottom)
             .padding(.bottom, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -149,6 +152,22 @@ extension PlayerView {
         .ignoresSafeArea()
         #if os(tvOS)
         .focusScope(moreMenuNamespace)
+        #endif
+    }
+
+    private var moreMenuMaxHeight: CGFloat {
+        #if os(iOS)
+        verticalSizeClass == .compact ? 320 : 520
+        #else
+        520
+        #endif
+    }
+
+    private var moreMenuAdditionalHorizontalPadding: CGFloat {
+        #if os(iOS)
+        vm.isLandscape ? 36 : 0
+        #else
+        0
         #endif
     }
 
