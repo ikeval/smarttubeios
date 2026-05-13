@@ -118,7 +118,9 @@ public final class SearchViewModel {
         isLoading = true
         defer { isLoading = false }
         do {
-            let group = try await api.search(query: query, continuationToken: continuationToken, filter: filter)
+            let group = try await retryWithBackoff(label: "SearchVM") {
+                try await api.search(query: query, continuationToken: continuationToken, filter: filter)
+            }
             if continuationToken == nil {
                 results = group.videos
             } else {
@@ -192,7 +194,9 @@ public final class ChannelViewModel {
             isLoading = true
             defer { isLoading = false }
             do {
-                let group = try await api.fetchChannelVideos(channelId: id, continuationToken: token)
+                let group = try await retryWithBackoff(label: "ChannelVM") {
+                    try await api.fetchChannelVideos(channelId: id, continuationToken: token)
+                }
                 videos.append(contentsOf: group.videos)
                 nextPageToken = group.nextPageToken
             } catch {

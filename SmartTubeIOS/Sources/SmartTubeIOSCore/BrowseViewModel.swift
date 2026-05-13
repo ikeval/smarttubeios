@@ -446,7 +446,9 @@ public final class BrowseViewModel {
         do {
             switch section.type {
             case .home:
-                let newRows = try await api.fetchHomeRows(continuationToken: token)
+                let newRows = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchHomeRows(continuationToken: token)
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -467,7 +469,9 @@ public final class BrowseViewModel {
             case .recommended:
                 if recommendedUsesSearchFallback {
                     browseLog.notice("fetchNextPage: Recommended using search fallback path")
-                    let group = try await api.search(query: "popular", continuationToken: token, filter: .default)
+                    let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                        try await api.search(query: "popular", continuationToken: token, filter: .default)
+                    }
                     if Task.isCancelled {
                         browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                     } else {
@@ -475,7 +479,9 @@ public final class BrowseViewModel {
                         mergeIntoFirstGroup(group)
                     }
                 } else {
-                    let group = try await api.fetchHome(continuationToken: token)
+                    let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                        try await api.fetchHome(continuationToken: token)
+                    }
                     if Task.isCancelled {
                         browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                     } else {
@@ -484,7 +490,9 @@ public final class BrowseViewModel {
                     }
                 }
             case .subscriptions:
-                let group = try await api.fetchSubscriptions(continuationToken: token)
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchSubscriptions(continuationToken: token)
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -497,7 +505,9 @@ public final class BrowseViewModel {
                     }
                 }
             case .history:
-                let group = try await api.fetchHistory(continuationToken: token)
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchHistory(continuationToken: token)
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -507,7 +517,9 @@ public final class BrowseViewModel {
             case .channels:
                 break  // channel list doesn't paginate via videoGroups
             case .shorts:
-                let group = try await api.fetchShorts()
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchShorts()
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -515,7 +527,9 @@ public final class BrowseViewModel {
                     mergeIntoFirstGroup(group)
                 }
             case .music:
-                let group = try await api.fetchMusic()
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchMusic()
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -523,7 +537,9 @@ public final class BrowseViewModel {
                     mergeIntoFirstGroup(group)
                 }
             case .gaming:
-                let group = try await api.fetchGaming()
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchGaming()
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -531,7 +547,9 @@ public final class BrowseViewModel {
                     mergeIntoFirstGroup(group)
                 }
             case .news:
-                let group = try await api.fetchNews()
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchNews()
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -539,7 +557,9 @@ public final class BrowseViewModel {
                     mergeIntoFirstGroup(group)
                 }
             case .live:
-                let group = try await api.fetchLive()
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchLive()
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
@@ -547,7 +567,9 @@ public final class BrowseViewModel {
                     mergeIntoFirstGroup(group)
                 }
             case .sports:
-                let group = try await api.fetchSports()
+                let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {
+                    try await api.fetchSports()
+                }
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {

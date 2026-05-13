@@ -67,7 +67,9 @@ public final class PlaylistViewModel {
         defer { isLoading = false }
         playlistLog.notice("fetchPlaylistVideos id=\(self.playlistId) page=\(self.nextPageToken ?? "first")")
         do {
-            let group = try await api.fetchPlaylistVideos(playlistId: self.playlistId, continuationToken: self.nextPageToken)
+            let group = try await retryWithBackoff(label: "PlaylistVM") {
+                try await api.fetchPlaylistVideos(playlistId: self.playlistId, continuationToken: self.nextPageToken)
+            }
             if !Task.isCancelled {
                 // Tag each video with the playlistId so the player can navigate next/prev.
                 let tagged = group.videos.map { v -> Video in

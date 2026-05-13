@@ -299,10 +299,14 @@ public final class HomeViewModel {
         do {
             switch type {
             case .subscriptions:
-                let group = try await api.fetchSubscriptions(continuationToken: token)
+                let group = try await retryWithBackoff(label: "HomeVM.subs") {
+                    try await api.fetchSubscriptions(continuationToken: token)
+                }
                 return (group.videos, group.nextPageToken)
             case .home:
-                let rows = try await api.fetchHomeRows(continuationToken: token)
+                let rows = try await retryWithBackoff(label: "HomeVM.home") {
+                    try await api.fetchHomeRows(continuationToken: token)
+                }
                 let nextToken = rows.last(where: { $0.nextPageToken != nil })?.nextPageToken
                 // Dedup within the page — YouTube can return the same video ID
                 // in multiple shelves of the same continuation response.
