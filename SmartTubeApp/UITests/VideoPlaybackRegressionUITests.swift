@@ -73,4 +73,57 @@ final class VideoPlaybackRegressionUITests: XCTestCase {
             "player.titleLabel disappeared — PlayerView was dismissed unexpectedly"
         )
     }
+
+    // MARK: - Regression: stop then replay (#51)
+
+    /// Regression test for task #51: video does not reload after stop and replay.
+    ///
+    /// Root cause: `stop()` did not cancel `itemObserverTask` / `endObserverTask`,
+    /// leaving stale observers that interfered with a subsequent `load(video:)` call.
+    func testReplayAfterStop() throws {
+        // Wait for the player to open via the existing deeplink launch argument.
+        let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
+        guard titleLabel.waitForExistence(timeout: 20) else {
+            throw XCTSkip("player.titleLabel did not appear within 20 s — network unavailable or deeplink did not fire")
+        }
+
+        // Wait for buffering to start.
+        Thread.sleep(forTimeInterval: 5)
+
+        // Dismiss the player (simulates "stop").
+        let closeButton = app.buttons["player.closeButton"].firstMatch
+        if closeButton.exists {
+            closeButton.tap()
+        } else {
+            // Swipe down to dismiss sheet-style player.
+            app.swipeDown()
+        }
+
+        // Give the player time to fully tear down.
+        Thread.sleep(forTimeInterval: 2)
+
+        // Re-open the same video via deeplink.
+        app.terminate()
+        app.launchArguments = app.launchArguments // reuse existing args (deeplink included)
+        app.launch()
+
+        // Assert the player opens again without an error banner.
+        guard titleLabel.waitForExistence(timeout: 20) else {
+            throw XCTSkip("player.titleLabel did not reappear within 20 s on second launch")
+        }
+
+        Thread.sleep(forTimeInterval: 10)
+
+        let errorBanner = app.otherElements["player.errorBanner"].firstMatch
+        XCTAssertFalse(
+            errorBanner.exists,
+            "player.errorBanner appeared on replay of \(Self.targetVideoID) — " +
+            "itemObserverTask/endObserverTask cancellation in stop() may be broken."
+        )
+
+        XCTAssertFalse(
+            app.alerts["Error"].exists,
+            "An 'Error' alert appeared on replay of \(Self.targetVideoID)"
+        )
+    }
 }

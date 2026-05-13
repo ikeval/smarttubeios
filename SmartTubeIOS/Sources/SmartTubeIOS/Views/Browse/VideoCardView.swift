@@ -230,7 +230,7 @@ public struct VideoCardView: View {
                 }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(video.title)
+                Text(displayTitle)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(2, reservesSpace: true)
                     .accessibilityIdentifier("video.card.title")
@@ -278,7 +278,7 @@ public struct VideoCardView: View {
                     if let label = uploadDateLabel { durationBadge(label) }
                 }
             VStack(alignment: .leading, spacing: 3) {
-                Text(video.title)
+                Text(displayTitle)
                     .font(.subheadline)
                     .lineLimit(2)
                     .accessibilityIdentifier("video.card.title")
@@ -307,19 +307,32 @@ public struct VideoCardView: View {
 
     // MARK: Shared
 
+    /// Returns the DeArrow thumbnail URL if the feature is enabled and a timestamp is available.
+    private var deArrowThumbnailURL: URL? {
+        guard store.settings.deArrowEnabled,
+              let ts = video.deArrowThumbnailTimestamp else { return nil }
+        return URL(string: "https://i.ytimg.com/vi/\(video.id)/\(Int(ts)).jpg")
+    }
+
+    /// The title to show — community de-arrow title when enabled, raw title otherwise.
+    private var displayTitle: String {
+        if store.settings.deArrowEnabled, let t = video.deArrowTitle { return t }
+        return video.title
+    }
+
     @ViewBuilder
     private var thumbnailView: some View {
         if video.thumbnailURL == nil, video.id == "WL" || video.id == "LL" {
             systemPlaylistThumbnail
         } else {
             // Walk a fallback chain on each successive failure:
-            //   -1 → thumbnailURL (API-provided, highest res — may be maxresdefault or signed)
+            //   -1 → deArrowThumbnailURL (community thumbnail) or thumbnailURL (API-provided)
             //    0 → sddefault.jpg  (640×480, available for most videos)
             //    1 → hqdefault.jpg  (480×360, always available)
             //    2 → mqdefault.jpg  (320×180, always available — last resort)
             let fallbacks = video.thumbnailFallbackURLs
             let url: URL? = thumbnailFallbackIndex < 0
-                ? (video.thumbnailURL ?? fallbacks.first)
+                ? (deArrowThumbnailURL ?? video.thumbnailURL ?? fallbacks.first)
                 : (thumbnailFallbackIndex < fallbacks.count ? fallbacks[thumbnailFallbackIndex] : nil)
             AsyncImage(url: url) { phase in
                 switch phase {

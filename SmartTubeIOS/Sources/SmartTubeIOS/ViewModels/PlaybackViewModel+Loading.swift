@@ -210,6 +210,14 @@ extension PlaybackViewModel {
             let cached = await VideoPreloadCache.shared.consume(videoId: video.id)
             playerLog.notice("cache: playerInfo=\(cached.playerInfo != nil) nextInfo=\(cached.nextInfo != nil) sponsor=\(cached.sponsorSegments != nil) endCards=\(cached.endCards != nil) tracking=\(cached.trackingURLs != nil)")
 
+            // Apply cached DeArrow overrides (community title / thumbnail timestamp).
+            // Done immediately after consume() so VideoCardView can show the override
+            // as soon as the player screen appears, before Phase 2 completes.
+            if settings.deArrowEnabled, let deArrow = cached.deArrowBranding {
+                currentVideo?.deArrowTitle = deArrow.title
+                currentVideo?.deArrowThumbnailTimestamp = deArrow.thumbnailTimestamp
+            }
+
             // --- Player info (stream URLs + metadata) ---
             // Kick off an authenticated TV-client player request in parallel with the
             // primary iOS player fetch when the cache doesn't already have tracking URLs.
@@ -550,6 +558,10 @@ extension PlaybackViewModel {
         loadTask = nil
         phase2Task?.cancel()
         phase2Task = nil
+        itemObserverTask?.cancel()
+        itemObserverTask = nil
+        endObserverTask?.cancel()
+        endObserverTask = nil
         #if canImport(UIKit)
         UIApplication.shared.isIdleTimerDisabled = false
         clearNowPlayingInfo()

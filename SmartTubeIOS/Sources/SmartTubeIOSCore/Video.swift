@@ -24,6 +24,9 @@ public struct Video: Identifiable, Hashable, Codable, Sendable {
     public var notInterestedToken: String?  // "Not interested" — hide this video
     public var dontLikeToken: String?       // "Don't like this video"
     public var hideChannelToken: String?    // "Don't recommend channel"
+    // MARK: DeArrow overrides (applied from VideoPreloadCache after cache consume)
+    public var deArrowTitle: String?
+    public var deArrowThumbnailTimestamp: Double?
 
     public init(
         id: String,
