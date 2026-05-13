@@ -126,4 +126,75 @@ final class VideoPlaybackRegressionUITests: XCTestCase {
             "An 'Error' alert appeared on replay of \(Self.targetVideoID)"
         )
     }
+
+    // MARK: - Regression: second open after stop (#second-open)
+
+    /// Regression test for: after stop(), re-opening the same video shows a black screen.
+    ///
+    /// Root cause: `PlayerStateStore.play(video:)` only called `vm.load(video:)` when the
+    /// video ID changed. After `stop()`, the player item was nil but `vm.currentVideoId`
+    /// still held the old ID — so `load()` was never called on the second open.
+    ///
+    /// Fix: also reload when `vm.player.currentItem == nil` (stop cleared it).
+    func testSecondOpenAfterStopPlays() throws {
+        // 1. Wait for the deeplink player to open.
+        let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
+        guard titleLabel.waitForExistence(timeout: 20) else {
+            throw XCTSkip("player.titleLabel did not appear within 20 s — network unavailable or deeplink did not fire")
+        }
+
+        // 2. Let the video start buffering.
+        Thread.sleep(forTimeInterval: 5)
+
+        // 3. Tap the back button — with miniPlayerEnabled=true (the default) this
+        //    minimizes the player rather than stopping it outright.
+        let backButton = app.buttons["player.backButton"].firstMatch
+        XCTAssertTrue(backButton.exists, "player.backButton not found — cannot dismiss player")
+        backButton.tap()
+
+        // 4. Wait for the mini-player bar to appear, then tap its close button to stop.
+        let miniPlayerBar = app.otherElements["miniPlayer.bar"].firstMatch
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar did not appear — mini-player may be disabled on this build")
+        }
+        let miniPlayerClose = app.buttons["miniPlayer.closeButton"].firstMatch
+        XCTAssertTrue(miniPlayerClose.waitForExistence(timeout: 5), "miniPlayer.closeButton not found after minimizing")
+        miniPlayerClose.tap()
+
+        // 5. Wait for the mini-player to disappear — confirms stop() was called.
+        let miniBarGone = NSPredicate(format: "exists == false")
+        expectation(for: miniBarGone, evaluatedWith: miniPlayerBar)
+        waitForExpectations(timeout: 5)
+
+        // 6. Re-open the same video in-session via the uitesting overlay button.
+        //    This is the exact code path that was broken: same video ID, item=nil after stop().
+        let reopenButton = app.buttons["uitesting.reopenDeeplinkVideoButton"].firstMatch
+        XCTAssertTrue(reopenButton.waitForExistence(timeout: 3), "uitesting.reopenDeeplinkVideoButton not found — overlay missing")
+        reopenButton.tap()
+
+        // 7. Wait for the player to re-open.
+        guard titleLabel.waitForExistence(timeout: 20) else {
+            XCTFail("player.titleLabel did not reappear within 20 s on second open — black screen bug may still be present")
+            return
+        }
+
+        // 8. Give the stream time to load.
+        Thread.sleep(forTimeInterval: 10)
+
+        // 9. Assert playback succeeded: no error banner and player is still open.
+        let errorBanner = app.otherElements["player.errorBanner"].firstMatch
+        XCTAssertFalse(
+            errorBanner.exists,
+            "player.errorBanner appeared on second open of \(Self.targetVideoID) after stop() — " +
+            "PlayerStateStore.play() may not be calling vm.load() when player.currentItem is nil."
+        )
+        XCTAssertFalse(
+            app.alerts["Error"].exists,
+            "An 'Error' alert appeared on second open of \(Self.targetVideoID)"
+        )
+        XCTAssertTrue(
+            titleLabel.exists,
+            "player.titleLabel disappeared after second open — PlayerView was unexpectedly dismissed"
+        )
+    }
 }

@@ -179,6 +179,27 @@ struct MainTabView: View {
             playerState.play(video: video)
             browseVM.deepLinkedVideo = nil
         }
+        // UI-testing only: invisible button that re-opens the deeplink video in the
+        // same session after stop() so testSecondOpenAfterStopPlays can verify the fix.
+        // Uses the same browseVM.deepLinkedVideo path as the production deeplink, so
+        // the full playerState.play() code path is exercised.
+        .overlay(alignment: .bottomLeading) {
+            let isUITesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
+            let deeplinkArg = ProcessInfo.processInfo.arguments
+                .first(where: { $0.hasPrefix("--uitesting-deeplink-video=") })
+            let deeplinkID: String? = deeplinkArg.map {
+                let id = String($0.dropFirst("--uitesting-deeplink-video=".count))
+                return id.isEmpty ? nil : id
+            } ?? nil
+            if isUITesting, let id = deeplinkID, playerState.presentation == .hidden {
+                Button {
+                    browseVM.deepLinkedVideo = Video(id: id, title: "", channelTitle: "")
+                } label: {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                .accessibilityIdentifier("uitesting.reopenDeeplinkVideoButton")
+            }
+        }
         #endif
     }
 }

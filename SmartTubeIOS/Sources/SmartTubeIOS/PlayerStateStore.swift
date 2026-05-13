@@ -93,9 +93,11 @@ public final class PlayerStateStore {
     // MARK: - Actions
 
     /// Load `video` (if not already loaded) and present the full-screen player.
-    func play(video: Video) {
+    public func play(video: Video) {
         storeLog.notice("[PlayerStateStore] play — id=\(video.id) currentPresentation=\(String(describing: self.presentation))")
-        if vm.currentVideoId != video.id {
+        // Also reload when the player item is nil (cleared by stop()) even if the
+        // video ID hasn't changed — otherwise the player presents a black screen.
+        if vm.currentVideoId != video.id || vm.player.currentItem == nil {
             vm.load(video: video)
         }
         currentVideo = video

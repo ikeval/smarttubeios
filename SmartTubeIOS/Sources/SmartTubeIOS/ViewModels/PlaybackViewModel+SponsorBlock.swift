@@ -55,6 +55,13 @@ extension PlaybackViewModel {
                         guard let self else { return }
                         playerLog.notice("[SponsorBlock] seek to \(seg.end)s finished=\(finished), currentTime=\(self.currentTime)")
                         if finished { self.currentTime = seg.end }
+                        // Delay guard reset by 200 ms so the periodic time observer (which
+                        // fires every ~50 ms) cannot immediately re-trigger the skip while
+                        // the player is still settling at the seek target. Without this, a
+                        // keyframe-aligned position slightly before seg.end causes an infinite
+                        // seek loop: seek completes, guard clears, observer fires at same
+                        // position, skip triggers again, repeat every ~50 ms.
+                        try? await Task.sleep(nanoseconds: 200_000_000)
                         self.isSkippingSegment = false
                     }
                 }
