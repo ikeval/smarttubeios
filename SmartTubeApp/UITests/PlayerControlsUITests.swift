@@ -197,4 +197,30 @@ final class PlayerControlsUITests: XCTestCase {
                        "App must still be running after tapping the PiP button")
     }
     #endif
+
+    // MARK: - Regression: next/back buttons must be tappable in portrait (task #45)
+
+    /// Verifies that the next-video and back/previous-video buttons in the player
+    /// bottom bar are hittable in portrait mode after increasing their touch targets.
+    ///
+    /// Fix: `.padding(8).background(.black.opacity(0.4)).clipShape(Circle())` added
+    /// to both button labels (iOS-only), matching the landscape-lock/audio-only pattern.
+    func testNextAndPrevButtonsAreHittableInPortrait() throws {
+        XCUIDevice.shared.orientation = .portrait
+        try openPlayerFromHome()
+        showControls()
+
+        // next button must exist and be hittable
+        XCTAssertTrue(nextButton.waitForExistence(timeout: 5),
+                      "player.nextBtn must exist in portrait")
+        XCTAssertTrue(nextButton.isHittable,
+                      "player.nextBtn must be hittable in portrait — regression for task #45 hit-area fix")
+
+        // previous/back button (if reachable after the player is open from a feed)
+        let prevButton = app.buttons["player.prevBtn"].firstMatch
+        if prevButton.waitForExistence(timeout: 3) {
+            XCTAssertTrue(prevButton.isHittable,
+                          "player.prevBtn must be hittable in portrait — regression for task #45 hit-area fix")
+        }
+    }
 }

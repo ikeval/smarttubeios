@@ -105,13 +105,14 @@ extension PlayerView {
                     moreMenuCancelRow
                 }
                 .frame(maxWidth: .infinity)
+                .font(.subheadline)
             }
             .accessibilityIdentifier("player.moreMenu.scrollView")
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             // Static max height avoids GeometryReader/containerRelativeFrame feedback
             // loops that crash SwiftUI's AttributeGraph (SIGSEGV/SIGBUS recursion).
-            .frame(maxHeight: moreMenuMaxHeight)
+            .frame(maxWidth: moreMenuPortraitWidth, maxHeight: moreMenuMaxHeight)
             #if os(tvOS)
             .onMoveCommand { direction in
                 let rows = moreMenuVisibleRows
@@ -171,6 +172,14 @@ extension PlayerView {
         vm.isLandscape ? 36 : 0
         #else
         0
+        #endif
+    }
+
+    private var moreMenuPortraitWidth: CGFloat {
+        #if os(iOS)
+        min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * 0.8
+        #else
+        .infinity
         #endif
     }
 

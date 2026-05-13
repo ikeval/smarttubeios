@@ -20,6 +20,9 @@ extension PlaybackViewModel {
         let savedTime = currentTime
         isAudioOnlyMode.toggle()
         settings.audioOnlyMode = isAudioOnlyMode
+        toastMessage = isAudioOnlyMode
+            ? String(localized: "Audio-Only Mode", bundle: .module)
+            : String(localized: "Video Mode", bundle: .module)
 
         if isAudioOnlyMode {
             // Overlay shows immediately via isAudioOnlyMode = true.

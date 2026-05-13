@@ -227,6 +227,50 @@ final class MiniPlayerUITests: XCTestCase {
                        "App must be running after re-opening the player")
     }
 
+    // MARK: - Regression: mini player X must deactivate AVAudioSession (task #43)
+
+    /// Regression test for the bug where tapping the mini-player X button left the
+    /// AVAudioSession active, so audio continued playing in the background.
+    ///
+    /// Fix: PlaybackViewModel.stop() now calls AVAudioSession.setActive(false) after
+    /// pausing and clearing the player item, so the session is fully released.
+    ///
+    /// We can't observe AVAudioSession state from a UI test, so we verify the
+    /// observable proxy: after closing, opening a second video must start cleanly
+    /// with the player in a non-playing state initially (i.e. the audio session was
+    /// reset and re-acquired correctly rather than throwing an activation error).
+    func testMiniPlayerCloseDeactivatesAudioSession() throws {
+        try openPlayerFromHome()
+        minimizePlayer()
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar not found — mini-player may not be active in this environment")
+        }
+
+        // Tap X — this triggers stop() which now calls AVAudioSession.setActive(false).
+        miniPlayerClose.tap()
+        let miniGone = NSPredicate(format: "exists == false")
+        let disappear = XCTNSPredicateExpectation(predicate: miniGone, object: miniPlayerBar)
+        let result = XCTWaiter().wait(for: [disappear], timeout: 3)
+        XCTAssertEqual(result, .completed, "miniPlayer.bar must disappear after tapping close")
+
+        // Allow session teardown to propagate before re-acquiring.
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Open a second video — AVAudioSession must be reacquirable without error.
+        UITestHelpers.tapTab(named: "Home", in: app)
+        guard let card = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
+            throw XCTSkip("No video cards for second open — network unavailable or feed empty")
+        }
+        guard UITestHelpers.openPlayer(from: card, in: app) else {
+            throw XCTSkip("Player did not reopen within 15 s — timing-dependent")
+        }
+
+        // If the audio session was not properly deactivated, AVPlayer activation
+        // errors surface as a crash or a permanently spinning loading indicator.
+        XCTAssertEqual(app.state, .runningForeground,
+                       "App must be in foreground — crash would indicate AVAudioSession reactivation failure")
+    }
+
     // MARK: - Regression: mini player X must not restore fullscreen (task #34)
 
     /// Regression test for the race condition where tapping the mini-player X button

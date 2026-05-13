@@ -94,7 +94,7 @@ public struct PlaylistView: View {
             if store.settings.compactThumbnails {
 
                 LazyVStack(spacing: 0) {
-                    ForEach(vm.videos) { video in
+                    ForEach(displayVideos) { video in
                         #if os(tvOS)
                         Button { selectedVideo = video } label: {
                             VideoCardView(video: video, compact: true)
@@ -128,8 +128,8 @@ public struct PlaylistView: View {
                 #if os(tvOS)
                 let columnCount = 4
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(stride(from: 0, to: vm.videos.count, by: columnCount)), id: \.self) { startIdx in
-                        let rowVideos = Array(vm.videos[startIdx..<min(startIdx + columnCount, vm.videos.count)])
+                    ForEach(Array(stride(from: 0, to: displayVideos.count, by: columnCount)), id: \.self) { startIdx in
+                        let rowVideos = Array(displayVideos[startIdx..<min(startIdx + columnCount, displayVideos.count)])
                         HStack(alignment: .top, spacing: 12) {
                             ForEach(rowVideos) { video in
                                 Button { selectedVideo = video } label: {
@@ -155,7 +155,7 @@ public struct PlaylistView: View {
                 .padding(.vertical, 8)
                 #else
                 LazyVGrid(columns: videoGridColumns, spacing: videoGridRowSpacing) {
-                    ForEach(vm.videos) { video in
+                    ForEach(displayVideos) { video in
                         VideoCardView(video: video, compact: false)
                             .accessibilityIdentifier("video.card.\(video.id)")
                             .onTapGesture {
@@ -178,6 +178,10 @@ public struct PlaylistView: View {
         }
         .accessibilityIdentifier("playlistView.feed")
         .refreshable { vm.load(playlistId: playlistId, refresh: true) }
+    }
+
+    private var displayVideos: [Video] {
+        vm.videos.filter { !store.settings.hideShorts || !$0.isShort }
     }
 
     private var emptyState: some View {

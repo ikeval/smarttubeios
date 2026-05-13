@@ -41,9 +41,10 @@ struct MiniPlayerView: View {
                 Image(systemName: playerState.vm.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 18))
                     .foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
+                    .padding(12)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
             .accessibilityIdentifier("miniPlayer.playPauseButton")
 
             Button {
@@ -52,9 +53,10 @@ struct MiniPlayerView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
+                    .padding(12)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
             .accessibilityIdentifier("miniPlayer.closeButton")
         }
         .padding(.leading, 4)

@@ -58,4 +58,31 @@ final class PlayerMoreMenuLayoutUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground,
                        "App must remain running while interacting with the landscape more menu")
     }
+
+    func testMoreMenuWidthIsConstrainedInPortrait() throws {
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let player = app.otherElements["player.view"].firstMatch
+        guard player.waitForExistence(timeout: 20) else {
+            throw XCTSkip("Player did not open within 20 s — network unavailable or video inaccessible")
+        }
+
+        let scrollView = app.scrollViews["player.moreMenu.scrollView"].firstMatch
+        XCTAssertTrue(scrollView.waitForExistence(timeout: 10),
+                      "More menu scroll view must appear in portrait")
+
+        // The menu must be ≤ 80 % of portrait screen width (moreMenuPortraitWidth).
+        // Allow ±5 % tolerance for safe-area / padding rounding.
+        let screenWidth = app.frame.size.width
+        let menuWidth = scrollView.frame.size.width
+        let expectedMax = screenWidth * 0.85
+        XCTAssertLessThanOrEqual(menuWidth, expectedMax,
+                                 "More menu width (\(menuWidth)pt) must be ≤ 85 % of screen width " +
+                                 "(\(screenWidth)pt) — task #44 constraint")
+        XCTAssertGreaterThan(menuWidth, screenWidth * 0.5,
+                             "More menu width (\(menuWidth)pt) must be reasonable (> 50 % of screen)")
+
+        let speedRow = app.buttons["player.moreMenu.speedRow"].firstMatch
+        XCTAssertTrue(speedRow.isHittable, "Speed row must be tappable in portrait")
+    }
 }

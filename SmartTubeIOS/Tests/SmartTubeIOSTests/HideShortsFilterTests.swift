@@ -88,4 +88,32 @@ struct HideShortsFilterTests {
         let settings = AppSettings()
         #expect(settings.hideShorts == false)
     }
+
+    // MARK: - PlaylistView (task #46)
+
+    @Test("PlaylistView: mixed playlist shows all videos when hideShorts is false")
+    func playlistViewShowsAllWhenHideShortsDisabled() {
+        let videos = [
+            makeVideo(id: "v1", isShort: false),
+            makeVideo(id: "s1", isShort: true),
+            makeVideo(id: "v2", isShort: false),
+            makeVideo(id: "s2", isShort: true),
+        ]
+        // displayVideos computed property: filter { !hideShorts || !$0.isShort }
+        let result = apply(hideShorts: false, to: videos)
+        #expect(result.count == 4, "All 4 videos must appear when hideShorts is off")
+    }
+
+    @Test("PlaylistView: mixed playlist hides shorts when hideShorts is true")
+    func playlistViewHidesShortsWhenEnabled() {
+        let videos = [
+            makeVideo(id: "v1", isShort: false),
+            makeVideo(id: "s1", isShort: true),
+            makeVideo(id: "v2", isShort: false),
+            makeVideo(id: "s2", isShort: true),
+        ]
+        let result = apply(hideShorts: true, to: videos)
+        #expect(result.count == 2)
+        #expect(result.map(\.id) == ["v1", "v2"], "Only non-shorts must remain when hideShorts is on")
+    }
 }

@@ -539,6 +539,13 @@ extension PlaybackViewModel {
         player.pause()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
+        #if canImport(UIKit)
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            playerLog.error("AVAudioSession deactivation failed: \(error.localizedDescription)")
+        }
+        #endif
         loadTask?.cancel()
         loadTask = nil
         phase2Task?.cancel()

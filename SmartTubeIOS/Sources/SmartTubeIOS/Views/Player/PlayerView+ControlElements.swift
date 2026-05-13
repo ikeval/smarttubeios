@@ -206,6 +206,11 @@ struct PlayerControlsOverlay: View {
                         Image(systemName: AppSymbol.previousTrack)
                             .font(.system(size: 18 * controlScale))
                             .foregroundStyle(vm.hasPrevious && !vm.isLoading ? .white : .white.opacity(0.3))
+                            #if os(iOS)
+                            .padding(8)
+                            .background(.black.opacity(0.4))
+                            .clipShape(Circle())
+                            #endif
                     }
                     .buttonStyle(.plain)
                     #if os(tvOS)
@@ -215,6 +220,7 @@ struct PlayerControlsOverlay: View {
                     .animation(.easeInOut(duration: 0.15), value: highlightedControl)
                     #endif
                     .disabled(!vm.hasPrevious || vm.isLoading)
+                    .accessibilityIdentifier("player.prevBtn")
 
                     // Previous chapter button — only present when the video has chapters
                     if !vm.chapters.isEmpty {
@@ -304,6 +310,11 @@ struct PlayerControlsOverlay: View {
                         Image(systemName: AppSymbol.nextTrack)
                             .font(.system(size: 18 * controlScale))
                             .foregroundStyle(vm.hasNext && !vm.isLoading ? .white : .white.opacity(0.3))
+                            #if os(iOS)
+                            .padding(8)
+                            .background(.black.opacity(0.4))
+                            .clipShape(Circle())
+                            #endif
                     }
                     .buttonStyle(.plain)
                     #if os(tvOS)
