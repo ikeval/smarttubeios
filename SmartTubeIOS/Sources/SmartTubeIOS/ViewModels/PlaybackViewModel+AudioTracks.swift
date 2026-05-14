@@ -55,16 +55,16 @@ extension PlaybackViewModel {
 
             // Auto-select priority (highest → lowest):
             //  1. User's saved language preference (respects explicit manual selection).
-            //  2. Track marked as original by HLS DEFAULT=YES — this is the authoritative
-            //     signal from YouTube's manifest; prefer it over device language.
-            //  3. English track ("en", "en-US", etc.) — most YouTube originals are English,
-            //     so this is a better fallback than device language for un-marked manifests.
-            //  4. Device preferred languages — only as last resort to avoid overriding the
-            //     original with an AI-dubbed version for non-English device users.
+            //  2. Device preferred languages — pick the device language before the HLS
+            //     DEFAULT track. YouTube sometimes sets DEFAULT=YES on a dubbed/localized
+            //     track rather than the original-language track, so preferring device
+            //     language first gives English users English and Arabic users Arabic,
+            //     regardless of what DEFAULT is set to (issue #24 regression fix).
+            //  3. Track marked as original by HLS DEFAULT=YES — use manifest default when
+            //     no device-language track exists in the HLS rendition list.
+            //  4. English track ("en", "en-US", etc.) — last resort for non-English device
+            //     users when neither device language nor DEFAULT track is available.
             //  5. First track in list.
-            //
-            // Prior behaviour used device language before the DEFAULT track, which caused
-            // AI-dubbed tracks to be selected on non-English devices (issue #24).
             let preferred = self.settings.preferredAudioLanguage
             let autoSelect: AudioTrack? = {
                 // 1. Saved preference (or Settings-level independent language choice).
@@ -80,19 +80,19 @@ extension PlaybackViewModel {
                     return tracks.first(where: { $0.languageCode.hasPrefix(base) })
                         ?? tracks.first(where: \.isOriginal)
                 }
-                // 2. HLS DEFAULT=YES original
-                if let original = tracks.first(where: \.isOriginal) { return original }
-                // 3. English track (common original language on YouTube)
-                let englishPrefixes = ["en-", "en_"]
-                if let english = tracks.first(where: { $0.languageCode == "en" })
-                    ?? tracks.first(where: { lang in englishPrefixes.contains(where: { lang.languageCode.hasPrefix($0) }) }) {
-                    return english
-                }
-                // 4. Device preferred languages
+                // 2. Device preferred languages
                 for deviceLang in Locale.preferredLanguages {
                     if let exact = tracks.first(where: { $0.languageCode == deviceLang }) { return exact }
                     let base = deviceLang.components(separatedBy: "-").first ?? deviceLang
                     if let match = tracks.first(where: { $0.languageCode.hasPrefix(base) }) { return match }
+                }
+                // 3. HLS DEFAULT=YES original
+                if let original = tracks.first(where: \.isOriginal) { return original }
+                // 4. English track (common original language on YouTube)
+                let englishPrefixes = ["en-", "en_"]
+                if let english = tracks.first(where: { $0.languageCode == "en" })
+                    ?? tracks.first(where: { lang in englishPrefixes.contains(where: { lang.languageCode.hasPrefix($0) }) }) {
+                    return english
                 }
                 // 5. First track
                 return tracks.first

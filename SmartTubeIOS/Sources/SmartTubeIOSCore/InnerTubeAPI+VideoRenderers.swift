@@ -371,13 +371,18 @@ extension InnerTubeAPI {
     // MARK: – WEB lockupViewModel parser (Android LockupItem methodology)
     // Mirrors: LockupItem.getVideoId(), getTitle(), getThumbnails() in CommonHelper.kt
     private func parseLockupViewModel(_ lockup: [String: Any]) -> Video? {
-        // videoId: rendererContext.commandContext.onTap.innertubeCommand.watchEndpoint.videoId
+        // videoId: rendererContext.commandContext.onTap.innertubeCommand.{watchEndpoint|reelWatchEndpoint}.videoId
+        // Shorts use reelWatchEndpoint; regular videos use watchEndpoint.
         guard let rendererContext = lockup["rendererContext"] as? [String: Any],
               let commandContext = rendererContext["commandContext"] as? [String: Any],
               let onTap = commandContext["onTap"] as? [String: Any],
-              let innertubeCommand = onTap["innertubeCommand"] as? [String: Any],
-              let watchEndpoint = innertubeCommand["watchEndpoint"] as? [String: Any],
-              let videoId = watchEndpoint["videoId"] as? String else { return nil }
+              let innertubeCommand = onTap["innertubeCommand"] as? [String: Any] else { return nil }
+
+        let reelEndpoint = innertubeCommand["reelWatchEndpoint"] as? [String: Any]
+        let watchEndpoint = innertubeCommand["watchEndpoint"] as? [String: Any]
+        guard let videoId = reelEndpoint?["videoId"] as? String
+                          ?? watchEndpoint?["videoId"] as? String else { return nil }
+        let isShort = reelEndpoint != nil
 
         // title: metadata.lockupMetadataViewModel.title
         // The field may be a TextViewModel ({"content": "…"}) in newer API responses,
@@ -402,10 +407,11 @@ extension InnerTubeAPI {
             return text["content"] as? String ?? extractText(text) ?? ""
         }()
 
-        // channelId: watchEndpoint.channelId (primary) or
+        // channelId: watchEndpoint.channelId (primary) or reelWatchEndpoint.channelId or
         // lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows[].metadataParts[]
         //   .text.commandRuns[].onTap.innertubeCommand.browseEndpoint.browseId (fallback)
-        let channelId: String? = (watchEndpoint["channelId"] as? String) ?? {
+        let channelId: String? = (watchEndpoint?["channelId"] as? String)
+                               ?? (reelEndpoint?["channelId"] as? String) ?? {
             for row in metaRows {
                 guard let parts = row["metadataParts"] as? [[String: Any]] else { continue }
                 for part in parts {
@@ -432,7 +438,7 @@ extension InnerTubeAPI {
         return Video(
             id: videoId, title: title, channelTitle: channelTitle, channelId: channelId,
             thumbnailURL: thumbURL, duration: nil, viewCount: nil,
-            isLive: false, isShort: false, badges: []
+            isLive: false, isShort: isShort, badges: []
         )
     }
 

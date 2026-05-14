@@ -116,4 +116,94 @@ struct HideShortsFilterTests {
         #expect(result.count == 2)
         #expect(result.map(\.id) == ["v1", "v2"], "Only non-shorts must remain when hideShorts is on")
     }
+
+    // MARK: - Task #55: parseLockupViewModel sets isShort correctly
+
+    /// Builds a minimal lockupViewModel JSON blob with a reelWatchEndpoint and confirms
+    /// the parser marks the resulting Video as isShort == true.
+    @Test("lockupViewModel with reelWatchEndpoint is parsed as a Short")
+    func lockupViewModelReelEndpoint_isShortTrue() async throws {
+        let lockupVM: [String: Any] = [
+            "rendererContext": [
+                "commandContext": [
+                    "onTap": [
+                        "innertubeCommand": [
+                            "reelWatchEndpoint": ["videoId": "SHORT_ID_1"]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let json: [String: Any] = [
+            "items": [["lockupViewModel": lockupVM]]
+        ]
+        let api = InnerTubeAPI()
+        let group = try await api.parseVideoGroupForTesting(json, title: nil)
+        #expect(group.videos.count == 1, "Short should be parsed from reelWatchEndpoint")
+        #expect(group.videos.first?.id == "SHORT_ID_1")
+        #expect(group.videos.first?.isShort == true, "Video from reelWatchEndpoint must have isShort == true")
+    }
+
+    /// Builds a minimal lockupViewModel JSON blob with a watchEndpoint and confirms
+    /// the parser marks the resulting Video as isShort == false.
+    @Test("lockupViewModel with watchEndpoint is parsed as a regular video")
+    func lockupViewModelWatchEndpoint_isShortFalse() async throws {
+        let lockupVM: [String: Any] = [
+            "rendererContext": [
+                "commandContext": [
+                    "onTap": [
+                        "innertubeCommand": [
+                            "watchEndpoint": ["videoId": "VIDEO_ID_1"]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let json: [String: Any] = [
+            "items": [["lockupViewModel": lockupVM]]
+        ]
+        let api = InnerTubeAPI()
+        let group = try await api.parseVideoGroupForTesting(json, title: nil)
+        #expect(group.videos.count == 1, "Regular video should be parsed from watchEndpoint")
+        #expect(group.videos.first?.id == "VIDEO_ID_1")
+        #expect(group.videos.first?.isShort == false, "Video from watchEndpoint must have isShort == false")
+    }
+
+    /// Confirms that a lockupViewModel Short is filtered out when hideShorts is true.
+    @Test("lockupViewModel Short is hidden when hideShorts is enabled")
+    func lockupViewModelShort_hiddenWhenHideShortsEnabled() async throws {
+        let shortVM: [String: Any] = [
+            "rendererContext": [
+                "commandContext": [
+                    "onTap": [
+                        "innertubeCommand": [
+                            "reelWatchEndpoint": ["videoId": "SHORT_ID_2"]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let videoVM: [String: Any] = [
+            "rendererContext": [
+                "commandContext": [
+                    "onTap": [
+                        "innertubeCommand": [
+                            "watchEndpoint": ["videoId": "VIDEO_ID_2"]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let json: [String: Any] = [
+            "items": [
+                ["lockupViewModel": shortVM],
+                ["lockupViewModel": videoVM],
+            ]
+        ]
+        let api = InnerTubeAPI()
+        let group = try await api.parseVideoGroupForTesting(json, title: nil)
+        let visible = apply(hideShorts: true, to: group.videos)
+        #expect(visible.count == 1)
+        #expect(visible.first?.id == "VIDEO_ID_2", "Only the regular video should survive the filter")
+    }
 }
