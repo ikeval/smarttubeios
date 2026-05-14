@@ -78,52 +78,95 @@ final class VideoPlaybackRegressionUITests: XCTestCase {
 
     /// Regression test for task #51: video does not reload after stop and replay.
     ///
+    /// Exact reproduction path:
+    ///   1. Open a video from the Home feed.
+    ///   2. Tap the back button — player minimises to the mini-player bar.
+    ///   3. Tap X on the mini-player bar — calls `stop()`, bar disappears.
+    ///   4. Find the same video card in the Home feed and tap it again.
+    ///   5. Assert the player opens and the video plays without an error banner.
+    ///
     /// Root cause: `stop()` did not cancel `itemObserverTask` / `endObserverTask`,
     /// leaving stale observers that interfered with a subsequent `load(video:)` call.
     func testReplayAfterStop() throws {
-        // Wait for the player to open via the existing deeplink launch argument.
-        let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
-        guard titleLabel.waitForExistence(timeout: 20) else {
-            throw XCTSkip("player.titleLabel did not appear within 20 s — network unavailable or deeplink did not fire")
+        // Launch without the class-level deeplink so the Home feed is shown.
+        let homeApp = XCUIApplication()
+        homeApp.launchArguments = ["--uitesting"]
+        homeApp.launch()
+
+        // 1. Wait for Home feed to load.
+        UITestHelpers.tapTab(named: "Home", in: homeApp)
+        guard let firstCard = UITestHelpers.waitForVideoCards(in: homeApp, timeout: 25) else {
+            throw XCTSkip("Home feed did not load any cards — network unavailable")
         }
 
-        // Wait for buffering to start.
+        // Record the card identifier so we can find the same video after stop.
+        let cardID = firstCard.identifier
+
+        // 2. Open the video from Home.
+        guard UITestHelpers.openPlayer(from: firstCard, in: homeApp) else {
+            throw XCTSkip("Player did not open within 15 s — network unavailable")
+        }
+
+        // Give the stream time to start buffering.
         Thread.sleep(forTimeInterval: 5)
 
-        // Dismiss the player (simulates "stop").
-        let closeButton = app.buttons["player.closeButton"].firstMatch
-        if closeButton.exists {
-            closeButton.tap()
-        } else {
-            // Swipe down to dismiss sheet-style player.
-            app.swipeDown()
+        // 3. Tap back button — minimises to mini-player.
+        let backButton = homeApp.buttons["player.backButton"].firstMatch
+        if !backButton.exists {
+            homeApp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        XCTAssertTrue(backButton.waitForExistence(timeout: 3), "player.backButton not found")
+        backButton.tap()
+
+        let miniPlayerBar = homeApp.otherElements["miniPlayer.bar"].firstMatch
+        guard miniPlayerBar.waitForExistence(timeout: 5) else {
+            throw XCTSkip("miniPlayer.bar did not appear — mini-player may be disabled on this build")
         }
 
-        // Give the player time to fully tear down.
-        Thread.sleep(forTimeInterval: 2)
+        // 4. Tap X on the mini-player — calls stop().
+        let miniPlayerClose = homeApp.buttons["miniPlayer.closeButton"].firstMatch
+        XCTAssertTrue(miniPlayerClose.waitForExistence(timeout: 5), "miniPlayer.closeButton not found")
+        miniPlayerClose.tap()
 
-        // Re-open the same video via deeplink.
-        app.terminate()
-        app.launchArguments = app.launchArguments // reuse existing args (deeplink included)
-        app.launch()
+        // Confirm the mini-player disappears before proceeding.
+        let miniGone = NSPredicate(format: "exists == false")
+        let disappear = XCTNSPredicateExpectation(predicate: miniGone, object: miniPlayerBar)
+        XCTWaiter().wait(for: [disappear], timeout: 5)
+        XCTAssertFalse(miniPlayerBar.exists, "miniPlayer.bar should be gone after tapping close")
 
-        // Assert the player opens again without an error banner.
+        // 5. Find the same video card in the Home feed and open it again.
+        let sameCard = homeApp.descendants(matching: .any).matching(identifier: cardID).firstMatch
+        guard sameCard.waitForExistence(timeout: 5) else {
+            throw XCTSkip("Video card '\(cardID)' not found after returning to Home — feed may have refreshed")
+        }
+        sameCard.tap()
+
+        // 6. Assert the player reopens.
+        let titleLabel = homeApp.staticTexts["player.titleLabel"].firstMatch
         guard titleLabel.waitForExistence(timeout: 20) else {
-            throw XCTSkip("player.titleLabel did not reappear within 20 s on second launch")
+            XCTFail("player.titleLabel did not appear on second open from Home — " +
+                    "black screen / stop() regression (#51) may still be present")
+            return
         }
 
+        // Give the stream time to start (or fail).
         Thread.sleep(forTimeInterval: 10)
 
-        let errorBanner = app.otherElements["player.errorBanner"].firstMatch
+        // 7. Assert no error banner — the video must play on the second open.
+        let errorBanner = homeApp.otherElements["player.errorBanner"].firstMatch
         XCTAssertFalse(
             errorBanner.exists,
-            "player.errorBanner appeared on replay of \(Self.targetVideoID) — " +
-            "itemObserverTask/endObserverTask cancellation in stop() may be broken."
+            "player.errorBanner appeared on second open from Home — " +
+            "itemObserverTask/endObserverTask cancellation in stop() may be broken (#51)."
         )
-
         XCTAssertFalse(
-            app.alerts["Error"].exists,
-            "An 'Error' alert appeared on replay of \(Self.targetVideoID)"
+            homeApp.alerts["Error"].exists,
+            "An 'Error' alert appeared on second open from Home (#51)"
+        )
+        XCTAssertTrue(
+            titleLabel.exists,
+            "player.titleLabel disappeared after second open — PlayerView was unexpectedly dismissed (#51)"
         )
     }
 

@@ -544,7 +544,7 @@ extension InnerTubeAPI {
         return Video(
             id: videoId, title: title, channelTitle: channelTitle, channelId: channelId,
             thumbnailURL: thumbURL, duration: nil, viewCount: nil,
-            isLive: false, isShort: true, badges: []
+            isLive: false, isShort: true, hasPortraitThumbnail: true, badges: []
         )
     }
 

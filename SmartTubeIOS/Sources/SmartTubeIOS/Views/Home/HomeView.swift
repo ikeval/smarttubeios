@@ -316,6 +316,25 @@ public struct HomeView: View {
                 if selectedSection.type == .playlists, queueVideosCount > 0 {
                     currentQueueRow
                 }
+                // Shorts row for Recommended section.
+                // FEwhat_to_watch (TV client) never includes a Shorts shelf, so
+                // BrowseViewModel fetches FEshorts separately and stores them here.
+                if selectedSection.type == .recommended,
+                   !hideShorts,
+                   !sectionVM.recommendedShortsVideos.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Shorts")
+                            .font(.headline)
+                            .padding(.horizontal)
+                            .padding(.top, 16)
+                            .padding(.bottom, 4)
+                        ShortsRowSection(
+                            videos: sectionVM.recommendedShortsVideos,
+                            onSelect: { selectVideo($0, from: sectionVM.recommendedShortsVideos) },
+                            accessibilityID: "recommended.shortsRow"
+                        )
+                    }
+                }
                 ForEach(rowGroups) { group in
                     if let title = group.title, !title.isEmpty {
                         Text(title)

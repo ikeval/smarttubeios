@@ -40,6 +40,9 @@ public final class BrowseViewModel {
     public var error: Error?
     /// True when the current section requires authentication and the user is not signed in.
     public private(set) var isAuthRequired: Bool = false
+    /// Shorts fetched from FEshorts for the Recommended section.
+    /// Always empty for all other sections.
+    public private(set) var recommendedShortsVideos: [Video] = []
     /// Timestamp of the last successful content fetch for the current section.
     /// Used to detect stale feeds after the app returns from background.
     public private(set) var loadedAt: Date? = nil
@@ -140,6 +143,7 @@ public final class BrowseViewModel {
         if refresh {
             videoGroups = []
             subscribedChannels = []
+            recommendedShortsVideos = []
             loadedAt = nil
             enrichTask?.cancel()
             enrichTask = nil
@@ -326,7 +330,14 @@ public final class BrowseViewModel {
                     break
                 }
                 let group = try await api.fetchHome()
+                // Fetch FEshorts in parallel with the home feed.
+                // FEwhat_to_watch (TV client) never includes a Shorts shelf, so we need a
+                // separate call — mirroring what HomeViewModel does for the Home chip.
+                async let shortsFetch: VideoGroup? = try? api.fetchShorts()
+                let shortsGroup = await shortsFetch
                 if !Task.isCancelled {
+                    recommendedShortsVideos = shortsGroup?.videos ?? []
+                    browseLog.notice("Recommended: loaded \(recommendedShortsVideos.count) shorts from FEshorts")
                     if group.videos.isEmpty {
                         isAuthRequired = true
                         recommendedUsesSearchFallback = true

@@ -542,6 +542,10 @@ extension PlaybackViewModel {
             }
         } catch {
             isLoading = false
+            // Ignore CancellationError — it is expected when stop() or a new load()
+            // cancels an in-flight loadTask. Surfacing it would show a spurious error
+            // banner on the next video open.
+            guard !(error is CancellationError) else { return }
             playerLog.error("❌ loadAsync error: \(String(describing: error))")
             self.error = error
         }
@@ -572,6 +576,9 @@ extension PlaybackViewModel {
         #endif
         loadTask?.cancel()
         loadTask = nil
+        // Reset isLoading immediately so a same-video re-open via play() does not hit
+        // the early-return guard in load() before the cancelled task cleans up.
+        isLoading = false
         phase2Task?.cancel()
         phase2Task = nil
         itemObserverTask?.cancel()

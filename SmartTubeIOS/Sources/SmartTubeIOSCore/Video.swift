@@ -16,6 +16,11 @@ public struct Video: Identifiable, Hashable, Codable, Sendable {
     public var isLive: Bool
     public var isUpcoming: Bool
     public var isShort: Bool
+    /// True only when the API response explicitly provided a portrait thumbnail
+    /// (i.e. from reelItemRenderer). False for Shorts detected via other signals
+    /// (ustreamerConfig, reelWatchEndpoint, etc.) whose portrait thumbnail slot
+    /// on YouTube's CDN returns a blank black image rather than a real thumb.
+    public var hasPortraitThumbnail: Bool
     public var watchProgress: Double?       // 0.0 – 1.0
     public var playlistId: String?
     public var playlistIndex: Int?
@@ -41,6 +46,7 @@ public struct Video: Identifiable, Hashable, Codable, Sendable {
         isLive: Bool = false,
         isUpcoming: Bool = false,
         isShort: Bool = false,
+        hasPortraitThumbnail: Bool = false,
         watchProgress: Double? = nil,
         playlistId: String? = nil,
         playlistIndex: Int? = nil,
@@ -61,6 +67,7 @@ public struct Video: Identifiable, Hashable, Codable, Sendable {
         self.isLive = isLive
         self.isUpcoming = isUpcoming
         self.isShort = isShort
+        self.hasPortraitThumbnail = hasPortraitThumbnail
         self.watchProgress = watchProgress
         self.playlistId = playlistId
         self.playlistIndex = playlistIndex
