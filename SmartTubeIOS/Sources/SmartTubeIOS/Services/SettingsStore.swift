@@ -1,6 +1,9 @@
 import Foundation
 import Observation
+import OSLog
 import SmartTubeIOSCore
+
+private let settingsLog = Logger(subsystem: appSubsystem, category: "Settings")
 
 // MARK: - SettingsStore
 //
@@ -12,7 +15,12 @@ import SmartTubeIOSCore
 public final class SettingsStore {
 
     public var settings: AppSettings {
-        didSet { save() }
+        didSet {
+            if self.settings.hideShorts != oldValue.hideShorts {
+                settingsLog.notice("hideShorts \(oldValue.hideShorts ? "ON" : "OFF", privacy: .public) → \(self.settings.hideShorts ? "ON" : "OFF", privacy: .public)")
+            }
+            self.save()
+        }
     }
 
     private static let key = "smarttube_app_settings"

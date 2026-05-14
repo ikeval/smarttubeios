@@ -272,6 +272,8 @@ public final class HomeViewModel {
             switch type {
             case .subscriptions:
                 let group = try await api.fetchSubscriptions()
+                let shortsCount = group.videos.filter { $0.isShort }.count
+                homeLog.notice("fetchVideos subs: total=\(group.videos.count) shorts=\(shortsCount) regular=\(group.videos.count - shortsCount)")
                 return (Array(group.videos.prefix(InnerTubeClients.maxVideoResults)), group.nextPageToken)
             case .home:
                 let rows = try await api.fetchHomeRows()
@@ -302,6 +304,8 @@ public final class HomeViewModel {
                 let group = try await retryWithBackoff(label: "HomeVM.subs") {
                     try await api.fetchSubscriptions(continuationToken: token)
                 }
+                let shortsCount = group.videos.filter { $0.isShort }.count
+                homeLog.notice("fetchMoreVideos subs: total=\(group.videos.count) shorts=\(shortsCount) regular=\(group.videos.count - shortsCount)")
                 return (group.videos, group.nextPageToken)
             case .home:
                 let rows = try await retryWithBackoff(label: "HomeVM.home") {
