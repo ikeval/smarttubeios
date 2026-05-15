@@ -100,6 +100,8 @@ extension PlaybackViewModel {
                     self.player.rate = Float(self.settings.playbackSpeed)
                     self.isPlaying = true
                     self.loadAudioTracks(from: item)
+                    // Dismiss the spinner — audio item is buffered and playing.
+                    self.isLoading = false
                 case .failed:
                     let err = item.error.map { "\($0)" } ?? "nil"
                     audioOnlyLog.error("❌ Audio-only AVPlayerItem failed: \(err)")

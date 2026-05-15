@@ -194,8 +194,10 @@ extension PlaybackViewModel {
 
     func loadAsync(video: Video) async {
         isLoading = true
-        // Note: isLoading = false is set explicitly after AVPlayer setup (Phase 1 end),
-        // not via defer, so Phase 2 background work does not delay the spinner dismissal.
+        // Note: isLoading = false is set in the AVPlayerItem .readyToPlay observer so the
+        // spinner stays visible until the first frame is actually ready. It was previously
+        // cleared after player.rate was set, which dismissed the spinner before buffering
+        // completed on slow networks (GitHub issue #53).
         playerLog.notice("[loadAsync] start id=\(video.id) title=\(video.title) player.rate=\(self.player.rate) timeControlStatus=\(self.player.timeControlStatus.rawValue)")
         do {
             // --- Cache-first load ---
@@ -420,8 +422,11 @@ extension PlaybackViewModel {
                             self.seek(to: pos)
                         }
                         // Load alternate audio renditions (dubbed / translated tracks).
-                        self.loadAudioTracks(from: item)
-                    case .failed:
+                        self.loadAudioTracks(from: item)                        // Dismiss the spinner: the first frame is ready to display.
+                        // Previously this was done after player.rate was set, which
+                        // dismissed the spinner before buffering completed on slow
+                        // networks (GitHub issue #53).
+                        self.isLoading = false                    case .failed:
                         let err = item.error.map { "\($0)" } ?? "nil"
                         playerLog.error("❌ AVPlayerItem failed: \(err)")
                         if !self.hasRetriedPlayback, let video = self.currentVideo {
@@ -506,12 +511,7 @@ extension PlaybackViewModel {
             // unexpectedly and breaking UI tests that wait for the auto-hide.
             if controlsVisible { scheduleControlsHide() }
 
-            // Phase 1 complete — dismiss the spinner now that AVPlayer has its item.
-            // Phase 2 work (nextInfo, endCards, trackingURLs, sponsorBlock miss, prefetch)
-            // runs concurrently with buffering so it does not extend the loading window.
-            isLoading = false
-
-            // Launch Phase 2 as a cancellable utility Task. Cancelled on the next load()
+            // Phase 2 as a cancellable utility Task. Cancelled on the next load()
             // or stop() so stale network callbacks never write to a new video's state.
             let p2Cached = cached
             let p2Info = info
