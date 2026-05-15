@@ -60,16 +60,8 @@ extension PlaybackViewModel {
         seekDebounceTask?.cancel()
         isScrubbing = false
         chapters = []
-        availableCaptions = []
-        selectedCaption = nil
-        currentCaptionCue = nil
-        captionCues = []
-        captionFetchTask?.cancel()
-        captionFetchTask = nil
-        availableAudioTracks = []
-        selectedAudioTrack = nil
-        audioSelectionGroup = nil
-        audioOptionsByID = [:]
+        captionsManager.reset()
+        audioManager.reset()
         endCards = []
 
         // Push the currently playing video onto the history stack before switching
@@ -79,10 +71,7 @@ extension PlaybackViewModel {
         currentVideo = video
         hasPrevious = !history.isEmpty
         hasRetriedPlayback = false
-        hasAppliedH264Cap = false
-        qualityTask?.cancel()
-        qualityTask = nil
-        hlsVariantURLs = [:]
+        qualityManager.reset()
         phase2Task?.cancel()
         phase2Task = nil
 

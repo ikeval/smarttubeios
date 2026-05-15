@@ -1,0 +1,123 @@
+import AVFoundation
+import os
+import SmartTubeIOSCore
+
+private let playerLog = CrashlyticsLogger(category: "Player")
+
+// MARK: - AudioTrackDelegate
+
+@MainActor
+protocol AudioTrackDelegate: AnyObject {
+    var settings: AppSettings { get set }
+}
+
+// MARK: - AudioTrackManager
+
+/// Owns `availableAudioTracks`, `selectedAudioTrack`, `audioSelectionGroup`,
+/// and `audioOptionsByID`. Logic migrated from PlaybackViewModel+AudioTracks.swift.
+@MainActor
+@Observable
+final class AudioTrackManager {
+
+    // MARK: - State
+
+    var availableAudioTracks: [AudioTrack] = []
+    var selectedAudioTrack: AudioTrack? = nil
+
+    // AVMediaSelectionGroup is not Sendable — keep nonisolated(unsafe) on MainActor class
+    @ObservationIgnored nonisolated(unsafe) var audioSelectionGroup: AVMediaSelectionGroup? = nil
+    @ObservationIgnored var audioOptionsByID: [String: AVMediaSelectionOption] = [:]
+
+    // MARK: - Dependencies
+
+    @ObservationIgnored weak var delegate: (any AudioTrackDelegate)?
+    let player: AVPlayer
+
+    // MARK: - Init
+
+    init(player: AVPlayer) {
+        self.player = player
+    }
+
+    // MARK: - Interface
+
+    func reset() {
+        availableAudioTracks = []
+        selectedAudioTrack = nil
+        audioSelectionGroup = nil
+        audioOptionsByID = [:]
+    }
+
+    /// Switches to `track`, or resets to the HLS default when `nil`.
+    /// Persists the language code in `AppSettings`.
+    func selectAudioTrack(_ track: AudioTrack?) {
+        selectedAudioTrack = track
+        delegate?.settings.preferredAudioLanguage = track?.languageCode
+        guard let item = player.currentItem, let group = audioSelectionGroup else { return }
+        if let track, let option = audioOptionsByID[track.id] {
+            item.select(option, in: group)
+        } else {
+            item.selectMediaOptionAutomatically(in: group)
+        }
+        playerLog.notice("Audio → \(track?.name ?? "Auto (preference cleared)")")
+    }
+
+    /// Loads alternate audio renditions from the HLS manifest of `item` and auto-applies
+    /// the user's saved language preference.
+    func loadAudioTracks(from item: AVPlayerItem) {
+        Task { [weak self] in
+            guard let self else { return }
+            let asset = item.asset
+            guard let group = try? await asset.loadMediaSelectionGroup(for: .audible),
+                  group.options.count > 1 else { return }
+            var tracks: [AudioTrack] = []
+            var optionMap: [String: AVMediaSelectionOption] = [:]
+            for (_, option) in group.options.enumerated() {
+                let locale = option.locale?.identifier
+                    ?? option.extendedLanguageTag
+                    ?? "unknown"
+                let displayName = option.locale.flatMap {
+                    Locale.current.localizedString(forLanguageCode: $0.identifier)
+                } ?? locale
+                let isOriginal = group.defaultOption != nil && group.defaultOption == option
+                let track = AudioTrack(id: locale, name: displayName,
+                                       languageCode: locale, isOriginal: isOriginal)
+                tracks.append(track)
+                optionMap[locale] = option
+            }
+            self.audioSelectionGroup = group
+            self.audioOptionsByID = optionMap
+            self.availableAudioTracks = tracks
+
+            let preferred = self.delegate?.settings.preferredAudioLanguage
+            let autoSelect: AudioTrack? = {
+                if let lang = preferred {
+                    if lang == "original" {
+                        return tracks.first(where: \.isOriginal) ?? tracks.first
+                    }
+                    if let exact = tracks.first(where: { $0.languageCode == lang }) { return exact }
+                    let base = lang.components(separatedBy: "-").first ?? lang
+                    return tracks.first(where: { $0.languageCode.hasPrefix(base) })
+                        ?? tracks.first(where: \.isOriginal)
+                }
+                for deviceLang in Locale.preferredLanguages {
+                    if let exact = tracks.first(where: { $0.languageCode == deviceLang }) { return exact }
+                    let base = deviceLang.components(separatedBy: "-").first ?? deviceLang
+                    if let match = tracks.first(where: { $0.languageCode.hasPrefix(base) }) { return match }
+                }
+                if let original = tracks.first(where: \.isOriginal) { return original }
+                let englishPrefixes = ["en-", "en_"]
+                if let english = tracks.first(where: { $0.languageCode == "en" })
+                    ?? tracks.first(where: { lang in englishPrefixes.contains(where: { lang.languageCode.hasPrefix($0) }) }) {
+                    return english
+                }
+                return tracks.first
+            }()
+            self.selectedAudioTrack = autoSelect
+            if let autoSelect, let option = optionMap[autoSelect.id] {
+                item.select(option, in: group)
+            }
+            playerLog.notice("Audio tracks: \(tracks.map(\.name).joined(separator: ", ")) — auto-selected: \(autoSelect?.name ?? "default")")
+        }
+    }
+}

@@ -19,6 +19,15 @@ private let playerLog = CrashlyticsLogger(category: "Player")
 @Observable
 public final class PlaybackViewModel {
 
+    // MARK: - Sub-module managers
+    // Each manager owns a subset of playback state and exposes a narrow interface.
+    // PlaybackViewModel is the coordinator that injects dependencies and forwards calls.
+
+    let sponsorBlockManager: SponsorBlockSkipManager
+    let captionsManager: CaptionsManager
+    let audioManager: AudioTrackManager
+    let qualityManager: PlaybackQualityManager
+
     // MARK: - State
 
     public internal(set) var playerInfo: PlayerInfo?
@@ -26,11 +35,45 @@ public final class PlaybackViewModel {
     public internal(set) var isPlaying: Bool = false
     public internal(set) var currentTime: TimeInterval = 0
     public internal(set) var duration: TimeInterval = 0
-    public internal(set) var availableFormats: [VideoFormat] = []
-    public internal(set) var selectedFormat: VideoFormat? = nil
-    public internal(set) var sponsorSegments: [SponsorSegment] = []
-    /// The segment currently under the playhead whose action is `.showToast` (nil otherwise).
-    public internal(set) var currentToastSegment: SponsorSegment? = nil
+
+    // MARK: - Forwarding computed properties (views unchanged)
+
+    public internal(set) var availableFormats: [VideoFormat] {
+        get { qualityManager.availableFormats }
+        set { qualityManager.availableFormats = newValue }
+    }
+    public internal(set) var selectedFormat: VideoFormat? {
+        get { qualityManager.selectedFormat }
+        set { qualityManager.selectedFormat = newValue }
+    }
+    public internal(set) var sponsorSegments: [SponsorSegment] {
+        get { sponsorBlockManager.sponsorSegments }
+        set { sponsorBlockManager.sponsorSegments = newValue }
+    }
+    public internal(set) var currentToastSegment: SponsorSegment? {
+        get { sponsorBlockManager.currentToastSegment }
+        set { sponsorBlockManager.currentToastSegment = newValue }
+    }
+    public internal(set) var availableCaptions: [CaptionTrack] {
+        get { captionsManager.availableCaptions }
+        set { captionsManager.availableCaptions = newValue }
+    }
+    public internal(set) var selectedCaption: CaptionTrack? {
+        get { captionsManager.selectedCaption }
+        set { captionsManager.selectedCaption = newValue }
+    }
+    public internal(set) var currentCaptionCue: CaptionCue? {
+        get { captionsManager.currentCaptionCue }
+        set { captionsManager.currentCaptionCue = newValue }
+    }
+    public internal(set) var availableAudioTracks: [AudioTrack] {
+        get { audioManager.availableAudioTracks }
+        set { audioManager.availableAudioTracks = newValue }
+    }
+    public internal(set) var selectedAudioTrack: AudioTrack? {
+        get { audioManager.selectedAudioTrack }
+        set { audioManager.selectedAudioTrack = newValue }
+    }
     /// Short message displayed by `ToastModifier` in the player; cleared automatically after 2 s.
     public var toastMessage: String? = nil
     public internal(set) var relatedVideos: [Video] = []
@@ -98,17 +141,8 @@ public final class PlaybackViewModel {
     /// Used by `toggleAudioOnlyLive` to decide whether to reload HLS on turn-off.
     var audioOnlyItemActive: Bool = false
 
-    // MARK: - Captions
-
-    public internal(set) var availableCaptions: [CaptionTrack] = []
-    public internal(set) var selectedCaption: CaptionTrack? = nil
-
-    // MARK: - Audio tracks
-
-    public internal(set) var availableAudioTracks: [AudioTrack] = []
-    public internal(set) var selectedAudioTrack: AudioTrack? = nil
-    /// The caption cue active at the current playhead position (nil when CC is off or no cue matches).
-    public internal(set) var currentCaptionCue: CaptionCue? = nil
+    // MARK: - Captions (forwarded to CaptionsManager)
+    // MARK: - Audio tracks (forwarded to AudioTrackManager)
 
     /// True while the user is dragging the progress slider.
     /// The time observer skips `currentTime` updates while this is set so the
@@ -166,23 +200,26 @@ public final class PlaybackViewModel {
     @ObservationIgnored nonisolated(unsafe) var airPlayObserver: NSKeyValueObservation?
     /// Prevents infinite retry loops: set once the first fallback attempt has been made.
     var hasRetriedPlayback: Bool = false
-    /// Set after a Cannot-Decode (AVFoundationErrorDomain -11833) failure on the Auto HLS
-    /// master to indicate that a H.264-capped recovery attempt is already in flight.
-    /// Guards against a second identical recovery on the same video.
-    var hasAppliedH264Cap: Bool = false
-    /// True while a SponsorBlock auto-skip seek is in-flight. Guards against the periodic
-    /// time observer re-triggering `checkSponsorSkip` before the seek completes, which
-    /// causes the end-of-video twitch / audio loop.
-    var isSkippingSegment: Bool = false
+    /// Set after a Cannot-Decode failure on the Auto HLS master — forwarded to qualityManager.
+    var hasAppliedH264Cap: Bool {
+        get { qualityManager.hasAppliedH264Cap }
+        set { qualityManager.hasAppliedH264Cap = newValue }
+    }
+    /// True while a SponsorBlock auto-skip seek is in-flight — forwarded to sponsorBlockManager.
+    var isSkippingSegment: Bool { sponsorBlockManager.isSkippingSegment }
     var itemObserverTask: Task<Void, Never>?
     var endObserverTask: Task<Void, Never>?
-    /// In-flight quality-switch task. Cancelled before starting a new switch.
-    var qualityTask: Task<Void, Never>?
+    var qualityTask: Task<Void, Never>? {
+        get { qualityManager.qualityTask }
+        set { qualityManager.qualityTask = newValue }
+    }
     /// True while `replaceCurrentItem` is executing; guards the rate observer from
     /// treating the transient rate-drop as an unexpected external pause.
     var isSwappingItem: Bool = false
-    /// Height → variant playlist URL map built from the HLS master manifest.
-    var hlsVariantURLs: [Int: URL] = [:]
+    var hlsVariantURLs: [Int: URL] {
+        get { qualityManager.hlsVariantURLs }
+        set { qualityManager.hlsVariantURLs = newValue }
+    }
     var controlsTimer: Task<Void, Never>?
     @ObservationIgnored var sleepTimerTask: Task<Void, Never>?
     /// Remaining minutes on the sleep timer (nil = off). Observable so PlayerView can show it.
@@ -195,14 +232,25 @@ public final class PlaybackViewModel {
     /// and watchtime segment reporting. See WatchtimeTracker.
     var tracker: WatchtimeTracker
 
-    // AVMediaSelectionGroup for audio — not Sendable, kept nonisolated(unsafe) and only
-    // accessed from MainActor context (Task { [weak self] in ... } on the main actor).
-    @ObservationIgnored nonisolated(unsafe) var audioSelectionGroup: AVMediaSelectionGroup? = nil
-    @ObservationIgnored var audioOptionsByID: [String: AVMediaSelectionOption] = [:]
+    // AVMediaSelectionGroup (forwarded to AudioTrackManager)
+    @ObservationIgnored nonisolated(unsafe) var audioSelectionGroup: AVMediaSelectionGroup? {
+        get { audioManager.audioSelectionGroup }
+        set { audioManager.audioSelectionGroup = newValue }
+    }
+    @ObservationIgnored var audioOptionsByID: [String: AVMediaSelectionOption] {
+        get { audioManager.audioOptionsByID }
+        set { audioManager.audioOptionsByID = newValue }
+    }
 
-    // Caption cues loaded for the currently selected track
-    var captionCues: [CaptionCue] = []
-    @ObservationIgnored var captionFetchTask: Task<Void, Never>? = nil
+    // Caption cues (forwarded to CaptionsManager)
+    var captionCues: [CaptionCue] {
+        get { captionsManager.captionCues }
+        set { captionsManager.captionCues = newValue }
+    }
+    @ObservationIgnored var captionFetchTask: Task<Void, Never>? {
+        get { captionsManager.captionFetchTask }
+        set { captionsManager.captionFetchTask = newValue }
+    }
     /// Timestamp of the last commitScrub(). Used to ignore the spurious
     /// beginScrubbing() that SwiftUI's Slider fires immediately after commitScrub
     /// causes a binding re-evaluation and the slider thumb re-positions itself.
@@ -242,6 +290,17 @@ public final class PlaybackViewModel {
         self.sponsorBlock = sponsorBlock
         self.deArrow = deArrow
         self.settings = settings
+
+        // Create managers before any other setup (they hold no back-references yet).
+        let sbm = SponsorBlockSkipManager()
+        let cam = CaptionsManager()
+        let aqm = PlaybackQualityManager(player: player)
+        let atm = AudioTrackManager(player: player)
+        self.sponsorBlockManager = sbm
+        self.captionsManager = cam
+        self.qualityManager = aqm
+        self.audioManager = atm
+
         player.allowsExternalPlayback = true
         #if canImport(UIKit)
         do {
@@ -258,6 +317,12 @@ public final class PlaybackViewModel {
         setupAudioSessionObserver()
         setupAirPlayObserver()
         #endif
+
+        // Wire delegates (self is now fully initialised).
+        sbm.delegate = self
+        sbm.player = player
+        aqm.delegate = self
+        atm.delegate = self
     }
 
     deinit {
@@ -288,3 +353,17 @@ public final class PlaybackViewModel {
         isAudioOnlyMode = newSettings.audioOnlyMode
     }
 }
+
+// MARK: - Delegate conformances
+
+extension PlaybackViewModel: SponsorBlockDelegate {
+    func snapCurrentTime(to seconds: Double) { currentTime = seconds }
+}
+
+extension PlaybackViewModel: QualityDelegate {
+    func loadAudioTracks(from item: AVPlayerItem) {
+        audioManager.loadAudioTracks(from: item)
+    }
+}
+
+extension PlaybackViewModel: AudioTrackDelegate {}

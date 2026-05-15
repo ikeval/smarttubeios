@@ -1,276 +1,31 @@
 import AVFoundation
-import os
 import SmartTubeIOSCore
 
-private let playerLog = CrashlyticsLogger(category: "Player")
-
-// MARK: - Stream Format / HLS Quality Selection
+// MARK: - Stream Format / HLS Quality Selection (thin wrapper — logic lives in PlaybackQualityManager)
 
 extension PlaybackViewModel {
 
-    /// Switch to a specific quality. Pass `nil` to return to Auto (no resolution cap).
-    ///
-    /// All quality switching reloads the HLS item with `preferredMaximumResolution` set
-    /// on the new `AVPlayerItem` before it starts loading. Direct CDN adaptive URLs
-    /// (both c=IOS and c=ANDROID) return HTTP 403 because YouTube's CDN now requires
-    /// Proof-of-Origin tokens (`id=o-*`) that AVURLAsset cannot provide. The HLS path
-    /// through `manifest.googlevideo.com` is the only reliable stream path.
     public func selectFormat(_ format: VideoFormat?) {
-        selectedFormat = format
-        toastMessage = format.map { "\($0.height)p" } ?? "Auto"
-        qualityTask?.cancel()
-        qualityTask = nil
-        let savedTime = currentTime
-        qualityTask = Task { [weak self] in
-            await self?.reloadHLSItem(seekTo: savedTime, qualityCap: format?.height)
-        }
+        qualityManager.selectFormat(format)
     }
 
-    /// Rebuilds the HLS player item from the stored `playerInfo`.
-    /// Sets `preferredMaximumResolution` on the new item before loading so AVPlayer
-    /// respects the cap from the first variant-selection pass — setting it on an
-    /// already-playing item after ABR has settled does not trigger a quality switch.
     func reloadHLSItem(seekTo time: TimeInterval, qualityCap: Int?) async {
-        guard let hlsURL = playerInfo?.hlsURL else { return }
-        guard !Task.isCancelled else { return }
-        let uaOpts: [String: Any] = [
-            "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": InnerTubeClients.iOS.userAgent]
-        ]
-        // Use the specific single-quality variant playlist URL when available.
-        // This eliminates AVPlayer's ABR algorithm — the player has only one quality
-        // to choose from and cannot switch to a higher variant.
-        // For Auto mode (nil cap) or unknown heights, fall back to the master URL.
-        let streamURL: URL
-        if let cap = qualityCap, let variantURL = hlsVariantURLs[cap] {
-            streamURL = variantURL
-            playerLog.notice("Quality → \(cap)p via direct variant playlist")
-        } else {
-            streamURL = hlsURL
-            playerLog.notice("Quality → \(qualityCap.map { "\($0)p" } ?? "Auto") via HLS master (reloaded)")
-        }
-        itemObserverTask?.cancel()
-        let asset = AVURLAsset(url: streamURL, options: uaOpts)
-        let item = AVPlayerItem(asset: asset)
-        item.audioTimePitchAlgorithm = .spectral
-        if let cap = qualityCap, hlsVariantURLs[cap] == nil {
-            // No direct variant URL — fall back to preferredMaximumResolution + preferredPeakBitRate hints.
-            let h = CGFloat(cap)
-            item.preferredMaximumResolution = CGSize(width: h * 4, height: h)
-            item.preferredPeakBitRate = peakBitRate(for: cap)
-        }
-        itemObserverTask = Task { [weak self] in
-            for await status in item.statusStream {
-                guard let self, !Task.isCancelled else { return }
-                switch status {
-                case .readyToPlay:
-                    if time > 0 { self.seek(to: time) }
-                    // Resume playback at the same speed the user had before the switch.
-                    self.player.rate = Float(self.settings.playbackSpeed)
-                    self.isPlaying = true
-                    // Re-discover audio tracks on the new item so the audio selector
-                    // reflects the correct options and the active track is applied.
-                    // Without this, audioSelectionGroup/audioOptionsByID from the old
-                    // item remain stale, causing silent audio after a quality change.
-                    self.loadAudioTracks(from: item)
-                case .failed:
-                    let err = item.error.map { "\($0)" } ?? "nil"
-                    playerLog.error("❌ Quality-switch AVPlayerItem failed: \(err)")
-                    let nsErr = item.error as? NSError
-                    let is403 = nsErr?.domain == NSURLErrorDomain && nsErr?.code == -1102
-                    if is403, let video = self.currentVideo {
-                        // The HLS URL (both variant and master) carries an expired IP binding.
-                        // Invalidate the cache and trigger the same 403 recovery as initial load.
-                        playerLog.notice("Quality-switch 403 — invalidating cache and re-fetching player info")
-                        await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
-                        self.selectedFormat = nil
-                        await self.retryWith403Recovery(video: video, originalError: item.error)
-                    } else if qualityCap != nil {
-                        // The chosen quality variant cannot be decoded (e.g. VP9 on Simulator).
-                        // Revert to the HLS master so ABR can pick a decodable tier automatically.
-                        playerLog.notice("Quality-switch failed — reverting selectedFormat to Auto")
-                        self.selectedFormat = nil
-                        self.toastMessage = "Quality unavailable — reverting to Auto"
-                        await self.reloadHLSItem(seekTo: self.currentTime, qualityCap: nil)
-                    } else if !self.hasAppliedH264Cap,
-                              nsErr?.domain == AVFoundationErrorDomain,
-                              nsErr?.code == -11833 {
-                        // Auto HLS master also failed with Cannot Decode — ABR picked an
-                        // unsupported VP9/AV1 variant (Mac Catalyst / A12X iPads).
-                        // Retry with a hard H.264 bitrate cap before surfacing the error.
-                        playerLog.notice("Auto HLS Cannot Decode — retrying with H.264 bitrate cap")
-                        self.hasAppliedH264Cap = true
-                        self.toastMessage = "Adjusting quality for this device…"
-                        await self.reloadHLSItemH264Capped(seekTo: self.currentTime)
-                    } else {
-                        // Auto-quality HLS also failed — surface the error.
-                        self.error = item.error
-                    }
-                case .unknown:
-                    break
-                @unknown default:
-                    break
-                }
-            }
-        }
-        // Guard the rateObserver so it does not interpret replaceCurrentItem's
-        // internal rate-drop as an unexpected external pause.
-        isSwappingItem = true
-        player.replaceCurrentItem(with: item)
-        isSwappingItem = false
+        await qualityManager.reloadHLSItem(seekTo: time, qualityCap: qualityCap)
     }
 
-    /// Fetches the HLS master manifest and returns a map of stream height → variant playlist URL.
-    /// Parses consecutive `#EXT-X-STREAM-INF` / URI pairs. Uses the iOS User-Agent so
-    /// YouTube's manifest server responds correctly.
-    /// Returns an empty dict on network or parse failure — callers treat that as
-    /// "manifest unavailable, show all formats" rather than "manifest has no variants".
     func fetchHLSVariantURLs(url: URL) async -> [Int: URL] {
-        var request = URLRequest(url: url)
-        request.setValue(InnerTubeClients.iOS.userAgent, forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 8
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let text = String(data: data, encoding: .utf8) else {
-            playerLog.notice("HLS manifest fetch failed — showing all quality options")
-            return [:]
-        }
-        var variants: [Int: URL] = [:]
-        // Track whether the stored URL for each height is an avc1 (H.264) variant.
-        var variantIsH264: [Int: Bool] = [:]
-        let baseURL = url.deletingLastPathComponent()
-        let lines = text.components(separatedBy: .newlines)
-        var pendingHeight: Int? = nil
-        var pendingIsH264: Bool = false
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("#EXT-X-STREAM-INF") {
-                // Lines look like: #EXT-X-STREAM-INF:BANDWIDTH=...,RESOLUTION=1920x1080,CODECS="avc1...",...
-                pendingHeight = nil
-                pendingIsH264 = false
-                if let range = trimmed.range(of: #"RESOLUTION=\d+x(\d+)"#, options: .regularExpression) {
-                    let match = String(trimmed[range])
-                    if let xIdx = match.firstIndex(of: "x"),
-                       let height = Int(match[match.index(after: xIdx)...]) {
-                        pendingHeight = height
-                    }
-                }
-                // Detect H.264 by looking for avc1 in the CODECS attribute.
-                if let codecsRange = trimmed.range(of: #"CODECS="[^"]*""#, options: .regularExpression) {
-                    pendingIsH264 = trimmed[codecsRange].contains("avc1")
-                }
-            } else if !trimmed.hasPrefix("#"), !trimmed.isEmpty, let height = pendingHeight {
-                // The line immediately after #EXT-X-STREAM-INF is the variant URI.
-                let variantURL: URL?
-                if trimmed.hasPrefix("http") {
-                    variantURL = URL(string: trimmed)
-                } else {
-                    variantURL = URL(string: trimmed, relativeTo: baseURL).map { URL(string: $0.absoluteString) } ?? nil
-                }
-                if let resolvedURL = variantURL {
-                    if variants[height] == nil {
-                        // Accept the first variant seen for this height.
-                        variants[height] = resolvedURL
-                        variantIsH264[height] = pendingIsH264
-                    } else {
-#if !os(tvOS)
-                        // iOS/macOS: upgrade to H.264 if the existing variant is non-H.264.
-                        // The iOS Simulator has HEVC decode issues; H.264 is the safe choice there.
-                        // On tvOS (real hardware) HEVC is fully supported — keep whichever variant
-                        // YouTube listed first, which is typically HEVC at high resolutions.
-                        if !(variantIsH264[height] ?? false) && pendingIsH264 {
-                            variants[height] = resolvedURL
-                            variantIsH264[height] = true
-                        }
-#endif
-                    }
-                }
-                pendingHeight = nil
-                pendingIsH264 = false
-            } else if trimmed.hasPrefix("#") {
-                // Any other directive between #EXT-X-STREAM-INF and its URI resets the pending state.
-                if pendingHeight != nil, !trimmed.hasPrefix("#EXT-X-STREAM-INF") {
-                    pendingHeight = nil
-                    pendingIsH264 = false
-                }
-            }
-        }
-        playerLog.notice("HLS manifest parsed: heights=\(variants.keys.sorted().reversed())")
-        return variants
+        await qualityManager.fetchHLSVariantURLs(url: url)
     }
 
     static func deduplicatedVideoFormats(_ formats: [VideoFormat]) -> [VideoFormat] {
-        let candidates = formats.filter { $0.url != nil && $0.height > 0 }
-        var seen = Set<String>()
-        var result: [VideoFormat] = []
-        for fmt in candidates.sorted(by: {
-            if $0.height != $1.height { return $0.height > $1.height }
-            if $0.fps != $1.fps { return $0.fps > $1.fps }
-            // Prefer mp4 over webm for the same height+fps — AVPlayer plays mp4 natively.
-            let lhsMp4 = $0.mimeType.hasPrefix("video/mp4")
-            let rhsMp4 = $1.mimeType.hasPrefix("video/mp4")
-            if lhsMp4 != rhsMp4 { return lhsMp4 }
-            return ($0.bitrate ?? 0) > ($1.bitrate ?? 0)
-        }) {
-            let key = "\(fmt.height):\(fmt.fps)"
-            if !seen.contains(key) {
-                seen.insert(key)
-                result.append(fmt)
-            }
-        }
-        return result
+        PlaybackQualityManager.deduplicatedVideoFormats(formats)
     }
 
-    /// Returns the recommended ABR peak bitrate hint for a given resolution tier.
-    /// Used when no direct variant URL is available and we fall back to the master URL.
     func peakBitRate(for height: Int) -> Double {
-        switch height {
-        case 2160:  return 20_000_000   // 20 Mbps — HEVC 4K
-        case 1440:  return 12_000_000   // 12 Mbps — HEVC 1440p
-        case 1080:  return  8_000_000   // 8 Mbps  — 1080p
-        case  720:  return  5_000_000   // 5 Mbps  — 720p
-        default:    return  8_000_000
-        }
+        qualityManager.peakBitRate(for: height)
     }
 
-    /// Last-resort recovery for Cannot-Decode failures on the HLS Auto master.
-    /// Reloads the master URL with a hard 1080p size cap and an 8 Mbps peak bitrate
-    /// so AVPlayer's ABR stays within H.264 tier bitrates and avoids VP9/AV1 variants.
-    /// Used on Mac Catalyst and older iPads (pre-A15) that lack VP9/AV1 hardware decoders.
     func reloadHLSItemH264Capped(seekTo time: TimeInterval) async {
-        guard let hlsURL = playerInfo?.hlsURL else { return }
-        guard !Task.isCancelled else { return }
-        let uaOpts: [String: Any] = [
-            "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": InnerTubeClients.iOS.userAgent]
-        ]
-        let asset = AVURLAsset(url: hlsURL, options: uaOpts)
-        let item = AVPlayerItem(asset: asset)
-        item.audioTimePitchAlgorithm = .spectral
-        // 1080p + 8 Mbps keeps ABR in the H.264 tier without needing manifest parsing.
-        item.preferredMaximumResolution = CGSize(width: 1920, height: 1080)
-        item.preferredPeakBitRate = 8_000_000
-        itemObserverTask?.cancel()
-        itemObserverTask = Task { [weak self] in
-            for await status in item.statusStream {
-                guard let self, !Task.isCancelled else { return }
-                switch status {
-                case .readyToPlay:
-                    if time > 0 { self.seek(to: time) }
-                    self.player.rate = Float(self.settings.playbackSpeed)
-                    self.isPlaying = true
-                    self.loadAudioTracks(from: item)
-                    playerLog.notice("✅ H.264-capped AVPlayerItem readyToPlay")
-                case .failed:
-                    let err = item.error.map { "\($0)" } ?? "nil"
-                    playerLog.error("❌ H.264-capped AVPlayerItem also failed: \(err)")
-                    self.error = item.error
-                case .unknown:
-                    break
-                @unknown default:
-                    break
-                }
-            }
-        }
-        isSwappingItem = true
-        player.replaceCurrentItem(with: item)
-        isSwappingItem = false
+        await qualityManager.reloadHLSItemH264Capped(seekTo: time)
     }
 }
