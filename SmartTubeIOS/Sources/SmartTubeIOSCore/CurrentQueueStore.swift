@@ -8,7 +8,7 @@ import Foundation
 // Thread-safe: implemented as a Swift actor — mirrors VideoStateStore and
 // LocalSubscriptionStore.
 
-public actor CurrentQueueStore {
+public actor CurrentQueueStore: UserDefaultsBackedStore {
 
     // MARK: - Singleton
 
@@ -16,7 +16,7 @@ public actor CurrentQueueStore {
 
     // MARK: - Storage
 
-    private static let udKey    = "st_current_queue"
+    static let defaultsKey = "st_current_queue"
     private static let maxCount = 500
 
     /// The synthetic playlist ID used to tag queued videos. Declared `nonisolated`
@@ -26,22 +26,21 @@ public actor CurrentQueueStore {
     // MARK: - State
 
     public private(set) var videos: [Video] = []
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
 
     // MARK: - Init
 
     private init() {
         self.defaults = .standard
-        self.videos   = Self.load(from: .standard)
+        if let loaded = Self.loadFrom(.standard) { videos = loaded }
     }
 
     /// Designated initializer for unit tests.
     /// Pass a unique `suiteName` to get a fully isolated store with no shared
     /// UserDefaults state — mirrors VideoStateStore(suiteName:).
     init(suiteName: String) {
-        let ud        = UserDefaults(suiteName: suiteName) ?? .standard
-        self.defaults = ud
-        self.videos   = Self.load(from: ud)
+        self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        if let loaded = Self.loadFrom(self.defaults) { videos = loaded }
     }
 
     // MARK: - Public API
@@ -80,7 +79,7 @@ public actor CurrentQueueStore {
     /// Empties the queue and removes the UserDefaults entry.
     public func clear() {
         videos = []
-        defaults.removeObject(forKey: Self.udKey)
+        defaults.removeObject(forKey: Self.defaultsKey)
     }
 
     // MARK: - Playlist adapter
@@ -105,17 +104,8 @@ public actor CurrentQueueStore {
         )
     }
 
-    // MARK: - Persistence
+    // MARK: - UserDefaultsBackedStore
 
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(videos) else { return }
-        defaults.set(data, forKey: Self.udKey)
-    }
-
-    private static func load(from ud: UserDefaults) -> [Video] {
-        guard let data    = ud.data(forKey: udKey),
-              let decoded = try? JSONDecoder().decode([Video].self, from: data)
-        else { return [] }
-        return decoded
-    }
+    func encodedValue() -> [Video] { videos }
+    func decodeValue(_ decoded: [Video]) { videos = decoded }
 }

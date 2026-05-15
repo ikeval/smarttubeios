@@ -9,7 +9,7 @@ import Foundation
 // Subscriptions are stored as a [channelId: LocalChannel] dictionary.
 // On each RSS refresh, metadata (title, thumbnail) is updated via updateMetadata().
 
-public actor LocalSubscriptionStore {
+public actor LocalSubscriptionStore: UserDefaultsBackedStore {
 
     // MARK: - Singleton
 
@@ -17,33 +17,26 @@ public actor LocalSubscriptionStore {
 
     // MARK: - Storage key
 
-    private static let udKey = "st_local_subscriptions"
+    static let defaultsKey = "st_local_subscriptions"
 
     // MARK: - State
 
     private var channels: [String: LocalChannel] = [:]
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
 
     // MARK: - Init
 
     private init() {
         self.defaults = .standard
-        if let data = UserDefaults.standard.data(forKey: Self.udKey),
-           let decoded = try? JSONDecoder().decode([String: LocalChannel].self, from: data) {
-            channels = decoded
-        }
+        if let loaded = Self.loadFrom(.standard) { channels = loaded }
     }
 
     /// Designated initializer for unit testing.
     /// Pass a unique `suiteName` string to get a fully isolated store with no
     /// shared UserDefaults state — mirrors VideoStateStore(suiteName:).
     init(suiteName: String) {
-        let ud = UserDefaults(suiteName: suiteName) ?? .standard
-        self.defaults = ud
-        if let data = ud.data(forKey: Self.udKey),
-           let decoded = try? JSONDecoder().decode([String: LocalChannel].self, from: data) {
-            channels = decoded
-        }
+        self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        if let loaded = Self.loadFrom(self.defaults) { channels = loaded }
     }
 
     // MARK: - Public API
@@ -87,10 +80,8 @@ public actor LocalSubscriptionStore {
         persist()
     }
 
-    // MARK: - Persistence
+    // MARK: - UserDefaultsBackedStore
 
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(channels) else { return }
-        defaults.set(data, forKey: Self.udKey)
-    }
+    func encodedValue() -> [String: LocalChannel] { channels }
+    func decodeValue(_ decoded: [String: LocalChannel]) { channels = decoded }
 }

@@ -9,7 +9,7 @@ import Foundation
 // Thread-safe: implemented as a Swift actor, mirroring VideoStateStore,
 // LocalSubscriptionStore, and CurrentQueueStore.
 
-public actor SearchHistoryStore {
+public actor SearchHistoryStore: UserDefaultsBackedStore {
 
     // MARK: - Singleton
 
@@ -17,24 +17,23 @@ public actor SearchHistoryStore {
 
     // MARK: - Private
 
-    private static let udKey = "st_search_history"
+    static let defaultsKey = "st_search_history"
     private static let maxEntries = 50
 
     private var entries: [SearchHistoryEntry] = []
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
 
     private init() {
         self.defaults = .standard
-        entries = Self.load(from: .standard)
+        if let loaded = Self.loadFrom(.standard) { entries = loaded }
     }
 
     /// Designated initializer for unit testing. Pass a unique `suiteName` string
     /// (e.g. `"test-\(UUID().uuidString)"`) to get a fully isolated store with
     /// no shared `UserDefaults` state.
     init(suiteName: String) {
-        let ud = UserDefaults(suiteName: suiteName) ?? .standard
-        self.defaults = ud
-        entries = Self.load(from: ud)
+        self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        if let loaded = Self.loadFrom(self.defaults) { entries = loaded }
     }
 
     // MARK: - Public API
@@ -68,17 +67,8 @@ public actor SearchHistoryStore {
         persist()
     }
 
-    // MARK: - Persistence
+    // MARK: - UserDefaultsBackedStore
 
-    private static func load(from defaults: UserDefaults) -> [SearchHistoryEntry] {
-        guard let data = defaults.data(forKey: udKey),
-              let decoded = try? JSONDecoder().decode([SearchHistoryEntry].self, from: data)
-        else { return [] }
-        return decoded
-    }
-
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        defaults.set(data, forKey: Self.udKey)
-    }
+    func encodedValue() -> [SearchHistoryEntry] { entries }
+    func decodeValue(_ decoded: [SearchHistoryEntry]) { entries = decoded }
 }
