@@ -27,24 +27,24 @@ public final class SponsorBlockSkipManager {
 
     // MARK: - State
 
-    var sponsorSegments: [SponsorSegment] = []
-    var currentToastSegment: SponsorSegment? = nil
+    public var sponsorSegments: [SponsorSegment] = []
+    public var currentToastSegment: SponsorSegment? = nil
     /// True while a SponsorBlock auto-skip seek is in-flight. Guards against the
     /// periodic time observer re-triggering before the seek completes.
-    private(set) var isSkippingSegment: Bool = false
+    public private(set) var isSkippingSegment: Bool = false
 
     // MARK: - Dependencies
 
-    @ObservationIgnored weak var delegate: (any SponsorBlockDelegate)?
-    @ObservationIgnored var player: AVPlayer?
+    @ObservationIgnored public weak var delegate: (any SponsorBlockDelegate)?
+    @ObservationIgnored public var player: AVPlayer?
 
     // MARK: - Init
 
-    init() {}
+    public init() {}
 
     // MARK: - Interface
 
-    func reset() {
+    public func reset() {
         sponsorSegments = []
         currentToastSegment = nil
         isSkippingSegment = false
@@ -56,7 +56,7 @@ public final class SponsorBlockSkipManager {
     ///   `.nothing`   → no-op.
     /// Returns true if an auto-seek was triggered.
     @discardableResult
-    func checkSponsorSkip(at time: TimeInterval) -> Bool {
+    public func checkSponsorSkip(at time: TimeInterval) -> Bool {
         guard let delegate, delegate.settings.sponsorBlockEnabled else {
             currentToastSegment = nil
             return false
@@ -100,7 +100,7 @@ public final class SponsorBlockSkipManager {
     }
 
     /// Manually skip the segment shown in `currentToastSegment` (called by skip button).
-    func skipToastSegment() {
+    public func skipToastSegment() {
         guard let seg = currentToastSegment else { return }
         currentToastSegment = nil
         let effectiveDuration = player?.currentItem?.duration.seconds ?? delegate?.duration ?? 0

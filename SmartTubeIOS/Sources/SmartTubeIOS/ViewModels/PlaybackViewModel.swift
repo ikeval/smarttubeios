@@ -275,7 +275,7 @@ public final class PlaybackViewModel {
     let api: InnerTubeAPI
     let sponsorBlock: SponsorBlockService
     let deArrow: DeArrowService
-    var settings: AppSettings
+    public var settings: AppSettings
     var hasAuthToken: Bool = false
     var currentAuthToken: String? = nil
 
@@ -357,7 +357,7 @@ public final class PlaybackViewModel {
 // MARK: - Delegate conformances
 
 extension PlaybackViewModel: SponsorBlockDelegate {
-    func snapCurrentTime(to seconds: Double) { currentTime = seconds }
+    public func snapCurrentTime(to seconds: Double) { currentTime = seconds }
 }
 
 extension PlaybackViewModel: QualityDelegate {
