@@ -89,17 +89,18 @@ extension PlayerView {
 
             ScrollView {
                 VStack(spacing: 0) {
+                    #if os(tvOS)
                     moreMenuSpeedRow
                     moreMenuQualityRow
+                    #endif
                     moreMenuLikeDislikeRow
                     moreMenuShareRow
-                    moreMenuSleepTimerRow
                     #if os(tvOS)
+                    moreMenuSleepTimerRow
                     moreMenuAudioOnlyRow
                     #endif
                     moreMenuDownloadRow
                     moreMenuCaptionsRow
-                    moreMenuAudioTrackRow
                     moreMenuDescriptionRow
                     moreMenuCommentsRow
                     moreMenuCancelRow
