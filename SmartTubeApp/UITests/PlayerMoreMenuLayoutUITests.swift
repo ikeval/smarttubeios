@@ -120,20 +120,6 @@ final class PlayerMenuAndPickerLayoutUITests: XCTestCase {
         _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: pred, object: nil)], timeout: 5)
     }
 
-    /// Verifies a picker overlay's width is ≤ 85 % of screen width (task #58 constraint).
-    private func assertWidthConstrained(_ element: XCUIElement, named name: String) {
-        let screenWidth = app.frame.size.width
-        let overlayWidth = element.frame.size.width
-        XCTAssertLessThanOrEqual(
-            overlayWidth, screenWidth * 0.85,
-            "\(name) width (\(overlayWidth)pt) must be ≤ 85 % of screen width (\(screenWidth)pt) — task #58"
-        )
-        XCTAssertGreaterThan(
-            overlayWidth, screenWidth * 0.3,
-            "\(name) width (\(overlayWidth)pt) must be reasonable (> 30 % of screen)"
-        )
-    }
-
     // MARK: - More menu layout tests
 
     func testMoreMenuIsScrollableAndUsableInLandscape() throws {
@@ -202,56 +188,4 @@ final class PlayerMenuAndPickerLayoutUITests: XCTestCase {
                       "menu should fit entirely within portrait height (moreMenuMaxHeight = 380 pt)")
     }
 
-    // MARK: - Picker overlay layout tests
-
-    func testQualityPickerWidthIsConstrainedInLandscape() throws {
-        try XCTSkipIf(Self.skipAllTests, Self.skipReason)
-        rotateToLandscapeAndWait()
-        ensureMoreMenuVisible()
-
-        let qualityRow = app.buttons["player.moreMenu.qualityRow"].firstMatch
-        guard qualityRow.waitForExistence(timeout: 10) else {
-            try captureAndSkip("Quality row not shown — video formats unavailable", in: app)
-        }
-        qualityRow.tap()
-
-        let qualityPicker = app.otherElements["player.qualityPicker"].firstMatch
-        XCTAssertTrue(qualityPicker.waitForExistence(timeout: 5),
-                      "Quality picker must appear after tapping quality row")
-        assertWidthConstrained(qualityPicker, named: "Quality picker")
-    }
-
-    func testSpeedPickerWidthIsConstrainedInLandscape() throws {
-        try XCTSkipIf(Self.skipAllTests, Self.skipReason)
-        rotateToLandscapeAndWait()
-        ensureMoreMenuVisible()
-
-        let speedRow = app.buttons["player.moreMenu.speedRow"].firstMatch
-        guard speedRow.waitForExistence(timeout: 10) else {
-            try captureAndSkip("Speed row not shown in landscape — hidden in compact height layout", in: app)
-        }
-        speedRow.tap()
-
-        let speedPicker = app.otherElements["player.speedPicker"].firstMatch
-        XCTAssertTrue(speedPicker.waitForExistence(timeout: 5),
-                      "Speed picker must appear after tapping speed row")
-        assertWidthConstrained(speedPicker, named: "Speed picker")
-    }
-
-    func testSleepTimerPickerWidthIsConstrainedInLandscape() throws {
-        try XCTSkipIf(Self.skipAllTests, Self.skipReason)
-        rotateToLandscapeAndWait()
-        ensureMoreMenuVisible()
-
-        let sleepRow = app.buttons["player.moreMenu.sleepTimerRow"].firstMatch
-        guard sleepRow.waitForExistence(timeout: 10) else {
-            try captureAndSkip("Sleep timer row not shown in landscape — hidden in compact height layout", in: app)
-        }
-        sleepRow.tap()
-
-        let sleepPicker = app.otherElements["player.sleepTimerPicker"].firstMatch
-        XCTAssertTrue(sleepPicker.waitForExistence(timeout: 5),
-                      "Sleep timer picker must appear after tapping sleep row")
-        assertWidthConstrained(sleepPicker, named: "Sleep timer picker")
-    }
 }

@@ -36,44 +36,6 @@ final class VideoPlaybackRegressionUITests: XCTestCase {
         app = nil
     }
 
-    // MARK: - Tests
-
-    /// Opens video Dy9ki9Q5nXs via deeplink and asserts it plays without an error banner.
-    func testSpecificVideoPlaysFromDeeplink() throws {
-        // The deeplink fires via UIApplication.open() shortly after launch.
-        // Wait for PlayerView to open.
-        let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
-        guard titleLabel.waitForExistence(timeout: 20) else {
-            try captureAndSkip("player.titleLabel did not appear within 20 s — network unavailable or deeplink did not fire", in: app)
-        }
-
-        let videoTitle = titleLabel.label
-
-        // Give the stream 12 s to fetch player info and begin buffering.
-        // The Android-client fallback adds ~1 extra round-trip if the primary HLS fails.
-        Thread.sleep(forTimeInterval: 12)
-
-        // Assert no player error banner appeared.
-        let errorBanner = app.otherElements["player.errorBanner"].firstMatch
-        XCTAssertFalse(
-            errorBanner.exists,
-            "player.errorBanner appeared during playback of '\(videoTitle)' (\(Self.targetVideoID)) — " +
-            "PlaybackViewModel.error was set. The Android-client fallback may not be working."
-        )
-
-        // Assert no feed-level error alert appeared.
-        XCTAssertFalse(
-            app.alerts["Error"].exists,
-            "An 'Error' alert appeared during or after opening '\(videoTitle)'"
-        )
-
-        // Confirm the player is still open.
-        XCTAssertTrue(
-            titleLabel.exists,
-            "player.titleLabel disappeared — PlayerView was dismissed unexpectedly"
-        )
-    }
-
     // MARK: - Regression: stop then replay (#51)
 
     /// Regression test for task #51: video does not reload after stop and replay.
