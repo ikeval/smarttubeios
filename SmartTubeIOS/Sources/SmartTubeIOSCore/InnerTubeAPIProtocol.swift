@@ -21,6 +21,7 @@ public protocol InnerTubeAPIProtocol: AnyObject, Sendable {
     func fetchSubscriptions(continuationToken: String?) async throws -> VideoGroup
     func fetchHistory(continuationToken: String?) async throws -> VideoGroup
     func fetchShorts() async throws -> VideoGroup
+    func fetchShortsMore(continuationToken: String) async throws -> VideoGroup
     func fetchMusic() async throws -> VideoGroup
     func fetchGaming() async throws -> VideoGroup
     func fetchNews() async throws -> VideoGroup

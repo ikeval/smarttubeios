@@ -30,6 +30,9 @@ public final class HomeViewModel {
     public private(set) var sections: [SectionState]
     /// Shorts fetched explicitly via FEshorts (TV home feed never includes them).
     public private(set) var shortsVideos: [Video] = []
+    /// Continuation token from the last FEshorts fetch; used by loadMoreShortsIfNeeded.
+    private var shortsNextPageToken: String? = nil
+    private var isLoadingMoreShorts: Bool = false
     public private(set) var isRefreshing: Bool = false
     /// Timestamp of the last successful load. Used for staleness checks.
     public private(set) var loadedAt: Date? = nil
@@ -170,7 +173,7 @@ public final class HomeViewModel {
         loadTask = Task {
             // Fetch shorts via FEshorts in parallel with the home/subs feed.
             // The TV home feed (FEwhat_to_watch) never includes a Shorts shelf.
-            async let fetchedShorts: [Video] = HomeViewModel.fetchShortsVideos(api: self.api)
+            async let fetchedShortsResult: ([Video], String?) = HomeViewModel.fetchShortsVideos(api: self.api)
 
             await withTaskGroup(of: (String, [Video], String?).self) { group in
                 for state in sections {
@@ -192,7 +195,12 @@ public final class HomeViewModel {
                     }
                 }
             }
-            shortsVideos = await fetchedShorts
+            shortsVideos = await fetchedShortsResult.0
+            shortsNextPageToken = await fetchedShortsResult.1
+            // Auto-load next page if the Shorts row won’t fill 2 horizontal screens.
+            // Threshold: 6 items on iOS (3 cards/screen × 2 screens);
+            //            8 items on tvOS (4 cards/screen × 2 screens).
+            await loadMoreShortsIfNeeded()
             isRefreshing = false
             loadedAt = Date()
             let merged = self.mergedVideos
@@ -262,18 +270,49 @@ public final class HomeViewModel {
         }
     }
 
+    /// Auto-loads an additional page of FEshorts if the current count falls below
+    /// the threshold needed to fill 2 horizontal screens.
+    /// iOS: ~3 cards/screen → threshold = 6; tvOS: ~4 cards/screen → threshold = 8.
+    func loadMoreShortsIfNeeded() async {
+        #if os(tvOS)
+        let threshold = 8
+        #else
+        let threshold = 6
+        #endif
+        guard shortsVideos.count < threshold,
+              let token = shortsNextPageToken,
+              !isLoadingMoreShorts else {
+            homeLog.notice("loadMoreShortsIfNeeded: skipped count=\(shortsVideos.count) hasToken=\(shortsNextPageToken != nil) loading=\(isLoadingMoreShorts)")
+            return
+        }
+        homeLog.notice("loadMoreShortsIfNeeded: auto-fetching next page count=\(shortsVideos.count) threshold=\(threshold)")
+        isLoadingMoreShorts = true
+        defer { isLoadingMoreShorts = false }
+        do {
+            let more = try await api.fetchShortsMore(continuationToken: token)
+            let existingIDs = Set(shortsVideos.map(\.id))
+            let newVideos = more.videos.filter { !existingIDs.contains($0.id) }
+            shortsVideos.append(contentsOf: newVideos)
+            shortsNextPageToken = more.nextPageToken
+            homeLog.notice("loadMoreShortsIfNeeded: added \(newVideos.count) total=\(shortsVideos.count)")
+        } catch {
+            homeLog.error("loadMoreShortsIfNeeded: fetch failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Private fetch helpers
 
     /// Fetches the FEshorts feed. Non-isolated so it runs concurrently with
     /// the home/subs task group.
-    private static func fetchShortsVideos(api: any InnerTubeAPIProtocol) async -> [Video] {
+    private static func fetchShortsVideos(api: any InnerTubeAPIProtocol) async -> ([Video], String?) {
         do {
             let group = try await api.fetchShorts()
-            homeLog.notice("fetchShortsVideos → \(group.videos.count) shorts")
-            return group.videos
+            let hasToken = group.nextPageToken != nil
+            homeLog.notice("fetchShortsVideos → \(group.videos.count) shorts hasToken=\(hasToken)")
+            return (group.videos, group.nextPageToken)
         } catch {
             homeLog.error("fetchShortsVideos failed: \(error.localizedDescription)")
-            return []
+            return ([], nil)
         }
     }
 

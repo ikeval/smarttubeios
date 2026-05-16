@@ -26,6 +26,7 @@ final class MockInnerTubeAPI: InnerTubeAPIProtocol {
     var subscriptionsResult: VideoGroup = VideoGroup(title: "Subs", videos: [])
     var historyResult: VideoGroup = VideoGroup(title: "History", videos: [])
     var shortsResult: VideoGroup = VideoGroup(title: "Shorts", videos: [])
+    var shortsMoreResult: VideoGroup = VideoGroup(title: "Shorts", videos: [])
     var musicResult: VideoGroup = VideoGroup(title: "Music", videos: [])
     var gamingResult: VideoGroup = VideoGroup(title: "Gaming", videos: [])
     var newsResult: VideoGroup = VideoGroup(title: "News", videos: [])
@@ -77,6 +78,12 @@ final class MockInnerTubeAPI: InnerTubeAPIProtocol {
         calls.append(Call(method: "fetchShorts", args: []))
         if let e = errorToThrow { throw e }
         return shortsResult
+    }
+
+    func fetchShortsMore(continuationToken: String) async throws -> VideoGroup {
+        calls.append(Call(method: "fetchShortsMore", args: [continuationToken]))
+        if let e = errorToThrow { throw e }
+        return shortsMoreResult
     }
 
     func fetchMusic() async throws -> VideoGroup {
@@ -280,6 +287,91 @@ struct HomeViewModelTests {
         #expect(vm.homeShortsVideos.allSatisfy { $0.isShort })
         #expect(vm.homeRegularVideos.map(\.id).contains("reg0_AAAA"))
         #expect(vm.homeShortsVideos.map(\.id).contains("srt0_BBBB"))
+    }
+
+    @Test("loadMoreShortsIfNeeded auto-fetches next page when shorts < 6")
+    func loadMoreShortsAutoFetchWhenBelowThreshold() async {
+        let mock = MockInnerTubeAPI()
+        // Initial page: 3 shorts with a continuation token
+        let initialShorts = (0..<3).map { Video(id: "srt\($0)_AAAAA", title: "Short \($0)", channelTitle: "Ch", isShort: true) }
+        mock.shortsResult = VideoGroup(title: "Shorts", videos: initialShorts, nextPageToken: "tok_page2")
+        // Next page: 4 more shorts
+        let moreShorts = (10..<14).map { Video(id: "srt\($0)_BBBBB", title: "Short \($0)", channelTitle: "Ch", isShort: true) }
+        mock.shortsMoreResult = VideoGroup(title: "Shorts", videos: moreShorts, nextPageToken: nil)
+        mock.homeRowsResult = []
+        mock.subscriptionsResult = VideoGroup(title: "Subs", videos: [])
+
+        let vm = HomeViewModel(api: mock)
+        vm.load()
+        await waitForTasks()
+
+        // fetchShortsMore must have been called
+        #expect(mock.calls.contains(where: { $0.method == "fetchShortsMore" }))
+        // shortsVideos should contain both pages (3 initial + 4 more = 7)
+        #expect(vm.shortsVideos.count == 7)
+    }
+
+    @Test("loadMoreShortsIfNeeded skips auto-fetch when shorts >= 6")
+    func loadMoreShortsSkipsWhenAboveThreshold() async {
+        let mock = MockInnerTubeAPI()
+        // Initial page: 6 shorts with a continuation token
+        let initialShorts = (0..<6).map { Video(id: "srt\($0)_CCCCC", title: "Short \($0)", channelTitle: "Ch", isShort: true) }
+        mock.shortsResult = VideoGroup(title: "Shorts", videos: initialShorts, nextPageToken: "tok_page2")
+        mock.homeRowsResult = []
+        mock.subscriptionsResult = VideoGroup(title: "Subs", videos: [])
+
+        let vm = HomeViewModel(api: mock)
+        vm.load()
+        await waitForTasks()
+
+        // fetchShortsMore must NOT have been called
+        #expect(!mock.calls.contains(where: { $0.method == "fetchShortsMore" }))
+        #expect(vm.shortsVideos.count == 6)
+    }
+
+    @Test("loadMoreShortsIfNeeded skips auto-fetch when no continuation token")
+    func loadMoreShortsSkipsWithNoToken() async {
+        let mock = MockInnerTubeAPI()
+        // Initial page: 2 shorts, no continuation token
+        let initialShorts = (0..<2).map { Video(id: "srt\($0)_DDDDD", title: "Short \($0)", channelTitle: "Ch", isShort: true) }
+        mock.shortsResult = VideoGroup(title: "Shorts", videos: initialShorts, nextPageToken: nil)
+        mock.homeRowsResult = []
+        mock.subscriptionsResult = VideoGroup(title: "Subs", videos: [])
+
+        let vm = HomeViewModel(api: mock)
+        vm.load()
+        await waitForTasks()
+
+        // fetchShortsMore must NOT have been called
+        #expect(!mock.calls.contains(where: { $0.method == "fetchShortsMore" }))
+        #expect(vm.shortsVideos.count == 2)
+    }
+
+    @Test("loadMoreShortsIfNeeded deduplicates videos from next page")
+    func loadMoreShortsDeduplicates() async {
+        let mock = MockInnerTubeAPI()
+        let initialShorts = (0..<3).map { Video(id: "srt\($0)_EEEEE", title: "Short \($0)", channelTitle: "Ch", isShort: true) }
+        // Next page contains 2 new + 1 duplicate from first page
+        let moreShorts = [
+            Video(id: "srt0_EEEEE", title: "Dup", channelTitle: "Ch", isShort: true),
+            Video(id: "srt10_FFFFF", title: "New1", channelTitle: "Ch", isShort: true),
+            Video(id: "srt11_FFFFF", title: "New2", channelTitle: "Ch", isShort: true),
+        ]
+        mock.shortsResult = VideoGroup(title: "Shorts", videos: initialShorts, nextPageToken: "tok_dup")
+        mock.shortsMoreResult = VideoGroup(title: "Shorts", videos: moreShorts, nextPageToken: nil)
+        mock.homeRowsResult = []
+        mock.subscriptionsResult = VideoGroup(title: "Subs", videos: [])
+
+        let vm = HomeViewModel(api: mock)
+        vm.load()
+        await waitForTasks()
+
+        // 3 initial + 2 new (duplicate filtered out) = 5
+        #expect(vm.shortsVideos.count == 5)
+        let ids = Set(vm.shortsVideos.map(\.id))
+        #expect(!ids.contains("srt0_EEEEE") == false) // original kept
+        #expect(ids.contains("srt10_FFFFF"))
+        #expect(ids.contains("srt11_FFFFF"))
     }
 }
 

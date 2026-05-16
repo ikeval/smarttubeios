@@ -181,7 +181,7 @@ extension InnerTubeAPI {
         return results
     }
 
-    // MARK: - Category sections
+    // MARK: - Shorts
 
     public func fetchShorts() async throws -> VideoGroup {
         // Strategy:
@@ -214,6 +214,19 @@ extension InnerTubeAPI {
         tubeLog.notice("fetchShorts search fallback → \(searchGroup.videos.count, privacy: .public) total, \(shorts.count, privacy: .public) shorts")
         return VideoGroup(title: "Shorts", videos: shorts)
     }
+
+    public func fetchShortsMore(continuationToken: String) async throws -> VideoGroup {
+        // Fetches the next page of FEshorts browse using the continuation token
+        // returned by a previous fetchShorts() call. Requires authentication.
+        let body = makeBody(client: webClientContext, continuationToken: continuationToken)
+        let data = try await post(endpoint: "browse", body: body, useAuth: true)
+        let group = try parseVideoGroup(from: data, title: "Shorts")
+        let shorts = group.videos.filter { $0.isShort }
+        tubeLog.notice("fetchShortsMore → \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts token=\(continuationToken.prefix(12), privacy: .public)…")
+        return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: group.nextPageToken)
+    }
+
+    // MARK: - Category sections
 
     public func fetchMusic() async throws -> VideoGroup {
         do {
