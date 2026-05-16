@@ -185,20 +185,21 @@ extension InnerTubeAPI {
 
     public func fetchShorts() async throws -> VideoGroup {
         // Strategy:
-        //  1. FEshorts browse with WEB client + auth — works for signed-in users.
-        //     FEshorts returns HTTP 400 for all unauthenticated clients (WEB, TV, iOS, Android).
+        //  1. FEshorts browse with TV client + auth — the OAuth token issued by the TV
+        //     device-code flow is bound to TVHTML5; using WEB client + TV token returns 400.
+        //     postTV() uses TVHTML5 headers on youtubei.googleapis.com, which accepts the token.
         //  2. Fall back to searching "shorts" — returns ~15 videoRenderers with
         //     reelWatchEndpoint in their navigationEndpoint, so parseVideoRenderer
         //     marks them isShort = true. Verified via curl.
         let isAuth = authToken != nil
         if isAuth {
             do {
-                var body = makeBody(client: webClientContext)
+                var body = makeBody(client: tvClientContext)
                 body["browseId"] = "FEshorts"
-                let data = try await post(endpoint: "browse", body: body, useAuth: true)
+                let data = try await postTV(endpoint: "browse", body: body)
                 let group = try parseVideoGroup(from: data, title: "Shorts")
                 let shorts = group.videos.filter { $0.isShort }
-                tubeLog.notice("fetchShorts browse (auth) → \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts")
+                tubeLog.notice("fetchShorts browse (auth) \u{2192} \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts")
                 if !shorts.isEmpty {
                     return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: group.nextPageToken)
                 }
@@ -218,8 +219,10 @@ extension InnerTubeAPI {
     public func fetchShortsMore(continuationToken: String) async throws -> VideoGroup {
         // Fetches the next page of FEshorts browse using the continuation token
         // returned by a previous fetchShorts() call. Requires authentication.
-        let body = makeBody(client: webClientContext, continuationToken: continuationToken)
-        let data = try await post(endpoint: "browse", body: body, useAuth: true)
+        // Must use postTV() — continuation tokens are client-scoped; the token
+        // from a TVHTML5 FEshorts response requires TVHTML5 client context.
+        let body = makeBody(client: tvClientContext, continuationToken: continuationToken)
+        let data = try await postTV(endpoint: "browse", body: body)
         let group = try parseVideoGroup(from: data, title: "Shorts")
         let shorts = group.videos.filter { $0.isShort }
         tubeLog.notice("fetchShortsMore → \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts token=\(continuationToken.prefix(12), privacy: .public)…")

@@ -142,6 +142,14 @@ public actor InnerTubeAPI {
         pathMonitor.start(queue: .global(qos: .background))
     }
 
+    /// Package-internal initializer for testing only.
+    /// Accepts a custom `URLSession` so tests can inject a mock via `URLProtocol`.
+    init(authToken: String?, session: URLSession) {
+        self.session = session
+        self.authToken = authToken
+        self.poTokenProvider = nil
+    }
+
     // MARK: - Private: Network path handler
 
     private func handlePathUpdate(_ path: NWPath) {
