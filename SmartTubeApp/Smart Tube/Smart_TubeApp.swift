@@ -10,15 +10,24 @@ import SmartTubeIOSCore
 struct SmartTubeTVApp: App {
     // Declared without default values so that init() can call FirebaseApp.configure()
     // before any of these objects are instantiated.
+    @State private var api: InnerTubeAPI
     @State private var authService: AuthService
     @State private var browseViewModel: BrowseViewModel
     @State private var settingsStore: SettingsStore
+    /// Shared download service — required by RootView and VideoCardView even on
+    /// tvOS (where downloads are disabled in UI). Must be present in the environment
+    /// or SwiftUI throws a fatal "No Observable object of type VideoDownloadService"
+    /// error at launch.
+    @State private var cardDownloadService: VideoDownloadService
 
     init() {
         FirebaseApp.configure()
-        _authService     = State(initialValue: AuthService())
-        _browseViewModel = State(initialValue: BrowseViewModel())
-        _settingsStore   = State(initialValue: SettingsStore())
+        let api = InnerTubeAPI()
+        _api                 = State(initialValue: api)
+        _authService         = State(initialValue: AuthService())
+        _browseViewModel     = State(initialValue: BrowseViewModel(api: api))
+        _settingsStore       = State(initialValue: SettingsStore())
+        _cardDownloadService = State(initialValue: VideoDownloadService(api: api))
     }
 
     var body: some Scene {
@@ -27,8 +36,13 @@ struct SmartTubeTVApp: App {
                 .environment(authService)
                 .environment(browseViewModel)
                 .environment(settingsStore)
+                .environment(\.innerTubeAPI, api)
+                .environment(cardDownloadService)
                 .onChange(of: authService.accessToken, initial: true) { _, newToken in
-                    Task { await browseViewModel.updateAuthToken(newToken) }
+                    Task {
+                        await api.setAuthToken(newToken)
+                        await browseViewModel.updateAuthToken(newToken)
+                    }
                 }
                 .onChange(of: settingsStore.settings.enabledSections) { _, newSections in
                     browseViewModel.configureSections(newSections)
