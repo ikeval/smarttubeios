@@ -25,18 +25,40 @@ final class ChannelViewUITests: XCTestCase {
     /// UCBcRF18a7Qf58cCRy5xuWwQ = MKBHD (Marques Brownlee) — major tech creator since 2009.
     private static let kTestChannelID = "UCBcRF18a7Qf58cCRy5xuWwQ"
 
-    private var app: XCUIApplication!
+    private static var sharedApp: XCUIApplication!
+    private var app: XCUIApplication { ChannelViewUITests.sharedApp }
 
     // MARK: - Lifecycle
 
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-        // Do NOT launch here — each test uses openChannelViaDeeplink() which
-        // re-launches with the channel deeplink arg.
+    override class func setUp() {
+        super.setUp()
+        sharedApp = XCUIApplication()
+        sharedApp.launchArguments = [
+            "--uitesting",
+            "--uitesting-deeplink-channel=\(kTestChannelID)",
+        ]
+        sharedApp.launch()
     }
 
-    override func tearDownWithError() throws {
-        app = nil
+    override class func tearDown() {
+        sharedApp.terminate()
+        sharedApp = nil
+        super.tearDown()
+    }
+
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
+        // Dismiss player if a previous test opened it.
+        let backButton = app.buttons["player.backButton"].firstMatch
+        if backButton.waitForExistence(timeout: 2) {
+            backButton.tap()
+        }
+        // Dismiss mini-player if present.
+        let miniClose = app.buttons["miniPlayer.closeButton"].firstMatch
+        if miniClose.waitForExistence(timeout: 2) {
+            miniClose.tap()
+        }
     }
 
     // MARK: - Deeplink helper (preferred)
@@ -45,13 +67,7 @@ final class ChannelViewUITests: XCTestCase {
     /// for `channel.header` or a "Channel" navigation bar to appear.
     /// All 8 channel tests use this instead of the player-based navigation.
     private func openChannelViaDeeplink() throws {
-        app = XCUIApplication()
-        app.launchArguments = [
-            "--uitesting",
-            "--uitesting-deeplink-channel=\(Self.kTestChannelID)",
-        ]
-        app.launch()
-
+        // App is already launched with the deeplink — just verify channel view is visible.
         let channelNavBar = app.navigationBars
             .matching(NSPredicate(format: "identifier CONTAINS 'Channel'")).firstMatch
         let channelTitleEl = app.descendants(matching: .any)
@@ -199,6 +215,12 @@ final class ChannelViewUITests: XCTestCase {
 
     func testTappingVideoFromChannelOpensPlayer() throws {
         try openChannelViaDeeplink()
+        // A previous test may have left the filter on Shorts; tap All to ensure
+        // regular video cards are visible before trying to open the player.
+        let picker = app.segmentedControls["channel.filterPicker"]
+        if picker.waitForExistence(timeout: 10) {
+            picker.buttons["All"].tap()
+        }
         guard let firstCard = UITestHelpers.waitForVideoCards(in: app, timeout: 20) else {
             try captureAndSkip("No video cards in channel", in: app)
         }

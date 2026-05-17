@@ -27,19 +27,43 @@ final class RecommendedChipUITests: XCTestCase {
         "--uitesting-inject-recommended-ids=\(injectIDs.joined(separator: ","))"
     }
 
-    private var app: XCUIApplication!
+    private static var sharedApp: XCUIApplication!
+    private var app: XCUIApplication { RecommendedChipUITests.sharedApp }
 
     // MARK: - Lifecycle
 
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-        app = XCUIApplication()
-        app.launchArguments += ["--uitesting", "--uitesting-extended-fetch-timeout", Self.injectArg]
-        app.launch()
+    override class func setUp() {
+        super.setUp()
+        sharedApp = XCUIApplication()
+        sharedApp.launchArguments += ["--uitesting", "--uitesting-extended-fetch-timeout", Self.injectArg]
+        sharedApp.launch()
     }
 
-    override func tearDownWithError() throws {
-        app = nil
+    override class func tearDown() {
+        sharedApp.terminate()
+        sharedApp = nil
+        super.tearDown()
+    }
+
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
+        // Dismiss player if a previous test opened it.
+        let backButton = app.buttons["player.backButton"].firstMatch
+        if backButton.waitForExistence(timeout: 2) {
+            backButton.tap()
+        }
+        // Return to Home tab and reset the chip bar to Home so that
+        // testRecommendedChipSelectionState always starts with homeChip.isSelected == true.
+        tapTab(named: "Home")
+        let chipBar = app.scrollViews["home.chipBar"]
+        if chipBar.waitForExistence(timeout: 5) {
+            let homeChip = chipBar.buttons["Home"].firstMatch
+            if homeChip.exists && !homeChip.isSelected {
+                scrollChipIntoView(homeChip, in: chipBar)
+                homeChip.tap()
+            }
+        }
     }
 
     // MARK: - Tests

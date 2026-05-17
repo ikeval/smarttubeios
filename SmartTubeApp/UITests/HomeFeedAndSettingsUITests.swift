@@ -336,6 +336,27 @@ final class HomeFeedAndSettingsUITests: XCTestCase {
                        "settings.audioOnlyToggle must NOT exist in Settings — it was moved to the player overlay (task #39)")
     }
 
+    /// The "Landscape Always Play" toggle must no longer appear in Settings (moved to in-player lock button).
+    /// Moved here from LandscapeLockButtonUITests which uses a deeplink launch profile.
+    func testLandscapeAlwaysPlayRemovedFromSettings() {
+        openSettings()
+        let form = app.collectionViews.firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5),
+                      "Settings form must appear")
+        var found = false
+        var lastFrame = CGRect.zero
+        for _ in 0..<20 {
+            let toggle = form.switches["settings.landscapeAlwaysPlayToggle"].firstMatch
+            if toggle.exists { found = true; break }
+            let currentFrame = form.frame
+            if currentFrame == lastFrame { break }
+            lastFrame = currentFrame
+            form.swipeUp()
+        }
+        XCTAssertFalse(found,
+                       "settings.landscapeAlwaysPlayToggle must not appear in Settings — replaced by the in-player lock button")
+    }
+
     // MARK: - Tests (from HomeFeedNoDuplicatesUITests)
 
     func test_InitialHomeLoad_NoDuplicateCards() throws {
