@@ -307,4 +307,40 @@ final class TVFocusChainUITests: XCTestCase {
             "player.titleLabel must still exist after left/right D-pad seeks"
         )
     }
+
+    // MARK: - Settings nav bar regression (task-102 / gh-34)
+
+    /// After scrolling Settings down then back up, the tvOS tab bar must still be
+    /// visible (hittable) — not stuck transparent due to nav bar animation conflict.
+    func testSettingsTabBarVisibleAfterScrollDownAndUp() throws {
+        // Navigate to Settings tab (rightmost)
+        for _ in 0..<4 { remote.press(.right) }
+        remote.press(.select)
+        Thread.sleep(forTimeInterval: 2)
+
+        let resetButton = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'settings.resetAllButton'"))
+            .firstMatch
+        guard resetButton.waitForExistence(timeout: 10) else {
+            try captureAndSkip("settings.resetAllButton not found — Settings did not open", in: app)
+        }
+
+        // Scroll down to trigger tab bar hide
+        for _ in 0..<12 { remote.press(.down) }
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Scroll back up past the top to restore tab bar
+        for _ in 0..<15 { remote.press(.up) }
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let settingsTabButton = app.buttons["Settings"].firstMatch
+        XCTAssertTrue(
+            settingsTabButton.waitForExistence(timeout: 5),
+            "Settings tab bar button must exist after scroll-down-then-up"
+        )
+        XCTAssertTrue(
+            settingsTabButton.isHittable,
+            "Settings tab bar button must be hittable after scroll-down-then-up — regression for issue #102 / gh-34"
+        )
+    }
 }

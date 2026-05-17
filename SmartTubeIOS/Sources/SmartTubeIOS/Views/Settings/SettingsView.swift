@@ -31,7 +31,10 @@ public struct SettingsView: View {
         #if os(macOS)
         .formStyle(.grouped)
         #endif
-        #if os(iOS)
+        // Hide the blank navigation bar on iOS and tvOS — a visible nav bar on tvOS
+        // conflicts with the TabView tab bar scroll-hide animation (issue #102 / gh-34).
+        // .navigationBar placement is unavailable on macOS.
+        #if !os(macOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
         #if os(tvOS)
