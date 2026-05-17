@@ -79,7 +79,21 @@ final class AudioTrackManager {
                 let displayName = option.locale.flatMap {
                     Locale.current.localizedString(forLanguageCode: $0.identifier)
                 } ?? locale
-                let isOriginal = group.defaultOption != nil && group.defaultOption == option
+                // Phase 1: use AVFoundation's authoritative "main program content" characteristic.
+                // YouTube sets CHARACTERISTICS="public.main-program-content" on the creator's
+                // original audio. AI-dubbed tracks receive DEFAULT=YES for locale matching but
+                // typically do NOT carry this characteristic.
+                let anyOptionHasMainContent = group.options.contains {
+                    $0.hasMediaCharacteristic(.isMainProgramContent)
+                }
+                let isOriginal: Bool
+                if anyOptionHasMainContent {
+                    isOriginal = option.hasMediaCharacteristic(.isMainProgramContent)
+                } else {
+                    // Phase 2: fall back to HLS DEFAULT=YES (existing behaviour for manifests
+                    // that do not use CHARACTERISTICS tags — e.g. older YouTube manifests).
+                    isOriginal = group.defaultOption != nil && group.defaultOption == option
+                }
                 let track = AudioTrack(id: locale, name: displayName,
                                        languageCode: locale, isOriginal: isOriginal)
                 tracks.append(track)

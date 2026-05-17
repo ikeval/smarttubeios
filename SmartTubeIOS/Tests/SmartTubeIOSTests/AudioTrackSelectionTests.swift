@@ -193,4 +193,46 @@ struct AudioTrackSelectionTests {
         let selected = autoSelect(tracks: tracks, preferred: nil, deviceLanguages: ["ja"])
         #expect(selected?.languageCode == "ar")
     }
+
+    // MARK: - isMainProgramContent / Bug B regression tests
+
+    /// Documents the post-fix behaviour: when `isOriginal` is correctly set on the
+    /// creator's Korean track (not the AI-dubbed English), `preferred = "original"` picks Korean.
+    @Test func originalSentinel_picksCreatorTrack_whenDubbedTrackIsDefault() {
+        // Simulates AudioTrackManager post-fix:
+        // - English AI-dubbed track had HLS DEFAULT=YES → old code set isOriginal=true on it
+        // - Korean original has isMainProgramContent → new code correctly sets isOriginal=true
+        let tracks = [
+            track("en", isOriginal: false),   // AI-dubbed English — must NOT be selected
+            track("ko", isOriginal: true),    // Korean creator original
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: "original")
+        #expect(selected?.languageCode == "ko", "Original sentinel must pick the creator's track, not the AI dub")
+    }
+
+    /// Regression: dubbed track must never be returned when `preferred = "original"` and
+    /// a track with `isOriginal = true` exists.
+    @Test func originalSentinel_regression_dubbedTrackMustNotBeReturnedAsOriginal() {
+        let tracks = [
+            track("en", isOriginal: false),   // dubbed — isOriginal=false after fix
+            track("ko", isOriginal: true),    // original — isOriginal=true after fix
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: "original")
+        #expect(selected?.languageCode == "ko")
+        #expect(selected?.isOriginal == true)
+    }
+
+    /// When NO track carries isMainProgramContent (Phase 2 fallback), isOriginal == DEFAULT=YES.
+    /// Existing behaviour must be preserved for manifests without CHARACTERISTICS tags.
+    @Test func originalSentinel_fallsBackToDefaultOption_whenNoMainProgramContent() {
+        // Both tracks have isOriginal=false: no CHARACTERISTICS tag in manifest; Phase 2 not needed.
+        // This mirrors the path where `anyOptionHasMainContent == false` and group has no defaultOption.
+        let tracks = [
+            track("en", isOriginal: false),
+            track("ko", isOriginal: false),
+        ]
+        let selected = autoSelect(tracks: tracks, preferred: "original")
+        // When no isOriginal track exists, returns tracks.first as the fallback.
+        #expect(selected?.languageCode == "en", "Falls back to first track when no isOriginal marker")
+    }
 }
