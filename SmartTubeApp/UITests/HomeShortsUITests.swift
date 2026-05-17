@@ -68,6 +68,21 @@ final class HomeShortsUITests: XCTestCase {
         }
     }
 
+    /// Scrolls the chip bar back to the left until the Home chip is visible, then taps it.
+    private func tapHomeChip() {
+        let chipBar = app.scrollViews["home.chipBar"]
+        guard chipBar.waitForExistence(timeout: 5) else { return }
+        let homeChip = chipBar.buttons["Home"].firstMatch
+        let leftEdge  = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.09))
+        let rightEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.09))
+        for _ in 0..<6 {
+            guard homeChip.frame.origin.x < 0 else { break }
+            leftEdge.press(forDuration: 0.05, thenDragTo: rightEdge)
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        homeChip.tap()
+    }
+
     /// Scrolls the chip bar until the Shorts chip is on-screen, then taps it.
     private func tapShortsChip(timeout: TimeInterval = 10) {
         let chip = app.buttons["Shorts"]
@@ -140,7 +155,7 @@ final class HomeShortsUITests: XCTestCase {
     /// with the same core actions as regular video cards.
     func testShortsCardLongPressShowsContextMenu() throws {
         UITestHelpers.tapTab(named: "Home", in: app)
-        app.scrollViews["home.chipBar"].buttons["Home"].firstMatch.tap()
+        tapHomeChip()
 
         let shortsRow = app.scrollViews["home.shortsRow"]
         guard shortsRow.waitForExistence(timeout: 30) else {
@@ -252,7 +267,7 @@ final class HomeShortsUITests: XCTestCase {
     /// at least one `shorts.card.*` element.
     func test_HomeTab_ShortsRowVisible() throws {
         UITestHelpers.tapTab(named: "Home", in: app)
-        app.scrollViews["home.chipBar"].buttons["Home"].firstMatch.tap()
+        tapHomeChip()
 
         guard UITestHelpers.waitForVideoCards(in: app, timeout: 30) != nil else {
             try captureAndSkip("Home feed did not load any video cards — network issue.", in: app)

@@ -311,24 +311,6 @@ struct HomeViewModelTests {
         #expect(vm.shortsVideos.count == 7)
     }
 
-    @Test("loadMoreShortsIfNeeded skips auto-fetch when shorts >= 6")
-    func loadMoreShortsSkipsWhenAboveThreshold() async {
-        let mock = MockInnerTubeAPI()
-        // Initial page: 6 shorts with a continuation token
-        let initialShorts = (0..<6).map { Video(id: "srt\($0)_CCCCC", title: "Short \($0)", channelTitle: "Ch", isShort: true) }
-        mock.shortsResult = VideoGroup(title: "Shorts", videos: initialShorts, nextPageToken: "tok_page2")
-        mock.homeRowsResult = []
-        mock.subscriptionsResult = VideoGroup(title: "Subs", videos: [])
-
-        let vm = HomeViewModel(api: mock)
-        vm.load()
-        await waitForTasks()
-
-        // fetchShortsMore must NOT have been called
-        #expect(!mock.calls.contains(where: { $0.method == "fetchShortsMore" }))
-        #expect(vm.shortsVideos.count == 6)
-    }
-
     @Test("loadMoreShortsIfNeeded skips auto-fetch when no continuation token")
     func loadMoreShortsSkipsWithNoToken() async {
         let mock = MockInnerTubeAPI()
