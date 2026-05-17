@@ -133,6 +133,83 @@ struct LocalSubscriptionFeedServiceTests {
         #expect(videos.first?.id == "vid-new")
         #expect(videos.last?.id == "vid-old")
     }
+
+    // MARK: - Shorts RSS enrichment
+
+    @Test("RSS: video appearing in Shorts playlist feed is marked isShort = true")
+    func rssShortMarkedWhenAppearsInShortsPlaylistFeed() async {
+        let channelId = "UCtest1111111111111111111"
+        let store = makeStore()
+        let cache = makeCache()
+        let api = MockInnerTubeAPI()
+        await store.follow(makeChannel(id: channelId))
+
+        let uploadsXML = rssXML(channelId: channelId, videoIds: ["vid1", "vid2"])
+        let shortsXML  = rssXML(channelId: channelId, videoIds: ["vid2"])
+
+        let uploadsURL = YouTubeRSS.feedURL(for: channelId).absoluteString
+        let shortsURL  = YouTubeRSS.shortsFeedURL(for: channelId).absoluteString
+
+        let session = URLSession(configuration: {
+            let config = URLSessionConfiguration.ephemeral
+            RouterURLProtocol.routes = [uploadsURL: uploadsXML, shortsURL: shortsXML]
+            config.protocolClasses = [RouterURLProtocol.self]
+            return config
+        }())
+        let service = LocalSubscriptionFeedService(session: session)
+        let videos = await service.fetchFeed(store: store, cache: cache, api: api)
+
+        let vid1 = videos.first(where: { $0.id == "vid1" })
+        let vid2 = videos.first(where: { $0.id == "vid2" })
+        #expect(vid1?.isShort == false, "vid1 should not be marked as Short")
+        #expect(vid2?.isShort == true,  "vid2 appears in Shorts feed — should be marked isShort")
+    }
+
+    @Test("RSS: nil Shorts playlist feed does not crash and leaves isShort unchanged")
+    func rssShortNilShortsPlaylistDoesNotCrash() async {
+        let channelId = "UCtest2222222222222222222"
+        let store = makeStore()
+        let cache = makeCache()
+        let api = MockInnerTubeAPI()
+        await store.follow(makeChannel(id: channelId))
+
+        let uploadsXML = rssXML(channelId: channelId, videoIds: ["vid1", "vid2"])
+        let uploadsURL = YouTubeRSS.feedURL(for: channelId).absoluteString
+
+        // Shorts URL returns failure; uploads URL returns data normally.
+        let session = URLSession(configuration: {
+            let config = URLSessionConfiguration.ephemeral
+            RouterURLProtocol.routes = [uploadsURL: uploadsXML]
+            config.protocolClasses = [RouterURLProtocol.self]
+            return config
+        }())
+        let service = LocalSubscriptionFeedService(session: session)
+        let videos = await service.fetchFeed(store: store, cache: cache, api: api)
+
+        #expect(videos.allSatisfy { !$0.isShort }, "No video should be marked isShort when Shorts feed is unavailable")
+    }
+
+    // MARK: - RSS XML builder
+
+    private func rssXML(channelId: String, videoIds: [String]) -> Data {
+        let entries = videoIds.map { id in
+            """
+            <entry>
+              <yt:videoId xmlns:yt="http://www.youtube.com/xml/schemas/2015">\(id)</yt:videoId>
+              <title>Video \(id)</title>
+              <author><name>Channel</name></author>
+            </entry>
+            """
+        }.joined(separator: "\n")
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Channel</title>
+          \(entries)
+        </feed>
+        """
+        return Data(xml.utf8)
+    }
 }
 
 // MARK: - AlwaysFailURLProtocol
@@ -144,6 +221,32 @@ private final class AlwaysFailURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+    }
+    override func stopLoading() {}
+}
+
+// MARK: - RouterURLProtocol
+
+/// URLProtocol that returns pre-registered `Data` for matching URL strings,
+/// and fails all other requests. Used to mock RSS feeds in tests.
+private final class RouterURLProtocol: URLProtocol {
+    /// Map from URL absolute string → response body. Set before creating the session.
+    nonisolated(unsafe) static var routes: [String: Data] = [:]
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let key = request.url?.absoluteString ?? ""
+        if let data = Self.routes[key] {
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                                           httpVersion: "HTTP/1.1", headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } else {
+            client?.urlProtocol(self, didFailWithError: URLError(.fileDoesNotExist))
+        }
     }
     override func stopLoading() {}
 }

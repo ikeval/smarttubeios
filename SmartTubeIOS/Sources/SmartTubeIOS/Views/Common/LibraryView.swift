@@ -135,8 +135,9 @@ public struct LibraryView: View {
                 } else if browseVM.videoGroups.flatMap({ $0.videos }).isEmpty && !browseVM.isLoading {
                     emptyLibraryView
                 } else {
+                    let applyHideShorts = store.settings.hideShorts && selectedSection != .history
                     let videos = browseVM.videoGroups.flatMap { $0.videos }
-                        .filter { !store.settings.hideShorts || !$0.isShort }
+                        .filter { !applyHideShorts || !$0.isShort }
                     ScrollView {
                         // KVO reader — always present; writes to ScrollOffsetStore
                         // without triggering SwiftUI re-renders on every scroll tick.

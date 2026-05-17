@@ -207,3 +207,36 @@ struct HideShortsFilterTests {
         #expect(visible.first?.id == "VIDEO_ID_2", "Only the regular video should survive the filter")
     }
 }
+
+// MARK: - History exemption tests
+
+extension HideShortsFilterTests {
+
+    /// Mirrors the `applyHideShorts = hideShorts && selectedSection != .history` guard
+    /// added to LibraryView and HomeView.feedContent.
+    private func applyWithHistoryGuard(hideShorts: Bool, isHistory: Bool, to videos: [Video]) -> [Video] {
+        let applyHideShorts = hideShorts && !isHistory
+        return videos.filter { !applyHideShorts || !$0.isShort }
+    }
+
+    @Test("History section: Shorts are NOT filtered even when hideShorts is enabled")
+    func historyShortNotFilteredWhenHideShortsEnabled() {
+        let videos = [
+            makeVideo(id: "regular1", isShort: false),
+            makeVideo(id: "short1",   isShort: true),
+        ]
+        let result = applyWithHistoryGuard(hideShorts: true, isHistory: true, to: videos)
+        #expect(result.count == 2, "History should include Shorts regardless of hideShorts setting")
+    }
+
+    @Test("Subscriptions section: Shorts ARE filtered when hideShorts is enabled")
+    func subscriptionsShortFilteredWhenHideShortsEnabled() {
+        let videos = [
+            makeVideo(id: "regular1", isShort: false),
+            makeVideo(id: "short1",   isShort: true),
+        ]
+        let result = applyWithHistoryGuard(hideShorts: true, isHistory: false, to: videos)
+        #expect(result.count == 1)
+        #expect(result.first?.id == "regular1")
+    }
+}

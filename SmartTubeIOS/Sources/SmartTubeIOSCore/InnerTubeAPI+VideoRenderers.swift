@@ -665,10 +665,32 @@ extension InnerTubeAPI {
             let hasShortOverlay = (r["thumbnailOverlays"] as? [[String: Any]])?.contains {
                 ($0["thumbnailOverlayTimeStatusRenderer"] as? [String: Any])?["style"] as? String == "SHORTS"
             } ?? false
-            return hasShortOverlay && (duration.map { $0 <= 180 } ?? true)
+            if hasShortOverlay && (duration.map { $0 <= 180 } ?? true) { return true }
+            // Tertiary signal: ustreamerConfig == "GgIIBQ==" — mirrors parseTileRenderer.
+            // Catches compactVideoRenderer Short tiles in TV subs/history feeds that omit both
+            // reelWatchEndpoint and the overlay style.
+            let watchEndpoint = (r["navigationEndpoint"] as? [String: Any])?["watchEndpoint"] as? [String: Any]
+            let ustreamerConfig = watchEndpoint?["ustreamerConfig"] as? String
+            if ustreamerConfig == "GgIIBQ==" && (duration.map { $0 <= 180 } ?? true) { return true }
+            // Quaternary signal: vertical thumbnail (height > width) — another parseTileRenderer mirror.
+            let thumbnails = (r["thumbnail"] as? [String: Any])?["thumbnails"] as? [[String: Any]]
+            let isVerticalThumbnail = thumbnails?.contains {
+                let w = ($0["width"] as? Int) ?? 0
+                let h = ($0["height"] as? Int) ?? 0
+                return h > w && w > 0
+            } ?? false
+            return isVerticalThumbnail
         }()
         if isShort {
-            let signal = ((r["navigationEndpoint"] as? [String: Any])?["reelWatchEndpoint"] != nil) ? "reelWatchEndpoint" : "overlayStyle"
+            let signal: String
+            if let nav = r["navigationEndpoint"] as? [String: Any], nav["reelWatchEndpoint"] != nil {
+                signal = "reelWatchEndpoint"
+            } else {
+                let hasShortOverlay = (r["thumbnailOverlays"] as? [[String: Any]])?.contains {
+                    ($0["thumbnailOverlayTimeStatusRenderer"] as? [String: Any])?["style"] as? String == "SHORTS"
+                } ?? false
+                signal = hasShortOverlay ? "overlayStyle" : "ustreamerConfig/verticalThumb"
+            }
             tubeLog.debug("videoRenderer isShort=true id=\(videoId, privacy: .public) signal=\(signal, privacy: .public) duration=\(Int(duration ?? -1))")
         }
 

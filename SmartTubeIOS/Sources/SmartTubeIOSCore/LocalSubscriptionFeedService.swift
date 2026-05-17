@@ -122,16 +122,41 @@ public struct LocalSubscriptionFeedService: Sendable {
     // MARK: - RSS fetch
 
     private static func fetchViaRSS(channel: LocalChannel, session: URLSession) async -> RSSParseResult? {
-        // Try uploads playlist feed first (UC→UU prefix swap)
-        if let result = await fetchRSS(url: YouTubeRSS.feedURL(for: channel.id),
-                                        channelId: channel.id,
-                                        session: session) {
-            return result
+        // Fetch uploads and Shorts playlist feeds concurrently.
+        // Shorts RSS is best-effort: if unavailable the enrichment step is skipped.
+        async let uploadsPrimary = fetchRSS(url: YouTubeRSS.feedURL(for: channel.id),
+                                            channelId: channel.id,
+                                            session: session)
+        async let shortsFetch    = fetchRSS(url: YouTubeRSS.shortsFeedURL(for: channel.id),
+                                            channelId: channel.id,
+                                            session: session)
+
+        // Await both concurrent fetches before any serial work.
+        let primaryResult = await uploadsPrimary
+        let shortsFetchResult = await shortsFetch
+
+        // Resolve uploads: primary first, then fallback if needed.
+        let uploads: RSSParseResult
+        if let result = primaryResult {
+            uploads = result
+        } else if let fallback = await fetchRSS(url: YouTubeRSS.fallbackFeedURL(for: channel.id),
+                                                channelId: channel.id,
+                                                session: session) {
+            uploads = fallback
+        } else {
+            return nil
         }
-        // Playlist 404 or error — retry with the channel_id= fallback URL
-        return await fetchRSS(url: YouTubeRSS.fallbackFeedURL(for: channel.id),
-                              channelId: channel.id,
-                              session: session)
+
+        let shortIds = Set(shortsFetchResult?.videos.map(\.id) ?? [])
+        guard !shortIds.isEmpty else { return uploads }
+
+        let enriched = uploads.videos.map { v -> Video in
+            guard shortIds.contains(v.id) else { return v }
+            var copy = v
+            copy.isShort = true
+            return copy
+        }
+        return RSSParseResult(channelName: uploads.channelName, videos: enriched)
     }
 
     private static func fetchRSS(url: URL, channelId: String, session: URLSession) async -> RSSParseResult? {

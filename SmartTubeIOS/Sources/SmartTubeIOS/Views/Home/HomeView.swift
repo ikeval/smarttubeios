@@ -315,13 +315,14 @@ public struct HomeView: View {
 
     private var feedContent: some View {
         let hideShorts = store.settings.hideShorts
+        let applyHideShorts = hideShorts && selectedSection.type != .history
         let rowGroups: [VideoGroup] = sectionVM.videoGroups.filter { $0.layout == .row }.map { g in
-            guard hideShorts else { return g }
+            guard applyHideShorts else { return g }
             var copy = g
             copy.videos = g.videos.filter { !$0.isShort }
             return copy
         }
-        let gridVideos = sectionVM.videoGroups.filter { $0.layout != .row }.flatMap(\.videos).filter { !hideShorts || !$0.isShort }
+        let gridVideos = sectionVM.videoGroups.filter { $0.layout != .row }.flatMap(\.videos).filter { !applyHideShorts || !$0.isShort }
         // VStack (not LazyVStack) is required here. LazyVGrid inside LazyVStack
         // collapses to zero height — grid items become invisible and non-tappable
         // because LazyVStack never provides a measured height to LazyVGrid.
@@ -335,7 +336,7 @@ public struct HomeView: View {
                 // FEwhat_to_watch (TV client) never includes a Shorts shelf, so
                 // BrowseViewModel fetches FEshorts separately and stores them here.
                 if selectedSection.type == .recommended,
-                   !hideShorts,
+                   !applyHideShorts,
                    !sectionVM.recommendedShortsVideos.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Shorts")

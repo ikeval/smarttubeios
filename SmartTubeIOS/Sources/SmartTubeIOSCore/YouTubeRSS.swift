@@ -40,4 +40,21 @@ public enum YouTubeRSS {
         // swiftlint:disable:next force_unwrap
         return URL(string: "https://www.youtube.com/feeds/videos.xml?channel_id=\(channelId)")!
     }
+
+    // MARK: - Shorts feed URLs
+
+    /// Converts a YouTube channel ID ("UCxxxx") to its Shorts playlist ID ("UUSHxxxx").
+    /// NOTE: This is undocumented YouTube behaviour — treat as best-effort. If YouTube
+    /// changes the prefix, the Shorts feed returns empty/nil and enrichment is skipped.
+    public static func shortsPlaylistId(from channelId: String) -> String {
+        guard channelId.hasPrefix("UC") else { return channelId }
+        return "UUSH" + channelId.dropFirst(2)
+    }
+
+    /// Shorts playlist RSS feed URL for a channel.
+    public static func shortsFeedURL(for channelId: String) -> URL {
+        let playlistId = shortsPlaylistId(from: channelId)
+        // swiftlint:disable:next force_unwrap
+        return URL(string: "https://www.youtube.com/feeds/videos.xml?playlist_id=\(playlistId)")!
+    }
 }

@@ -167,4 +167,22 @@ struct YouTubeRSSParserTests {
         let url = YouTubeRSS.fallbackFeedURL(for: "UCBcRF18a7Qf58cCRy5xuWwQ")
         #expect(url.absoluteString.contains("channel_id=UCBcRF18a7Qf58cCRy5xuWwQ"))
     }
+
+    @Test("shortsPlaylistId converts UCxxxx to UUSHxxxx")
+    func shortsPlaylistIdDerivation() {
+        let id = YouTubeRSS.shortsPlaylistId(from: "UCBcRF18a7Qf58cCRy5xuWwQ")
+        #expect(id == "UUSHBcRF18a7Qf58cCRy5xuWwQ")
+    }
+
+    @Test("shortsPlaylistId passes through non-UC channel ID unchanged")
+    func shortsPlaylistIdNonUCChannelPassthrough() {
+        let id = YouTubeRSS.shortsPlaylistId(from: "PLtest123")
+        #expect(id == "PLtest123")
+    }
+
+    @Test("shortsFeedURL contains the UUSH playlist ID")
+    func shortsFeedURLContainsShortsPlaylistId() {
+        let url = YouTubeRSS.shortsFeedURL(for: "UCBcRF18a7Qf58cCRy5xuWwQ")
+        #expect(url.absoluteString.contains("playlist_id=UUSHBcRF18a7Qf58cCRy5xuWwQ"))
+    }
 }
