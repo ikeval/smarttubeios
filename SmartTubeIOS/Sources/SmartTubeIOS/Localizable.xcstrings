@@ -4512,6 +4512,12 @@
         }
       }
     },
+    "Delete" : {
+
+    },
+    "Delete Download" : {
+
+    },
     "Description" : {
       "comment" : "Player more-menu label and description sheet header",
       "extractionState" : "manual",
@@ -5258,6 +5264,9 @@
         }
       }
     },
+    "Download a video from the player to watch it offline." : {
+
+    },
     "Download Failed" : {
       "comment" : "Download failure alert title",
       "extractionState" : "manual",
@@ -5509,6 +5518,9 @@
           }
         }
       }
+    },
+    "Downloads" : {
+
     },
     "Duration" : {
       "comment" : "Search filter section header — duration filter",
@@ -9759,6 +9771,9 @@
           }
         }
       }
+    },
+    "No Downloaded Videos" : {
+
     },
     "No Excluded Channels" : {
       "comment" : "SponsorBlock excluded-channels list empty state title",
@@ -18206,6 +18221,9 @@
           }
         }
       }
+    },
+    "This video will be removed from your device. You can re-download it from the player." : {
+
     },
     "This week" : {
       "comment" : "Upload date search filter option",

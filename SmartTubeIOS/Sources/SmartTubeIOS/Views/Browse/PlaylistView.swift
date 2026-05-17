@@ -99,9 +99,9 @@ public struct PlaylistView: View {
                         VideoCardView(video: video, compact: true, onSelect: {
                                 Task { @MainActor in
                                     let captured = displayVideos
-                                    CurrentQueueStore.shared.replaceAll(with: captured)
+                                    await CurrentQueueStore.shared.replaceAll(with: captured)
                                     let startIdx = video.playlistIndex ?? captured.firstIndex(where: { $0.id == video.id }) ?? 0
-                                    selectedVideo = CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
+                                    selectedVideo = await CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
                                 }
                             })
                             .padding(.horizontal)
@@ -117,9 +117,9 @@ public struct PlaylistView: View {
                                 #if os(iOS)
                                 Task { @MainActor in
                                     let captured = displayVideos
-                                    CurrentQueueStore.shared.replaceAll(with: captured)
+                                    await CurrentQueueStore.shared.replaceAll(with: captured)
                                     let startIdx = video.playlistIndex ?? captured.firstIndex(where: { $0.id == video.id }) ?? 0
-                                    let toPlay = CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
+                                    let toPlay = await CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
                                     playerState.play(video: toPlay)
                                 }
                                 #else
@@ -145,9 +145,9 @@ public struct PlaylistView: View {
                                 VideoCardView(video: video, compact: false, onSelect: {
                                         Task { @MainActor in
                                             let captured = displayVideos
-                                            CurrentQueueStore.shared.replaceAll(with: captured)
+                                            await CurrentQueueStore.shared.replaceAll(with: captured)
                                             let startIdx = video.playlistIndex ?? captured.firstIndex(where: { $0.id == video.id }) ?? 0
-                                            selectedVideo = CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
+                                            selectedVideo = await CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
                                         }
                                     })
                                     .frame(maxWidth: .infinity)
@@ -176,9 +176,9 @@ public struct PlaylistView: View {
                                 #if os(iOS)
                                 Task { @MainActor in
                                     let captured = displayVideos
-                                    CurrentQueueStore.shared.replaceAll(with: captured)
+                                    await CurrentQueueStore.shared.replaceAll(with: captured)
                                     let startIdx = video.playlistIndex ?? captured.firstIndex(where: { $0.id == video.id }) ?? 0
-                                    let toPlay = CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
+                                    let toPlay = await CurrentQueueStore.shared.videoAt(index: startIdx) ?? video
                                     playerState.play(video: toPlay)
                                 }
                                 #else
