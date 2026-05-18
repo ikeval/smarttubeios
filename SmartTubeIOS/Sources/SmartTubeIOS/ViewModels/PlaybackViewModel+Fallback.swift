@@ -206,7 +206,9 @@ extension PlaybackViewModel {
                     case .failed:
                         let err = compositeItem.error.map { "\($0)" } ?? "nil"
                         playerLog.error("❌ Adaptive composition AVPlayerItem failed: \(err)")
-                        await self.retryWithFallbackPlayer(video: video, originalError: compositeItem.error ?? originalError)
+                        // Do NOT retry with Android client — same rqh=1 adaptive streams
+                        // would 403 again, creating an infinite loop.
+                        self.error = compositeItem.error ?? originalError
                     case .unknown:
                         break
                     @unknown default:
@@ -233,8 +235,13 @@ extension PlaybackViewModel {
                 )
             }
         } catch {
-            playerLog.error("❌ Adaptive composition setup failed: \(error) — falling back to Android client")
-            await retryWithFallbackPlayer(video: video, originalError: originalError)
+            // Do NOT call retryWithFallbackPlayer here — it re-fetches the Android client,
+            // which returns the same adaptive-only streams (now universally gated by rqh=1
+            // / pot token), causing an infinite loop of composition-setup failures.
+            // Surface the error directly so the user sees "Unable to play" with a Try Again
+            // button instead of the app spinning through repeated 403s.
+            playerLog.error("❌ Adaptive composition setup failed: \(error) — stopping retry chain")
+            self.error = originalError ?? error
         }
     }
 
