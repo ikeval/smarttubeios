@@ -473,6 +473,11 @@ extension PlaybackViewModel {
             }
             // Observe item status using async/await (withCheckedContinuation is not needed
             // here since we only need to react to status changes, not await them).
+            // BUG-009 fix: replaceCurrentItem BEFORE wiring the observer to avoid a race
+            // where statusStream fires with stale state before the item is installed.
+            // This matches the already-correct ordering in all fallback/audio-only paths.
+            player.replaceCurrentItem(with: item)
+            duration = info.video.duration ?? 0
             itemObserverTask?.cancel()
             itemObserverTask = Task { [weak self] in
                 for await status in item.statusStream {
@@ -525,8 +530,6 @@ extension PlaybackViewModel {
                     }
                 }
             }
-            player.replaceCurrentItem(with: item)
-            duration = info.video.duration ?? 0
 
             // Observe end-of-item using NotificationCenter async sequence
             endObserverTask?.cancel()
