@@ -68,8 +68,12 @@ final class AudioTrackManager {
         Task { [weak self] in
             guard let self else { return }
             let asset = item.asset
+            // Fix #126: HLS variant playlists (loaded when quality changes) expose only
+            // one audio rendition. The previous guard `count > 1` silently exited,
+            // leaving no audio option selected → silent video after a quality switch.
+            // Use `!isEmpty` so a single-track manifest still gets its track applied.
             guard let group = try? await asset.loadMediaSelectionGroup(for: .audible),
-                  group.options.count > 1 else { return }
+                  !group.options.isEmpty else { return }
             var tracks: [AudioTrack] = []
             var optionMap: [String: AVMediaSelectionOption] = [:]
             for (_, option) in group.options.enumerated() {

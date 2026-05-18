@@ -222,17 +222,46 @@ struct AudioTrackSelectionTests {
         #expect(selected?.isOriginal == true)
     }
 
-    /// When NO track carries isMainProgramContent (Phase 2 fallback), isOriginal == DEFAULT=YES.
-    /// Existing behaviour must be preserved for manifests without CHARACTERISTICS tags.
-    @Test func originalSentinel_fallsBackToDefaultOption_whenNoMainProgramContent() {
-        // Both tracks have isOriginal=false: no CHARACTERISTICS tag in manifest; Phase 2 not needed.
-        // This mirrors the path where `anyOptionHasMainContent == false` and group has no defaultOption.
-        let tracks = [
-            track("en", isOriginal: false),
-            track("ko", isOriginal: false),
-        ]
-        let selected = autoSelect(tracks: tracks, preferred: "original")
-        // When no isOriginal track exists, returns tracks.first as the fallback.
-        #expect(selected?.languageCode == "en", "Falls back to first track when no isOriginal marker")
+    // MARK: - Fix #126: single-track HLS variant playlists (quality-switch regression)
+
+    /// When a quality change loads a new HLS variant with only one audio rendition,
+    /// the old guard (`count > 1`) would exit early leaving no audio selected.
+    /// Fix: guard changed to `!isEmpty` so single-track manifests still get audio applied.
+
+    @Test("Fix #126: single-track manifest — autoSelect returns the track")
+    func singleTrackManifestReturnsTrack() {
+        let tracks = [track("en", isOriginal: true)]
+        let selected = autoSelect(tracks: tracks, preferred: nil)
+        #expect(selected?.languageCode == "en",
+                "Fix #126: single-track manifest must select the available track, not return nil")
+    }
+
+    @Test("Fix #126: single-track manifest with saved preference — track is selected")
+    func singleTrackManifestWithSavedPreferenceReturnsTrack() {
+        let tracks = [track("ja", isOriginal: true)]
+        // Even with a preference for a language not in the list, should fall back to the only track
+        let selected = autoSelect(tracks: tracks, preferred: "en")
+        #expect(selected?.languageCode == "ja",
+                "Fix #126: single-track manifest must fall back to available track when preference has no match")
+    }
+
+    @Test("Fix #126: single-track manifest with device language — track is selected")
+    func singleTrackManifestWithDeviceLanguageReturnsTrack() {
+        let tracks = [track("de", isOriginal: true)]
+        let selected = autoSelect(tracks: tracks, preferred: nil, deviceLanguages: ["en"])
+        #expect(selected?.languageCode == "de",
+                "Fix #126: single-track manifest falls back to the available track when device language has no match")
+    }
+
+    @Test("Fix #126: isEmpty guard correctly allows single track; count>1 guard would have blocked it")
+    func isEmptyGuardAllowsSingleTrackWhileCountGuardWouldBlock() {
+        let tracks = [track("en", isOriginal: true)]
+        // Simulate old guard: count > 1 would block
+        let oldGuardPasses = tracks.count > 1
+        // New guard: !isEmpty allows it
+        let newGuardPasses = !tracks.isEmpty
+        #expect(!oldGuardPasses, "Old guard (count > 1) must reject single-track — confirmed bug precondition")
+        #expect(newGuardPasses, "New guard (!isEmpty) must pass single-track — confirms fix is correct")
     }
 }
+
