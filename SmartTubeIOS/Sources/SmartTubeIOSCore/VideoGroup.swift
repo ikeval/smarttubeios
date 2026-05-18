@@ -208,7 +208,7 @@ public struct VideoFormat: Identifiable, Hashable, Sendable {
 // MARK: - SponsorSegment
 
 /// A SponsorBlock segment within a video.
-public struct SponsorSegment: Identifiable, Codable, Sendable {
+public struct SponsorSegment: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
     public var start: TimeInterval
     public var end: TimeInterval

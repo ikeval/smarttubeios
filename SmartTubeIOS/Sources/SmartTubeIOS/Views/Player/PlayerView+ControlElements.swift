@@ -594,14 +594,20 @@ extension PlayerView {
         .animation(.easeInOut, value: vm.currentToastSegment?.id)
     }
 
+    // Returns true when the error is an IP/VPN block (APIError.ipBlocked).
+    // Extracted to a separate function so the Swift type-checker does not have to
+    // resolve a closure-in-body pattern while simultaneously inferring `some View`.
+    private func isIPBlockError(_ err: Error) -> Bool {
+        if let apiError = err as? APIError, case .ipBlocked = apiError { return true }
+        return false
+    }
+
+    @ViewBuilder
     func errorBanner(_ err: Error) -> some View {
         // IP-block errors show a specific message and no retry button — retrying
         // with the same IP will also fail and may extend the YouTube block duration.
-        let isIPBlock: Bool = {
-            if let apiError = err as? APIError, case .ipBlocked = apiError { return true }
-            return false
-        }()
-        return VStack(spacing: 12) {
+        let isIPBlock = isIPBlockError(err)
+        VStack(spacing: 12) {
             HStack {
                 Image(systemName: AppSymbol.warning)
                     .foregroundStyle(.yellow)

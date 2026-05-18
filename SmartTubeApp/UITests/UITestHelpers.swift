@@ -4,7 +4,10 @@ import XCTest
 //
 // Shared utilities reused across all UI test suites.
 // Not a subclass of XCTestCase — import by value from any test file.
+// Note: The enum body uses iOS-only XCUIElement APIs (tap, swipe, coordinate),
+// so the entire declaration is excluded from the tvOS build.
 
+#if !os(tvOS)
 enum UITestHelpers {
 
     // MARK: - Tab navigation
@@ -117,6 +120,7 @@ enum UITestHelpers {
                        "shorts.errorBanner appeared — PlaybackViewModel.error was set for the Short")
     }
 }
+#endif // !os(tvOS)
 
 // MARK: - XCTestCase diagnostic helpers
 

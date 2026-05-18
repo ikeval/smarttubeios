@@ -26,6 +26,7 @@
 		AA02000000000000000000B2 /* SiriShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA02000000000000000000B1 /* SiriShortcuts.swift */; };
 		AA02000000000000000001B2 /* SiriShortcutsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA02000000000000000001B1 /* SiriShortcutsUITests.swift */; };
 		AA11000000000000000001A2 /* UITestHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000000000000000001A1 /* UITestHelpers.swift */; };
+		AA1100000000000000001301 /* UITestHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000000000000000001A1 /* UITestHelpers.swift */; };
 		AA11000000000000000002A2 /* SettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000000000000000002A1 /* SettingsUITests.swift */; };
 		AA11000000000000000003A2 /* LibraryPlaylistsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000000000000000003A1 /* LibraryPlaylistsUITests.swift */; };
 		AA11000000000000000004A2 /* HomeInteractionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000000000000000004A1 /* HomeInteractionsUITests.swift */; };
@@ -38,6 +39,7 @@
 		AA1100000000000000000BA2 /* AudioOriginalTrackSelectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000BA1 /* AudioOriginalTrackSelectionUITests.swift */; };
 		AA1100000000000000000CA2 /* RecommendedChipUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000CA1 /* RecommendedChipUITests.swift */; };
 		AA1100000000000000000DA2 /* TVPlayerSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000DA1 /* TVPlayerSettingsUITests.swift */; };
+		AA1100000000000000001202 /* TVSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001201 /* TVSettingsUITests.swift */; };
 		AA1100000000000000000EA2 /* AudioOnlyModeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000EA1 /* AudioOnlyModeUITests.swift */; };
 		AA1100000000000000000FA2 /* PlayerMoreMenuLayoutUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000000FA1 /* PlayerMoreMenuLayoutUITests.swift */; };
 		AA1100000000000000001002 /* PlayerPickerOverlayLayoutUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001001 /* PlayerPickerOverlayLayoutUITests.swift */; };
@@ -162,6 +164,7 @@
 		AA1100000000000000000BA1 /* AudioOriginalTrackSelectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOriginalTrackSelectionUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000000CA1 /* RecommendedChipUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendedChipUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000000DA1 /* TVPlayerSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerSettingsUITests.swift; sourceTree = "<group>"; };
+		AA1100000000000000001201 /* TVSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSettingsUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000000EA1 /* AudioOnlyModeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOnlyModeUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000000FA1 /* PlayerMoreMenuLayoutUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerMoreMenuLayoutUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000001001 /* PlayerPickerOverlayLayoutUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerPickerOverlayLayoutUITests.swift; sourceTree = "<group>"; };
@@ -299,6 +302,7 @@
 				AA1100000000000000000BA1 /* AudioOriginalTrackSelectionUITests.swift */,
 				AA1100000000000000000CA1 /* RecommendedChipUITests.swift */,
 				AA1100000000000000000DA1 /* TVPlayerSettingsUITests.swift */,
+				AA1100000000000000001201 /* TVSettingsUITests.swift */,
 				AA1100000000000000000EA1 /* AudioOnlyModeUITests.swift */,
 				AA1100000000000000000FA1 /* PlayerMoreMenuLayoutUITests.swift */,
 				AA1100000000000000001001 /* PlayerPickerOverlayLayoutUITests.swift */,
@@ -703,8 +707,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA1100000000000000001301 /* UITestHelpers.swift in Sources */,
 				1A2B3C4D5E6F1A2B3C4D5E63 /* TVFocusChainUITests.swift in Sources */,
 				AA1100000000000000000DA2 /* TVPlayerSettingsUITests.swift in Sources */,
+				AA1100000000000000001202 /* TVSettingsUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -941,7 +947,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1371,7 +1377,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;

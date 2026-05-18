@@ -12,12 +12,48 @@ private let swipeLog = CrashlyticsLogger(category: "Player")
 // MARK: - PlayerView Lifecycle
 extension PlayerView {
 
-    // MARK: - Full player body with lifecycle modifiers
+    // MARK: - Title and back-button overlay
     //
-    // Extracted from body so the compiled symbol for `body` shrinks from ~16 KB to ~100 bytes.
-    // All lifecycle wiring (onAppear, onChange, tvOS focus, navigation, alerts) lives here
-    // as its own compiled function, keeping the type tree out of PlayerView.body.
-    var bodyWithLifecycleModifiers: some View {
+    // Extracted from bodyWithLifecycleModifiers to keep the Swift type-checker from
+    // timing out on the cumulative modifier chain in that var (compiler error:
+    // "unable to type-check this expression in reasonable time").
+    @ViewBuilder
+    private var titleAndBackButtonOverlay: some View {
+        HStack(spacing: 0) {
+            Button {
+                #if os(iOS)
+                swipeLog.notice("[PlayerView] backButton tapped — miniPlayerEnabled=\(store.settings.miniPlayerEnabled) presentation=\(String(describing: playerState.presentation))")
+                if store.settings.miniPlayerEnabled { playerState.minimize() } else { playerState.stop() }
+                swipeLog.notice("[PlayerView] backButton — done, presentation=\(String(describing: playerState.presentation))")
+                #else
+                vm.stop(); withAnimation(.none) { dismiss() }
+                #endif
+            } label: {
+                Color.clear.frame(width: 60, height: 60)
+            }
+            .accessibilityIdentifier("player.backButton")
+            #if os(tvOS)
+            .buttonStyle(.plain)
+            .focusable(false)
+            #endif
+            Text(vm.playerInfo?.video.title ?? video.title)
+                .font(.caption)
+                .opacity(0)   // visually invisible (including emoji), accessible
+                .accessibilityIdentifier("player.titleLabel")
+                .allowsHitTesting(false)
+        }
+        #if !os(tvOS)
+        .padding(.top, 60)
+        #endif
+    }
+
+    // MARK: - Player content base view
+    //
+    // Contains the GeometryReader / ZStack with AVLayer, controls, and iOS swipe gesture.
+    // Extracted from bodyWithLifecycleModifiers so the Swift type-checker handles each
+    // property in a separate inference scope (compiler error: "unable to type-check
+    // this expression in reasonable time").
+    private var playerContentView: some View {
         GeometryReader { geo in
             ZStack {
                 Color.black.ignoresSafeArea()
@@ -224,7 +260,20 @@ extension PlayerView {
         .toast(message: $seekToastMessage)
         .toast(message: Binding(get: { vm.toastMessage }, set: { vm.toastMessage = $0 }))
         #endif
-        #if os(tvOS)
+    }
+
+    // MARK: - Full player body with lifecycle modifiers
+    //
+    // Extracted from body so the compiled symbol for `body` shrinks from ~16 KB to ~100 bytes.
+    // All lifecycle wiring (onAppear, onChange, tvOS focus, navigation, alerts) lives here
+    // as its own compiled function, keeping the type tree out of PlayerView.body.
+    #if os(tvOS)
+    // Extracted from bodyWithLifecycleModifiers to prevent Swift type-checker timeout
+    // (error: "unable to type-check this expression in reasonable time").
+    // Each property is a separate type-inference scope so the cumulative generic depth
+    // of the modifier chain stays within the compiler threshold.
+    private var tvosPlayerGestureModifiers: some View {
+        playerContentView
         // When no overlay is open, the outer view is the exclusive focus target and
         // handles all remote input via onMoveCommand / onTapGesture.
         // When an overlay (more menu, quality, speed, sleep timer) is visible, focus is
@@ -297,6 +346,12 @@ extension PlayerView {
         .onChange(of: playerFocused) { _, focused in
             swipeLog.notice("[tv] playerFocused changed → \(focused) isAnyOverlayVisible=\(isAnyOverlayVisible)")
         }
+    }
+
+    // Second half of the tvOS modifier chain — split from tvosPlayerInputModifiers to
+    // keep each property's generic depth under the Swift type-checker threshold.
+    private var tvosPlayerOverlayModifiers: some View {
+        tvosPlayerGestureModifiers
         .onChange(of: showMoreMenu) { _, visible in
             swipeLog.notice("[tv] showMoreMenu changed → \(visible) isAnyOverlayVisible=\(isAnyOverlayVisible) playerFocused=\(playerFocused)")
             if visible {
@@ -335,6 +390,11 @@ extension PlayerView {
         .onChange(of: showCaptionPicker) { _, visible in
             swipeLog.notice("[tv] showCaptionPicker changed → \(visible)")
         }
+    }
+
+    // Third split of the tvOS modifier chain.
+    private var tvosPlayerChangeModifiers: some View {
+        tvosPlayerOverlayModifiers
         .onChange(of: showAudioTrackPicker) { _, visible in
             swipeLog.notice("[tv] showAudioTrackPicker changed → \(visible)")
         }
@@ -378,44 +438,31 @@ extension PlayerView {
                 playerFocused = true
             }
         }
-        #endif
-        #if os(iOS)
-        .navigationBarHidden(true)
-        .statusBarHidden(true)
-        .toolbar(.hidden, for: .tabBar)
-        #elseif os(tvOS)
-        .toolbar(.hidden, for: .tabBar)
-        #endif
+    }
+    #endif
+
+    var bodyWithLifecycleModifiers: some View {
+        // Group branches by platform so each branch has its own type-inference scope.
+        // Platform-specific toolbar and nav-bar modifiers live inside each branch to
+        // avoid conditional-compilation mid-chain (not allowed outside @ViewBuilder).
+        Group {
+            #if os(tvOS)
+            tvosPlayerChangeModifiers
+                .toolbar(.hidden, for: .tabBar)
+            #elseif os(iOS)
+            playerContentView
+                .navigationBarHidden(true)
+                .statusBarHidden(true)
+                .toolbar(.hidden, for: .tabBar)
+            #else
+            playerContentView
+            #endif
+        }
         // Always-visible title badge so XCUITest can read the current video title
         // without waiting for the controls overlay to be shown.
         // Also provides an always-accessible back button for UI automation.
         .overlay(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                Button {
-                    #if os(iOS)
-                    swipeLog.notice("[PlayerView] backButton tapped — miniPlayerEnabled=\(store.settings.miniPlayerEnabled) presentation=\(String(describing: playerState.presentation))")
-                    if store.settings.miniPlayerEnabled { playerState.minimize() } else { playerState.stop() }
-                    swipeLog.notice("[PlayerView] backButton — done, presentation=\(String(describing: playerState.presentation))")
-                    #else
-                    vm.stop(); withAnimation(.none) { dismiss() }
-                    #endif
-                } label: {
-                    Color.clear.frame(width: 60, height: 60)
-                }
-                .accessibilityIdentifier("player.backButton")
-                #if os(tvOS)
-                .buttonStyle(.plain)
-                .focusable(false)
-                #endif
-                Text(vm.playerInfo?.video.title ?? video.title)
-                    .font(.caption)
-                    .opacity(0)   // visually invisible (including emoji), accessible
-                    .accessibilityIdentifier("player.titleLabel")
-                    .allowsHitTesting(false)
-            }
-            #if !os(tvOS)
-            .padding(.top, 60)
-            #endif
+            titleAndBackButtonOverlay
         }
         .onAppear {
             swipeLog.notice("[PlayerView] onAppear id=\(video.id)")

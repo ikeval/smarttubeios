@@ -95,6 +95,7 @@ public struct SettingsView: View {
                     Text(q == .auto ? "Auto" : q.rawValue).tag(q)
                 }
             }
+            .accessibilityIdentifier("settings.preferredQualityPicker")
 
             Picker("Preferred Audio Language", selection: $store.settings.preferredAudioLanguage) {
                 Text("System Default").tag(nil as String?)
