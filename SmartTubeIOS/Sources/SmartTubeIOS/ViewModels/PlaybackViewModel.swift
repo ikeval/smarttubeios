@@ -119,7 +119,7 @@ public final class PlaybackViewModel {
                 "error_message":     error.localizedDescription,
                 "error_domain":      nsError.domain,
                 "error_code":        "\(nsError.code)",
-                "has_retried":       "\(hasRetriedPlayback)",
+                "retry_attempts":    "\(retryAttempts)",
                 "current_time":      "\(Int(currentTime))s",
             ])
             CrashlyticsLogger.sendAutoPlaybackDiagnostic()
@@ -201,8 +201,10 @@ public final class PlaybackViewModel {
     /// True while the video is being routed to an external display via AirPlay.
     public internal(set) var isAirPlaying: Bool = false
     @ObservationIgnored nonisolated(unsafe) var airPlayObserver: NSKeyValueObservation?
-    /// Prevents infinite retry loops: set once the first fallback attempt has been made.
-    var hasRetriedPlayback: Bool = false
+    /// Counts exhaustive retry cycles (0 = no retry yet). Set by exhaustiveRetry(video:originalError:).
+    var retryAttempts: Int = 0
+    /// Task running the exhaustive retry loop; cancelled on new load or retryLoad.
+    var exhaustiveRetryTask: Task<Void, Never>?
     /// Set after a Cannot-Decode failure on the Auto HLS master — forwarded to qualityManager.
     var hasAppliedH264Cap: Bool {
         get { qualityManager.hasAppliedH264Cap }

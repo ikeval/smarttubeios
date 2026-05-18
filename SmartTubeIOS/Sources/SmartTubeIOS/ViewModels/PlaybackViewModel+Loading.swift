@@ -70,7 +70,9 @@ extension PlaybackViewModel {
         }
         currentVideo = video
         hasPrevious = !history.isEmpty
-        hasRetriedPlayback = false
+        retryAttempts = 0
+        exhaustiveRetryTask?.cancel()
+        exhaustiveRetryTask = nil
         qualityManager.reset()
         phase2Task?.cancel()
         phase2Task = nil
@@ -100,7 +102,9 @@ extension PlaybackViewModel {
     public func retryLoad() {
         guard let video = currentVideo else { return }
         error = nil
-        hasRetriedPlayback = false
+        retryAttempts = 0
+        exhaustiveRetryTask?.cancel()
+        exhaustiveRetryTask = nil
         loadTask?.cancel()
         loadTask = Task { [weak self] in
             guard let self else { return }
@@ -431,7 +435,7 @@ extension PlaybackViewModel {
                 // Android client always returns an HLS manifest — reuse the fallback path.
                 if !info.formats.isEmpty {
                     playerLog.notice("⚠️ adaptive-only iOS response — retrying with Android client for HLS")
-                    await retryWithFallbackPlayer(video: video, originalError: nil)
+                    await exhaustiveRetry(video: video, originalError: nil)
                     return
                 }
                 playerLog.error("❌ No stream URL after successful parse (should not happen)")
@@ -497,29 +501,9 @@ extension PlaybackViewModel {
                         self.isLoading = false                    case .failed:
                         let err = item.error.map { "\($0)" } ?? "nil"
                         playerLog.error("❌ AVPlayerItem failed: \(err)")
-                        if !self.hasRetriedPlayback, let video = self.currentVideo {
-                            self.hasRetriedPlayback = true
-                            // NSURLErrorDomain -1102 = HTTP 403 from a CDN URL that is now IP-bound
-                            // to a different network. Invalidate the cached player info so the next
-                            // attempt fetches a fresh URL, then try the iOS client first.
-                            let nsErr = item.error as? NSError
-                            if nsErr?.domain == NSURLErrorDomain && nsErr?.code == -1102 {
-                                await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
-                                Task { await self.retryWith403Recovery(video: video, originalError: item.error) }
-                            } else if let info = self.playerInfo, info.hlsURL == nil,
-                                      info.bestAdaptiveVideoURL != nil,
-                                      info.bestAdaptiveAudioURL != nil {
-                                // The TV client returned streaming data without an HLS manifest.
-                                // The primary muxed-format URL (itag=18) failed — likely a CDN
-                                // pot-token or routing issue specific to the muxed itag.
-                                // Retry by compositing the best H.264 video-only + AAC audio-only
-                                // adaptive streams, which use different CDN endpoints and do not
-                                // have the same restriction.
-                                playerLog.notice("Primary muxed URL failed with no HLS available — retrying with adaptive composition")
-                                Task { await self.retryWithAdaptiveComposition(video: video, info: info, originalError: item.error) }
-                            } else {
-                                Task { await self.retryWithFallbackPlayer(video: video, originalError: item.error) }
-                            }
+                        if let video = self.currentVideo {
+                            self.exhaustiveRetryTask?.cancel()
+                            self.exhaustiveRetryTask = Task { await self.exhaustiveRetry(video: video, originalError: item.error) }
                         } else {
                             self.error = item.error
                         }

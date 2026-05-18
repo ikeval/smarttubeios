@@ -4,368 +4,260 @@ import SmartTubeIOSCore
 
 private let playerLog = CrashlyticsLogger(category: "Player")
 
-// MARK: - AVPlayer Error Recovery
+// MARK: - Exhaustive Playback Retry
 
 extension PlaybackViewModel {
 
-    /// Called when the primary iOS-client HLS stream fails to open.
-    /// Re-fetches using the Android InnerTube client, which returns direct CDN videoplayback
-    /// URLs instead of an IP-bound HLS manifest. YouTube's iOS-client HLS manifests embed
-    /// the requester's IP; on the iOS Simulator AVPlayer's download IP can differ from the
-    /// URLSession IP used by InnerTubeAPI, causing a 404. Android-client URLs are signed with
-    /// Android credentials and are not subject to the same IP-binding restriction.
-    /// Shows the original error if the Android-client fallback also fails.
-    func retryWithFallbackPlayer(video: Video, originalError: Error?) async {
-        do {
-            playerLog.notice("Retrying playback with Android client for \(video.id)")
-            let fallbackInfo = try await api.fetchPlayerInfoAndroid(videoId: video.id)
+    // MARK: - Entry Points
 
-            // NW-3-FIX (extended / NW-3-FIX-ANDROID): The Android client sometimes returns a
-            // muxed-only response (itag=18, c=ANDROID) with no HLS manifest and no adaptive
-            // streams. Attempting to play this URL in AVPlayer results in
-            // AVFoundationErrorDomain -11828 / NSOSStatusErrorDomain -12847 — a known
-            // YouTube CDN restriction, not an app bug. Detect this before handing the URL to
-            // AVPlayer so we never record a spurious non-fatal (issues 0edf6a2f / c54e620).
-            // APIError.unavailable is already suppressed from Crashlytics in error.didSet.
-            if fallbackInfo.hlsURL == nil,
-               fallbackInfo.bestAdaptiveVideoURL == nil,
-               fallbackInfo.bestAdaptiveAudioURL == nil {
-                // NW-3-FIX-CACHE: Android returned muxed-only, but the upstream iOS-client
-                // cache entry may have been stale (hlsURL missing because the preload ran
-                // against an expired token / incomplete response). Before giving up, do ONE
-                // fresh iOS-client fetch — if it produces an HLS URL we can play that
-                // directly. Guard with hasRetriedPlayback to prevent a second cycle.
-                playerLog.notice("⚠️ Android muxed-only for \(video.id) — attempting fresh iOS client fetch (hasRetried=\(hasRetriedPlayback))")
-                if !hasRetriedPlayback {
-                    hasRetriedPlayback = true
-                    await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
-                    await retryWith403Recovery(video: video, originalError: originalError)
+    /// Main retry entry point. Called whenever the primary iOS stream fails.
+    ///
+    /// Strategy: exhaust all stream formats (HLS → adaptive composition → muxed direct) from
+    /// both iOS and Android clients before giving up; repeat the full cycle up to 3 times to
+    /// survive transient network errors and stale cache entries (the hls=false root cause).
+    func exhaustiveRetry(video: Video, originalError: Error?) async {
+        for attempt in 1...3 {
+            guard !Task.isCancelled else { return }
+            retryAttempts = attempt
+            playerLog.notice("Exhaustive retry \(attempt)/3 for \(video.id)")
+
+            // Evict the stale cache entry so each attempt gets fresh signed URLs.
+            await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
+
+            // --- iOS client (fresh network fetch) ---
+            do {
+                let iosInfo = try await api.fetchPlayerInfo(videoId: video.id)
+                await VideoPreloadCache.shared.store(playerInfo: iosInfo, for: video.id)
+                if await tryAllStreams(video: video, info: iosInfo, label: "iOS[\(attempt)]") {
                     return
                 }
-                playerLog.error("❌ Android client returned muxed-only (no HLS/adaptive) — cannot play this video")
-                self.error = APIError.unavailable("Unable to play this video")
-                return
+            } catch {
+                if case APIError.ipBlocked = error {
+                    playerLog.error("❌ iOS client: IP blocked — \(error)")
+                    self.error = error
+                    return
+                }
+                playerLog.error("iOS client fetch failed (attempt \(attempt)): \(error)")
             }
 
-            // Fix #122: Android client sometimes returns no HLS manifest but adaptive streams
-            // are available. Using preferredStreamURL in this case returns the muxed itag=18
-            // URL, which fails immediately with AVFoundationErrorDomain -11828
-            // ("This media format is not supported"). Delegate to retryWithAdaptiveComposition
-            // instead, which composites the video-only and audio-only adaptive streams.
-            if fallbackInfo.hlsURL == nil,
-               fallbackInfo.bestAdaptiveVideoURL != nil,
-               fallbackInfo.bestAdaptiveAudioURL != nil {
-                playerLog.notice("Android fallback: no HLS but adaptive streams available — delegating to adaptive composition")
-                await retryWithAdaptiveComposition(video: video, info: fallbackInfo, originalError: originalError)
-                return
-            }
+            guard !Task.isCancelled else { return }
 
-            guard let baseFallbackURL = fallbackInfo.preferredStreamURL else {
-                playerLog.error("❌ Fallback player: no stream URL")
-                self.error = originalError
-                return
-            }
-            playerLog.notice("Fallback stream URL: \(baseFallbackURL.absoluteString.prefix(120))")
-            // BUG-002 fix: propagate fetched info so format/caption pickers reflect the fallback response.
-            playerInfo = fallbackInfo
-            availableFormats = Self.deduplicatedVideoFormats(fallbackInfo.formats)
-            availableCaptions = fallbackInfo.captionTracks
-            autoApplyCaptionPreference(tracks: fallbackInfo.captionTracks)
-            // Apply quality preference: fetch HLS variants if available, then select the correct stream.
-            var fallbackURL = baseFallbackURL
-            if let hlsURL = fallbackInfo.hlsURL {
-                let variantURLs = await fetchHLSVariantURLs(url: hlsURL)
-                if !variantURLs.isEmpty {
-                    hlsVariantURLs = variantURLs
-                    availableFormats = availableFormats.filter { variantURLs.keys.contains($0.height) }
+            // --- Android client ---
+            do {
+                let androidInfo = try await api.fetchPlayerInfoAndroid(videoId: video.id)
+                if await tryAllStreams(video: video, info: androidInfo, label: "Android[\(attempt)]") {
+                    return
                 }
-                fallbackURL = applyQualityPreference(to: baseFallbackURL)
-            }
-            lastAttemptedStreamURL = fallbackURL
-            let fallbackItem = AVPlayerItem(url: fallbackURL)
-            // BUG-009 fix: replace the current item BEFORE setting up the observer so the
-            // observer never fires on the old item.
-            player.replaceCurrentItem(with: fallbackItem)
-            itemObserverTask?.cancel()
-            itemObserverTask = Task { [weak self] in
-                for await status in fallbackItem.statusStream {
-                    guard let self, !Task.isCancelled else { return }
-                    switch status {
-                    case .readyToPlay:
-                        playerLog.notice("✅ Fallback AVPlayerItem readyToPlay")
-                        if let pos = self.savedPositionToRestore, pos > 0 {
-                            self.savedPositionToRestore = nil
-                            self.seek(to: pos)
-                        }
-                        self.loadAudioTracks(from: fallbackItem)
-                        self.isLoading = false
-                    case .failed:
-                        let err = fallbackItem.error.map { "\($0)" } ?? "nil"
-                        playerLog.error("❌ Fallback AVPlayerItem failed: \(err)")
-                        self.error = fallbackItem.error ?? originalError
-                    case .unknown:
-                        break
-                    @unknown default:
-                        break
-                    }
+            } catch {
+                if case APIError.ipBlocked = error {
+                    playerLog.error("❌ Android client: IP blocked — \(error)")
+                    self.error = error
+                    return
                 }
-            }
-            player.rate = Float(settings.playbackSpeed)
-            isPlaying = true
-            // BUG-007 fix: launch phase2 so SponsorBlock, tracking URLs, and nextInfo are fetched
-            // even when the primary load path fell back to the Android client.
-            let p2Video = video
-            let p2Info = fallbackInfo
-            phase2Task?.cancel()
-            phase2Task = Task(priority: .utility) { [weak self] in
-                let empty = CachedVideoData(
-                    playerInfo: nil, trackingURLs: nil, nextInfo: nil,
-                    endCards: nil, sponsorSegments: nil, deArrowBranding: nil,
-                    staleFields: []
-                )
-                await self?.loadAsyncPhase2(
-                    video: p2Video, cached: empty, info: p2Info,
-                    cachedTrackingURLs: nil, authTrackingTask: nil, sponsorCached: false
-                )
-            }
-        } catch {
-            // IP-block errors from the Android fallback are more actionable than the upstream
-            // AVFoundation -11828 "Cannot Open". Surface ipBlocked so the user sees the
-            // "YouTube is temporarily blocking this network…" banner instead of "Cannot Open".
-            if case APIError.ipBlocked = error {
-                self.error = error
-            } else {
-                self.error = originalError
+                playerLog.error("Android client fetch failed (attempt \(attempt)): \(error)")
             }
         }
+
+        guard !Task.isCancelled else { return }
+        playerLog.error("❌ All 3 retry attempts exhausted for \(video.id)")
+        error = APIError.unavailable("Unable to play this video")
     }
 
-    /// Retries playback by compositing the best H.264 video-only stream and the best AAC
-    /// audio-only stream from the existing TV-client player info into an AVMutableComposition.
-    ///
-    /// Called when the primary muxed-format direct URL (itag=18, 360p) fails with an
-    /// AVFoundation error while the TV client returned no HLS manifest. The muxed CDN URL
-    /// uses a different CDN route than the adaptive streams and may be rejected by YouTube's
-    /// CDN (e.g. missing or invalid pot token for the muxed itag). The adaptive video/audio
-    /// URLs (itag=137/140 etc.) typically succeed because they are served by the standard
-    /// adaptive CDN path that does not apply the same restriction.
-    ///
-    /// Falls back to `retryWithFallbackPlayer` (Android client) if composition setup fails.
-    func retryWithAdaptiveComposition(video: Video, info: PlayerInfo, originalError: Error?) async {
-        guard let videoURL = qualityCapVideoURL(from: info.formats),
-              let audioURL = info.bestAdaptiveAudioURL else {
-            playerLog.error("❌ Adaptive composition: no adaptive URLs in player info")
-            await retryWithFallbackPlayer(video: video, originalError: originalError)
-            return
+    /// Kept for the `PlaybackQualityManagerDelegate` protocol.
+    /// Quality-switch 403 errors start a fresh 3-attempt exhaustive cycle.
+    func retryWith403Recovery(video: Video, originalError: Error?) async {
+        playerLog.notice("403 recovery (quality switch) — exhaustive retry for \(video.id)")
+        retryAttempts = 0
+        await exhaustiveRetry(video: video, originalError: originalError)
+    }
+
+    // MARK: - Stream Exhaustion
+
+    /// Tries HLS → adaptive composition → muxed direct from one PlayerInfo.
+    /// Returns true if any stream starts playing successfully.
+    private func tryAllStreams(video: Video, info: PlayerInfo, label: String) async -> Bool {
+        // 1. HLS manifest — best quality, native AVPlayer ABR, alternate audio renditions
+        if let hlsURL = info.hlsURL {
+            playerLog.notice("[\(label)] Trying HLS")
+            if await attemptURL(hlsURL, for: video, info: info, label: "\(label)/HLS") { return true }
+            playerLog.notice("[\(label)] HLS failed — trying adaptive composition")
         }
-        // BUG-004 fix: propagate the info that was passed in so format/caption pickers reflect it.
+
+        // 2. Adaptive composition — video-only + audio-only; avoids muxed CDN pot restrictions
+        if let videoURL = qualityCapVideoURL(from: info.formats),
+           let audioURL = info.bestAdaptiveAudioURL {
+            playerLog.notice("[\(label)] Trying adaptive composition")
+            if await attemptComposition(videoURL: videoURL, audioURL: audioURL,
+                                        for: video, info: info, label: label) {
+                return true
+            }
+            playerLog.notice("[\(label)] Adaptive composition failed — trying muxed")
+        }
+
+        // 3. Muxed direct MP4 (itag=18, 360p — last resort)
+        if let muxedURL = info.bestMuxedDownloadURL {
+            playerLog.notice("[\(label)] Trying muxed")
+            if await attemptURL(muxedURL, for: video, info: info, label: "\(label)/muxed") { return true }
+            playerLog.notice("[\(label)] Muxed failed — no more alternatives for this client")
+        }
+
+        return false
+    }
+
+    // MARK: - Attempt Helpers
+
+    /// Tries a single URL in AVPlayer. Returns true if `.readyToPlay` is received.
+    /// `statusStream` finishes after `.readyToPlay` or `.failed`, making it safe to await inline.
+    private func attemptURL(_ url: URL, for video: Video, info: PlayerInfo, label: String) async -> Bool {
+        playerLog.notice("[\(label)]: \(url.absoluteString.prefix(120))")
+
         playerInfo = info
         availableFormats = Self.deduplicatedVideoFormats(info.formats)
         availableCaptions = info.captionTracks
         autoApplyCaptionPreference(tracks: info.captionTracks)
 
-        // Extract itag and rqh flag before the do block so they are in scope for the catch.
+        var effectiveURL = url
+        if let hlsURL = info.hlsURL, url == hlsURL {
+            let variantURLs = await fetchHLSVariantURLs(url: hlsURL)
+            if !variantURLs.isEmpty {
+                hlsVariantURLs = variantURLs
+                availableFormats = availableFormats.filter { variantURLs.keys.contains($0.height) }
+            }
+            effectiveURL = applyQualityPreference(to: url)
+        }
+
+        lastAttemptedStreamURL = effectiveURL
+        let item = AVPlayerItem(url: effectiveURL)
+        player.replaceCurrentItem(with: item)
+        itemObserverTask?.cancel()
+
+        for await status in item.statusStream {
+            switch status {
+            case .readyToPlay:
+                playerLog.notice("✅ [\(label)] readyToPlay")
+                if let pos = savedPositionToRestore, pos > 0 {
+                    savedPositionToRestore = nil
+                    seek(to: pos)
+                }
+                loadAudioTracks(from: item)
+                isLoading = false
+                player.rate = Float(settings.playbackSpeed)
+                isPlaying = true
+                launchPhase2(video: video, info: info)
+                return true
+            case .failed:
+                let err = item.error.map { "\($0)" } ?? "nil"
+                playerLog.error("❌ [\(label)] AVPlayerItem failed: \(err)")
+                return false
+            case .unknown:
+                continue
+            @unknown default:
+                continue
+            }
+        }
+        return false
+    }
+
+    /// Composes a video-only + audio-only adaptive stream pair via `AVMutableComposition`.
+    /// Returns true on successful `.readyToPlay`.
+    private func attemptComposition(
+        videoURL: URL, audioURL: URL,
+        for video: Video, info: PlayerInfo, label: String
+    ) async -> Bool {
         let videoItag = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
         let audioItag = URLComponents(url: audioURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
         let videoRqh = videoURL.absoluteString.contains("rqh=1")
-        playerLog.notice("Adaptive composition: id=\(video.id) videoItag=\(videoItag) rqh=\(videoRqh) audioItag=\(audioItag)")
+        playerLog.notice("[\(label)/adaptive] videoItag=\(videoItag) rqh=\(videoRqh) audioItag=\(audioItag)")
+
+        playerInfo = info
+        availableFormats = Self.deduplicatedVideoFormats(info.formats)
+        availableCaptions = info.captionTracks
+        autoApplyCaptionPreference(tracks: info.captionTracks)
 
         let ua = InnerTubeClients.iOS.userAgent
         let videoAsset = AVURLAsset(url: videoURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
         let audioAsset = AVURLAsset(url: audioURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
 
         do {
-            // Load track lists from both remote assets concurrently.
             async let videoTracks = videoAsset.loadTracks(withMediaType: .video)
             async let audioTracks = audioAsset.loadTracks(withMediaType: .audio)
             let (vTracks, aTracks) = try await (videoTracks, audioTracks)
 
             guard let sourceVideoTrack = vTracks.first,
                   let sourceAudioTrack = aTracks.first else {
-                playerLog.error("❌ Adaptive composition: no video or audio track in remote assets")
-                await retryWithFallbackPlayer(video: video, originalError: originalError)
-                return
+                playerLog.error("❌ [\(label)/adaptive] no tracks in remote assets (rqh=\(videoRqh))")
+                return false
             }
 
             let videoDuration = try await videoAsset.load(.duration)
             let timeRange = CMTimeRange(start: .zero, duration: videoDuration)
-
             let composition = AVMutableComposition()
-            guard let compVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
-                  let compAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-                playerLog.error("❌ Adaptive composition: could not add composition tracks")
-                await retryWithFallbackPlayer(video: video, originalError: originalError)
-                return
+
+            guard let compVideo = composition.addMutableTrack(withMediaType: .video,
+                                                              preferredTrackID: kCMPersistentTrackID_Invalid),
+                  let compAudio = composition.addMutableTrack(withMediaType: .audio,
+                                                              preferredTrackID: kCMPersistentTrackID_Invalid) else {
+                playerLog.error("❌ [\(label)/adaptive] could not add composition tracks")
+                return false
             }
 
             try compVideo.insertTimeRange(timeRange, of: sourceVideoTrack, at: .zero)
             try compAudio.insertTimeRange(timeRange, of: sourceAudioTrack, at: .zero)
 
-            playerLog.notice("✅ Adaptive composition built — starting playback for \(video.id)")
+            playerLog.notice("✅ [\(label)/adaptive] composition built — testing playback for \(video.id)")
             lastAttemptedStreamURL = videoURL
             let compositeItem = AVPlayerItem(asset: composition)
-
-            // BUG-009 fix: replace before observing.
             player.replaceCurrentItem(with: compositeItem)
             itemObserverTask?.cancel()
-            itemObserverTask = Task { [weak self] in
-                for await status in compositeItem.statusStream {
-                    guard let self, !Task.isCancelled else { return }
-                    switch status {
-                    case .readyToPlay:
-                        playerLog.notice("✅ Adaptive composition AVPlayerItem readyToPlay")
-                        if let pos = self.savedPositionToRestore, pos > 0 {
-                            self.savedPositionToRestore = nil
-                            self.seek(to: pos)
-                        }
-                        self.loadAudioTracks(from: compositeItem)
-                        self.isLoading = false
-                    case .failed:
-                        let nsErr = compositeItem.error as? NSError
-                        let underlying = nsErr?.userInfo[NSUnderlyingErrorKey] as? NSError
-                        let httpStatus = underlying?.code == -12660 ? 403 : (nsErr?.code ?? -1)
-                        let errDomain = nsErr?.domain ?? "?"
-                        let errCode = nsErr?.code ?? -1
-                        playerLog.error("❌ Adaptive composition AVPlayerItem failed: id=\(video.id) videoItag=\(videoItag) rqh=\(videoRqh) errorDomain=\(errDomain) code=\(errCode) httpStatus=\(httpStatus)")
-                        // NW-3-FIX-CACHE-COMP: Before giving up, try a fresh iOS-client fetch.
-                        // The cached response had hls=false; a fresh fetch may return hls=true.
-                        if !self.hasRetriedPlayback {
-                            self.hasRetriedPlayback = true
-                            playerLog.notice("⚠️ Adaptive composition AVPlayerItem failed — trying fresh iOS client for \(video.id)")
-                            await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
-                            await self.retryWith403Recovery(video: video, originalError: originalError)
-                            return
-                        }
-                        // Do NOT retry with Android client — same rqh=1 adaptive streams
-                        // would 403 again, creating an infinite loop.
-                        self.error = APIError.unavailable("Unable to play this video")
-                    case .unknown:
-                        break
-                    @unknown default:
-                        break
+
+            for await status in compositeItem.statusStream {
+                switch status {
+                case .readyToPlay:
+                    playerLog.notice("✅ [\(label)/adaptive] readyToPlay")
+                    if let pos = savedPositionToRestore, pos > 0 {
+                        savedPositionToRestore = nil
+                        seek(to: pos)
                     }
+                    loadAudioTracks(from: compositeItem)
+                    isLoading = false
+                    player.rate = Float(settings.playbackSpeed)
+                    isPlaying = true
+                    launchPhase2(video: video, info: info)
+                    return true
+                case .failed:
+                    let nsErr = compositeItem.error as? NSError
+                    let httpStatus = (nsErr?.userInfo[NSUnderlyingErrorKey] as? NSError)?.code == -12660 ? 403 : (nsErr?.code ?? -1)
+                    playerLog.error("❌ [\(label)/adaptive] AVPlayerItem failed: domain=\(nsErr?.domain ?? "?") code=\(nsErr?.code ?? -1) httpStatus=\(httpStatus)")
+                    return false
+                case .unknown:
+                    continue
+                @unknown default:
+                    continue
                 }
             }
-            player.rate = Float(settings.playbackSpeed)
-            isPlaying = true
-            // BUG-007 fix: launch phase2 so SponsorBlock, tracking URLs, and nextInfo are fetched
-            // after the adaptive composition fallback.
-            let p2Video = video
-            let p2Info = info
-            phase2Task?.cancel()
-            phase2Task = Task(priority: .utility) { [weak self] in
-                let empty = CachedVideoData(
-                    playerInfo: nil, trackingURLs: nil, nextInfo: nil,
-                    endCards: nil, sponsorSegments: nil, deArrowBranding: nil,
-                    staleFields: []
-                )
-                await self?.loadAsyncPhase2(
-                    video: p2Video, cached: empty, info: p2Info,
-                    cachedTrackingURLs: nil, authTrackingTask: nil, sponsorCached: false
-                )
-            }
+            return false
         } catch {
             let nsErr = error as NSError
-            let underlying = nsErr.userInfo[NSUnderlyingErrorKey] as? NSError
-            let httpStatus = underlying?.code == -12660 ? 403 : nsErr.code
-            playerLog.error("❌ Adaptive composition setup failed: id=\(video.id) videoItag=\(videoItag) rqh=\(videoRqh) errorDomain=\(nsErr.domain) code=\(nsErr.code) httpStatus=\(httpStatus) — stopping retry chain")
-            // NW-3-FIX-CACHE-COMP: Before giving up, try a fresh iOS-client fetch.
-            // The cached iOS response had hls=false; a fresh fetch may return hls=true
-            // (confirmed: background prefetch at line 1729 shows hls=true for J6J8vhIzfLo).
-            // Guard with hasRetriedPlayback to prevent a second cycle.
-            if !hasRetriedPlayback {
-                hasRetriedPlayback = true
-                playerLog.notice("⚠️ Adaptive composition failed (rqh=\(videoRqh)) — trying fresh iOS client for \(video.id)")
-                await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
-                await retryWith403Recovery(video: video, originalError: originalError)
-                return
-            }
-            // Do NOT call retryWithFallbackPlayer — Android returns the same rqh=1 adaptive
-            // streams which 403 again, causing an infinite loop.
-            self.error = APIError.unavailable("Unable to play this video")
+            let httpStatus = (nsErr.userInfo[NSUnderlyingErrorKey] as? NSError)?.code == -12660 ? 403 : nsErr.code
+            playerLog.error("❌ [\(label)/adaptive] setup failed: domain=\(nsErr.domain) code=\(nsErr.code) httpStatus=\(httpStatus)")
+            return false
         }
     }
 
-    /// 403 recovery: re-fetch a fresh iOS-client player info (now that the stale cache entry
-    /// is evicted) and retry with the new URL.  Falls through to the Android client if the
-    /// fresh iOS-client URL also 403s.
-    func retryWith403Recovery(video: Video, originalError: Error?) async {
-        do {
-            playerLog.notice("403 recovery — re-fetching iOS client player info for \(video.id)")
-            let freshInfo = try await api.fetchPlayerInfo(videoId: video.id)
-            await VideoPreloadCache.shared.store(playerInfo: freshInfo, for: video.id)
-            guard let baseRecoveryURL = freshInfo.preferredStreamURL else {
-                playerLog.error("❌ 403 recovery: no stream URL in fresh iOS-client response")
-                await retryWithFallbackPlayer(video: video, originalError: originalError)
-                return
-            }
-            playerLog.notice("403 recovery stream URL: \(baseRecoveryURL.absoluteString.prefix(120))")
-            // BUG-003 fix: propagate refreshed info so ViewModel state reflects fresh signed URLs.
-            playerInfo = freshInfo
-            availableFormats = Self.deduplicatedVideoFormats(freshInfo.formats)
-            availableCaptions = freshInfo.captionTracks
-            autoApplyCaptionPreference(tracks: freshInfo.captionTracks)
-            // Apply quality preference: fetch HLS variants if available, then select the correct stream.
-            var recoveryURL = baseRecoveryURL
-            if let hlsURL = freshInfo.hlsURL {
-                let variantURLs = await fetchHLSVariantURLs(url: hlsURL)
-                if !variantURLs.isEmpty {
-                    hlsVariantURLs = variantURLs
-                    availableFormats = availableFormats.filter { variantURLs.keys.contains($0.height) }
-                }
-                recoveryURL = applyQualityPreference(to: baseRecoveryURL)
-            }
-            lastAttemptedStreamURL = recoveryURL
-            let recoveryItem = AVPlayerItem(url: recoveryURL)
-            // BUG-009 fix: replace before observing.
-            player.replaceCurrentItem(with: recoveryItem)
-            itemObserverTask?.cancel()
-            itemObserverTask = Task { [weak self] in
-                for await status in recoveryItem.statusStream {
-                    guard let self, !Task.isCancelled else { return }
-                    switch status {
-                    case .readyToPlay:
-                        playerLog.notice("✅ 403 recovery AVPlayerItem readyToPlay")
-                        if let pos = self.savedPositionToRestore, pos > 0 {
-                            self.savedPositionToRestore = nil
-                            self.seek(to: pos)
-                        }
-                        self.loadAudioTracks(from: recoveryItem)
-                        self.isLoading = false
-                    case .failed:
-                        let err = recoveryItem.error.map { "\($0)" } ?? "nil"
-                        playerLog.error("❌ 403 recovery AVPlayerItem failed: \(err) — falling back to Android client")
-                        await self.retryWithFallbackPlayer(video: video, originalError: originalError)
-                    case .unknown:
-                        break
-                    @unknown default:
-                        break
-                    }
-                }
-            }
-            player.rate = Float(settings.playbackSpeed)
-            isPlaying = true
-            // BUG-007 fix: launch phase2 so SponsorBlock, tracking URLs, and nextInfo are fetched
-            // after the 403-recovery fetch.
-            let p2Video = video
-            let p2Info = freshInfo
-            phase2Task?.cancel()
-            phase2Task = Task(priority: .utility) { [weak self] in
-                let empty = CachedVideoData(
-                    playerInfo: nil, trackingURLs: nil, nextInfo: nil,
-                    endCards: nil, sponsorSegments: nil, deArrowBranding: nil,
-                    staleFields: []
-                )
-                await self?.loadAsyncPhase2(
-                    video: p2Video, cached: empty, info: p2Info,
-                    cachedTrackingURLs: nil, authTrackingTask: nil, sponsorCached: false
-                )
-            }
-        } catch {
-            playerLog.error("❌ 403 recovery fetch failed: \(String(describing: error)) — falling back to Android client")
-            await retryWithFallbackPlayer(video: video, originalError: originalError)
+    private func launchPhase2(video: Video, info: PlayerInfo) {
+        phase2Task?.cancel()
+        phase2Task = Task(priority: .utility) { [weak self] in
+            let empty = CachedVideoData(
+                playerInfo: nil, trackingURLs: nil, nextInfo: nil,
+                endCards: nil, sponsorSegments: nil, deArrowBranding: nil,
+                staleFields: []
+            )
+            await self?.loadAsyncPhase2(
+                video: video, cached: empty, info: info,
+                cachedTrackingURLs: nil, authTrackingTask: nil, sponsorCached: false
+            )
         }
     }
 
