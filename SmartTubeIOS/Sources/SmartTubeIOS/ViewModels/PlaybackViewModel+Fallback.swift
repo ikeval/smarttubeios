@@ -208,7 +208,7 @@ extension PlaybackViewModel {
                         playerLog.error("❌ Adaptive composition AVPlayerItem failed: \(err)")
                         // Do NOT retry with Android client — same rqh=1 adaptive streams
                         // would 403 again, creating an infinite loop.
-                        self.error = compositeItem.error ?? originalError
+                        self.error = APIError.unavailable("Unable to play this video")
                     case .unknown:
                         break
                     @unknown default:
@@ -238,10 +238,10 @@ extension PlaybackViewModel {
             // Do NOT call retryWithFallbackPlayer here — it re-fetches the Android client,
             // which returns the same adaptive-only streams (now universally gated by rqh=1
             // / pot token), causing an infinite loop of composition-setup failures.
-            // Surface the error directly so the user sees "Unable to play" with a Try Again
-            // button instead of the app spinning through repeated 403s.
+            // Use APIError.unavailable so the player shows "Unable to play this video"
+            // instead of the raw AVFoundation NSURLError localizedDescription ("unknown error").
             playerLog.error("❌ Adaptive composition setup failed: \(error) — stopping retry chain")
-            self.error = originalError ?? error
+            self.error = APIError.unavailable("Unable to play this video")
         }
     }
 
