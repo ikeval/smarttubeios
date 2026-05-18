@@ -151,7 +151,14 @@ extension PlaybackViewModel {
         availableFormats = Self.deduplicatedVideoFormats(info.formats)
         availableCaptions = info.captionTracks
         autoApplyCaptionPreference(tracks: info.captionTracks)
-        playerLog.notice("Adaptive composition: video=\(videoURL.absoluteString.prefix(80)) audio=\(audioURL.absoluteString.prefix(80))")
+
+        // Extract itag and rqh flag before the do block so they are in scope for the catch.
+        let videoItag = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
+        let audioItag = URLComponents(url: audioURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
+        let videoRqh = videoURL.absoluteString.contains("rqh=1")
+        playerLog.notice("Adaptive composition: id=\(video.id) videoItag=\(videoItag) rqh=\(videoRqh) audioItag=\(audioItag)")
 
         let ua = InnerTubeClients.iOS.userAgent
         let videoAsset = AVURLAsset(url: videoURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
@@ -204,8 +211,12 @@ extension PlaybackViewModel {
                         self.loadAudioTracks(from: compositeItem)
                         self.isLoading = false
                     case .failed:
-                        let err = compositeItem.error.map { "\($0)" } ?? "nil"
-                        playerLog.error("❌ Adaptive composition AVPlayerItem failed: \(err)")
+                        let nsErr = compositeItem.error as? NSError
+                        let underlying = nsErr?.userInfo[NSUnderlyingErrorKey] as? NSError
+                        let httpStatus = underlying?.code == -12660 ? 403 : (nsErr?.code ?? -1)
+                        let errDomain = nsErr?.domain ?? "?"
+                        let errCode = nsErr?.code ?? -1
+                        playerLog.error("❌ Adaptive composition AVPlayerItem failed: id=\(video.id) videoItag=\(videoItag) rqh=\(videoRqh) errorDomain=\(errDomain) code=\(errCode) httpStatus=\(httpStatus)")
                         // Do NOT retry with Android client — same rqh=1 adaptive streams
                         // would 403 again, creating an infinite loop.
                         self.error = APIError.unavailable("Unable to play this video")
@@ -240,7 +251,10 @@ extension PlaybackViewModel {
             // / pot token), causing an infinite loop of composition-setup failures.
             // Use APIError.unavailable so the player shows "Unable to play this video"
             // instead of the raw AVFoundation NSURLError localizedDescription ("unknown error").
-            playerLog.error("❌ Adaptive composition setup failed: \(error) — stopping retry chain")
+            let nsErr = error as NSError
+            let underlying = nsErr.userInfo[NSUnderlyingErrorKey] as? NSError
+            let httpStatus = underlying?.code == -12660 ? 403 : nsErr.code
+            playerLog.error("❌ Adaptive composition setup failed: id=\(video.id) videoItag=\(videoItag) rqh=\(videoRqh) errorDomain=\(nsErr.domain) code=\(nsErr.code) httpStatus=\(httpStatus) — stopping retry chain")
             self.error = APIError.unavailable("Unable to play this video")
         }
     }
