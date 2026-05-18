@@ -160,4 +160,49 @@ struct TVClientHLSNilFallbackTests {
         #expect(!shouldFallback,
                 "NW-3-FIX condition must not fire when adaptive streams are available")
     }
+
+    // MARK: - NW-3-FIX (extended): Android muxed-only response
+
+    /// Mirrors `retryWithFallbackPlayer`'s new NW-3-FIX-ANDROID guard:
+    ///   if fallbackInfo.hlsURL == nil,
+    ///      fallbackInfo.bestAdaptiveVideoURL == nil,
+    ///      fallbackInfo.bestAdaptiveAudioURL == nil { … }
+    private func shouldSkipAndroidMuxedFallback(_ info: PlayerInfo) -> Bool {
+        info.hlsURL == nil &&
+        info.bestAdaptiveVideoURL == nil &&
+        info.bestAdaptiveAudioURL == nil
+    }
+
+    @Test("NW-3-FIX-ANDROID: muxed-only Android response triggers early-exit guard")
+    func androidMuxedOnlyTriggersEarlyExit() {
+        let info = makeMuxedOnlyPlayerInfo()
+        // Same muxed-only shape applies whether from TV or Android client.
+        #expect(shouldSkipAndroidMuxedFallback(info),
+                "Guard must fire for muxed-only Android response to prevent AVFoundation -11828 non-fatal")
+    }
+
+    @Test("NW-3-FIX-ANDROID: HLS Android response does NOT trigger early-exit guard")
+    func androidHLSResponseDoesNotTriggerEarlyExit() {
+        let info = makeHLSPlayerInfo()
+        #expect(!shouldSkipAndroidMuxedFallback(info),
+                "Guard must not fire when Android returns HLS")
+    }
+
+    @Test("NW-3-FIX-ANDROID: adaptive Android response does NOT trigger early-exit guard")
+    func androidAdaptiveResponseDoesNotTriggerEarlyExit() {
+        let info = makeAdaptivePlayerInfo()
+        #expect(!shouldSkipAndroidMuxedFallback(info),
+                "Guard must not fire when Android returns adaptive streams")
+    }
+
+    @Test("NW-3-FIX-ANDROID: muxed-only response still has a preferredStreamURL (muxed URL)")
+    func androidMuxedOnlyHasPreferredStreamURL() {
+        // Confirms the guard is necessary — preferredStreamURL returns a non-nil muxed URL
+        // even in this case, so without the guard AVPlayer would be tried and fail.
+        let info = makeMuxedOnlyPlayerInfo()
+        #expect(info.preferredStreamURL != nil,
+                "muxed-only response has a preferredStreamURL — guard prevents handing it to AVPlayer")
+        #expect(shouldSkipAndroidMuxedFallback(info),
+                "Guard must fire so we don't pass the muxed URL to AVPlayer")
+    }
 }

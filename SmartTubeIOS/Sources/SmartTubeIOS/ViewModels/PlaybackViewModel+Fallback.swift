@@ -19,6 +19,22 @@ extension PlaybackViewModel {
         do {
             playerLog.notice("Retrying playback with Android client for \(video.id)")
             let fallbackInfo = try await api.fetchPlayerInfoAndroid(videoId: video.id)
+
+            // NW-3-FIX (extended / NW-3-FIX-ANDROID): The Android client sometimes returns a
+            // muxed-only response (itag=18, c=ANDROID) with no HLS manifest and no adaptive
+            // streams. Attempting to play this URL in AVPlayer results in
+            // AVFoundationErrorDomain -11828 / NSOSStatusErrorDomain -12847 — a known
+            // YouTube CDN restriction, not an app bug. Detect this before handing the URL to
+            // AVPlayer so we never record a spurious non-fatal (issues 0edf6a2f / c54e620).
+            // APIError.unavailable is already suppressed from Crashlytics in error.didSet.
+            if fallbackInfo.hlsURL == nil,
+               fallbackInfo.bestAdaptiveVideoURL == nil,
+               fallbackInfo.bestAdaptiveAudioURL == nil {
+                playerLog.error("❌ Android client returned muxed-only (no HLS/adaptive) — cannot play this video")
+                self.error = APIError.unavailable("Unable to play this video")
+                return
+            }
+
             guard let baseFallbackURL = fallbackInfo.preferredStreamURL else {
                 playerLog.error("❌ Fallback player: no stream URL")
                 self.error = originalError
