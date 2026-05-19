@@ -709,8 +709,8 @@ extension PlayerView {
             pipController: $pipController,
             isPiPActive: $isPiPActive,
             isLandscapeLocked: $isLandscapeLocked,
-            showSpeedPicker: $showSpeedPicker,
             showQualityPicker: $showQualityPicker,
+            showSpeedPicker: $showSpeedPicker,
             showAudioTrackPicker: $showAudioTrackPicker,
             showSleepTimerPicker: $showSleepTimerPicker
         )
@@ -733,7 +733,10 @@ extension PlayerView {
             controlScale: controlScale,
             showMoreMenu: $showMoreMenu,
             channelDestination: $channelDestination,
-            vm: vm
+            vm: vm,
+            showSpeedPicker: $showSpeedPicker,
+            showAudioTrackPicker: $showAudioTrackPicker,
+            showSleepTimerPicker: $showSleepTimerPicker
         )
         #endif
     }

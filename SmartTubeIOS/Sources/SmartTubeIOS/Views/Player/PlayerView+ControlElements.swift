@@ -26,14 +26,16 @@ struct PlayerControlsOverlay: View {
     @Binding var pipController: AVPictureInPictureController?
     @Binding var isPiPActive: Bool
     @Binding var isLandscapeLocked: Bool
-    @Binding var showSpeedPicker: Bool
     @Binding var showQualityPicker: Bool
-    @Binding var showAudioTrackPicker: Bool
-    @Binding var showSleepTimerPicker: Bool
     @Environment(PlayerStateStore.self) private var playerState
     var vm: PlaybackViewModel { playerState.vm }
     #else
     let vm: PlaybackViewModel
+    #endif
+    #if !os(tvOS)
+    @Binding var showSpeedPicker: Bool
+    @Binding var showAudioTrackPicker: Bool
+    @Binding var showSleepTimerPicker: Bool
     #endif
     #if os(tvOS)
     @Binding var highlightedControl: PlayerView.TVPlayerControl?
@@ -202,7 +204,7 @@ struct PlayerControlsOverlay: View {
                         .animation(.easeInOut(duration: 0.2), value: chapter.title)
                 }
                 progressBar
-                #if os(iOS)
+                #if !os(tvOS)
                 quickAccessButtonRow
                 #endif
                 HStack {
@@ -663,8 +665,8 @@ extension PlayerView {
     }
 }
 
-#if os(iOS)
-// MARK: - Quick-access row (iOS only)
+#if !os(tvOS)
+// MARK: - Quick-access row (iOS and macOS)
 //
 // Compact pill buttons giving one-tap access to speed, quality, audio track,
 // and sleep-timer pickers without opening the 3-dot more menu.
