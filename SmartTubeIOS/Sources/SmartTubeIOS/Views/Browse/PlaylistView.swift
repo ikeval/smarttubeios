@@ -96,7 +96,7 @@ public struct PlaylistView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(displayVideos) { video in
                         #if os(tvOS)
-                        VideoCardView(video: video, compact: true, onSelect: {
+                        VideoCardView(video: video, compact: true, currentPlaylistId: playlistId, onSelect: {
                                 Task { @MainActor in
                                     let captured = displayVideos
                                     await CurrentQueueStore.shared.replaceAll(with: captured)
@@ -109,7 +109,7 @@ public struct PlaylistView: View {
                             .accessibilityIdentifier("video.card.\(video.id)")
                             .onAppear { vm.loadMoreIfNeeded(lastVideo: video) }
                         #else
-                        VideoCardView(video: video, compact: true)
+                        VideoCardView(video: video, compact: true, currentPlaylistId: playlistId)
                             .padding(.horizontal)
                             .padding(.vertical, 6)
                             .accessibilityIdentifier("video.card.\(video.id)")
@@ -142,7 +142,7 @@ public struct PlaylistView: View {
                         let rowVideos = Array(displayVideos[startIdx..<min(startIdx + columnCount, displayVideos.count)])
                         HStack(alignment: .top, spacing: 12) {
                             ForEach(rowVideos) { video in
-                                VideoCardView(video: video, compact: false, onSelect: {
+                                VideoCardView(video: video, compact: false, currentPlaylistId: playlistId, onSelect: {
                                         Task { @MainActor in
                                             let captured = displayVideos
                                             await CurrentQueueStore.shared.replaceAll(with: captured)
@@ -170,7 +170,7 @@ public struct PlaylistView: View {
                 #else
                 LazyVGrid(columns: videoGridColumns, spacing: videoGridRowSpacing) {
                     ForEach(displayVideos) { video in
-                        VideoCardView(video: video, compact: false)
+                        VideoCardView(video: video, compact: false, currentPlaylistId: playlistId)
                             .accessibilityIdentifier("video.card.\(video.id)")
                             .onTapGesture {
                                 #if os(iOS)

@@ -23,6 +23,10 @@ extension Notification.Name {
 public struct VideoCardView: View {
     public let video: Video
     public var compact: Bool = false
+    /// When set, this is the `playlistId` of the list the user is currently browsing.
+    /// Pass `"WL"` when inside the Watch Later playlist so the context menu shows
+    /// "Remove from Watch Later" instead of "Save to Watch Later".
+    public var currentPlaylistId: String? = nil
     /// Called when the user taps/selects the card on tvOS (via `.onTapGesture`).
     /// iOS call sites continue using their own tap handlers; this is only invoked
     /// from the `#else` (tvOS) modifier block below.
@@ -46,9 +50,10 @@ public struct VideoCardView: View {
         localProgress ?? video.watchProgress
     }
 
-    public init(video: Video, compact: Bool = false, onSelect: (() -> Void)? = nil) {
+    public init(video: Video, compact: Bool = false, currentPlaylistId: String? = nil, onSelect: (() -> Void)? = nil) {
         self.video = video
         self.compact = compact
+        self.currentPlaylistId = currentPlaylistId
         self.onSelect = onSelect
     }
 
@@ -100,23 +105,44 @@ public struct VideoCardView: View {
                 }
             }
             if authService.isSignedIn {
-                Button {
-                    Task {
-                        do {
-                            try await api.addToWatchLater(videoId: video.id)
-                            watchLaterAlert = DownloadAlertItem(
-                                title: String(localized: "Saved to Watch Later", bundle: .module),
-                                message: String(localized: "\"\(video.title)\" was added to your Watch Later playlist.", bundle: .module)
-                            )
-                        } catch {
-                            watchLaterAlert = DownloadAlertItem(
-                                title: String(localized: "Could Not Save", bundle: .module),
-                                message: error.localizedDescription
-                            )
+                if currentPlaylistId == "WL" {
+                    Button(role: .destructive) {
+                        Task {
+                            do {
+                                try await api.removeFromWatchLater(videoId: video.id)
+                                watchLaterAlert = DownloadAlertItem(
+                                    title: String(localized: "Removed from Watch Later", bundle: .module),
+                                    message: String(localized: "\"\(video.title)\" was removed from your Watch Later playlist.", bundle: .module)
+                                )
+                            } catch {
+                                watchLaterAlert = DownloadAlertItem(
+                                    title: String(localized: "Could Not Remove", bundle: .module),
+                                    message: error.localizedDescription
+                                )
+                            }
                         }
+                    } label: {
+                        Label("Remove from Watch Later", systemImage: AppSymbol.watchLater)
                     }
-                } label: {
-                    Label("Save to Watch Later", systemImage: AppSymbol.watchLater)
+                } else {
+                    Button {
+                        Task {
+                            do {
+                                try await api.addToWatchLater(videoId: video.id)
+                                watchLaterAlert = DownloadAlertItem(
+                                    title: String(localized: "Saved to Watch Later", bundle: .module),
+                                    message: String(localized: "\"\(video.title)\" was added to your Watch Later playlist.", bundle: .module)
+                                )
+                            } catch {
+                                watchLaterAlert = DownloadAlertItem(
+                                    title: String(localized: "Could Not Save", bundle: .module),
+                                    message: error.localizedDescription
+                                )
+                            }
+                        }
+                    } label: {
+                        Label("Save to Watch Later", systemImage: AppSymbol.watchLater)
+                    }
                 }
             }
             Button {

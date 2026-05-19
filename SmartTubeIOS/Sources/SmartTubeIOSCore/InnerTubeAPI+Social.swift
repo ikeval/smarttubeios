@@ -45,6 +45,17 @@ extension InnerTubeAPI {
         tubeLog.notice("addToWatchLater videoId=\(videoId, privacy: .public)")
     }
 
+    /// Removes a video from the authenticated user's Watch Later playlist (id \"WL\").
+    /// Mirrors `addToWatchLater` but uses `ACTION_REMOVE_VIDEO` + `removedVideoId`.
+    /// Requires authentication.
+    public func removeFromWatchLater(videoId: String) async throws {
+        var body = makeBody(client: tvClientContext)
+        body["playlistId"] = "WL"
+        body["actions"] = [["removedVideoId": videoId, "action": "ACTION_REMOVE_VIDEO"]]
+        _ = try await postTV(endpoint: "browse/edit_playlist", body: body)
+        tubeLog.notice("removeFromWatchLater videoId=\(videoId, privacy: .public)")
+    }
+
     /// Sends a feed feedback signal to YouTube.
     /// Used for "Not interested", "Don't like this video", and "Don't recommend channel" —
     /// all three actions share this endpoint and differ only in their `feedbackToken`.
