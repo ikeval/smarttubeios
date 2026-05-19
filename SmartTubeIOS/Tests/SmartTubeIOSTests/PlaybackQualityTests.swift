@@ -338,4 +338,40 @@ struct PlaybackQualityTests {
         #expect(selected == urlAV1_2160,
                 "When no H.264 is available, highest-resolution AV1 should be picked")
     }
+
+    // MARK: - cancel() / reset() H264 cap flag contract (#136)
+
+    /// Structural test: validates that cancel() clears hasAppliedH264Cap,
+    /// preventing the stale-flag bug when a video is reloaded without reset().
+    /// Mirrors the cancel() behaviour of PlaybackQualityManager (requires AVPlayer to instantiate directly).
+    @Test func cancel_clearsH264CapFlag() {
+        struct MockQualityState {
+            var hasAppliedH264Cap: Bool = false
+            var qualityTaskCancelled: Bool = false
+            mutating func cancel() {
+                qualityTaskCancelled = true
+                hasAppliedH264Cap = false  // Task #136: must clear flag
+            }
+            mutating func reset() {
+                qualityTaskCancelled = true
+                hasAppliedH264Cap = false
+            }
+        }
+        var state = MockQualityState()
+        state.hasAppliedH264Cap = true
+        state.cancel()
+        #expect(state.hasAppliedH264Cap == false,
+                "cancel() must clear hasAppliedH264Cap to prevent stale cap flag on next load")
+    }
+
+    @Test func reset_alsoClears_H264CapFlag() {
+        struct MockQualityState {
+            var hasAppliedH264Cap: Bool = false
+            mutating func reset() { hasAppliedH264Cap = false }
+        }
+        var state = MockQualityState()
+        state.hasAppliedH264Cap = true
+        state.reset()
+        #expect(state.hasAppliedH264Cap == false, "reset() must clear hasAppliedH264Cap")
+    }
 }

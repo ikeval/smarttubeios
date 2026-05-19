@@ -63,6 +63,7 @@ final class PlaybackQualityManager {
     func cancel() {
         qualityTask?.cancel()
         qualityTask = nil
+        hasAppliedH264Cap = false
     }
 
     /// Switch to a specific quality. Pass `nil` to return to Auto (no resolution cap).
