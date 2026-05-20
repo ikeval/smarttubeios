@@ -144,8 +144,7 @@ extension PlaybackViewModel {
             }
             // Keep the master HLS URL so AVPlayer receives EXT-X-MEDIA alternate audio renditions.
             // Variant playlist URLs strip EXT-X-MEDIA (same reason as primary load path).
-            // Call applyQualityPreference only for its selectedFormat side-effect; discard the URL.
-            _ = applyQualityPreference(to: url)
+            qualityManager.setSelectedFormatForCurrentPreference()
             applyHLSHints = true
         } else {
             playerLog.notice("[\(label)] non-HLS URL — no EXT-X-MEDIA, audio tracks will be unavailable")

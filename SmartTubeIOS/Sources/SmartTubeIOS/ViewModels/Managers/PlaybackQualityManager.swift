@@ -182,6 +182,20 @@ final class PlaybackQualityManager {
         return masterURL
     }
 
+    /// Sets `selectedFormat` to the best available format for the current quality preference,
+    /// without returning a URL. Call this when the master HLS URL is already being used and
+    /// only the `selectedFormat` state needs to reflect the preference (e.g. fallback paths
+    /// that keep the master URL for EXT-X-MEDIA audio rendition reasons).
+    func setSelectedFormatForCurrentPreference() {
+        guard let settings = delegate?.settings,
+              settings.preferredQuality != .auto,
+              let maxH = settings.preferredQuality.maxHeight else {
+            selectedFormat = nil
+            return
+        }
+        selectedFormat = availableFormats.first { $0.height <= maxH }
+    }
+
     /// Fetches the HLS master manifest and returns a map of stream height → variant playlist URL.
     func fetchHLSVariantURLs(url: URL) async -> [Int: URL] {
         var request = URLRequest(url: url)
