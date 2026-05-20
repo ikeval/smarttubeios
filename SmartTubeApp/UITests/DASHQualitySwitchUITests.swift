@@ -50,8 +50,10 @@ final class DASHQualitySwitchUITests: XCTestCase {
 
     // MARK: - Test
 
-    /// Cycles through 720p60 → 480p → 1080p60 on the DASH-only video, verifying via
+    /// Cycles through 720p → 480p → 1080p on the DASH-only video, verifying via
     /// Stats for Nerds that each quality switch produces the correct presentation size.
+    /// The search predicates use height-only prefixes ("720p", "1080p") so they match
+    /// both 30 fps and 60 fps variants ("720p60", "1080p60", etc.).
     /// Screenshots with the Stats overlay are attached for every step.
     func testQualityCycleOnDASHVideo() throws {
 
@@ -80,17 +82,18 @@ final class DASHQualitySwitchUITests: XCTestCase {
         captureState("baseline — resolution: \(baseline)", in: app)
 
         // ── Step 3: Quality cycle ─────────────────────────────────────────────
-        // Each tuple: (pickerLabel, heightSuffix).
+        // Each tuple: (pickerLabelPrefix, heightSuffix).
         // The suffix "×720" matches "1280×720" but not "640×360" etc.
+        // Using height-only prefixes matches both 30 fps ("720p") and 60 fps ("720p60") variants.
         // YouTube H.264 expected widths for this video:
-        //   720p60  → 1280×720    suffix "×720"
-        //   480p    → 854×480     suffix "×480"
-        //   1080p60 → 1920×1080   suffix "×1080"
+        //   720p(60)  → 1280×720    suffix "×720"
+        //   480p      → 854×480     suffix "×480"
+        //   1080p(60) → 1920×1080   suffix "×1080"
         let cross = Self.cross
         let steps: [(quality: String, suffix: String)] = [
-            ("720p60",  "\(cross)720"),
-            ("480p",    "\(cross)480"),
-            ("1080p60", "\(cross)1080"),
+            ("720p",  "\(cross)720"),
+            ("480p",  "\(cross)480"),
+            ("1080p", "\(cross)1080"),
         ]
 
         for (quality, suffix) in steps {
@@ -173,24 +176,21 @@ final class DASHQualitySwitchUITests: XCTestCase {
         }
         qualityBtn.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
-        let picker = app.otherElements["player.qualityPicker"].firstMatch
-        guard picker.waitForExistence(timeout: 5) else {
-            try captureAndSkip("player.qualityPicker did not appear", in: app)
-        }
-
-        // Prefer the picker-scoped static text; fall back to app-wide.
-        var option = picker.staticTexts[qualityLabel].firstMatch
-        if !option.waitForExistence(timeout: 3) {
-            option = app.staticTexts[qualityLabel].firstMatch
-        }
-        guard option.waitForExistence(timeout: 3) else {
-            try captureAndSkip("Quality option '\(qualityLabel)' not found in picker", in: app)
+        // The quality picker VStack is accessibility-transparent — its child buttons
+        // are promoted to the app level in the accessibility tree.
+        // SwiftUI infers each button's label from its `Text(fmt.qualityLabel)` child.
+        let option = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", qualityLabel)
+        ).firstMatch
+        guard option.waitForExistence(timeout: 5) else {
+            try captureAndSkip(
+                "Quality option '\(qualityLabel)' not found — picker may not have opened", in: app)
         }
         option.tap()
 
-        // Confirm the picker dismissed (tap was registered and format was selected).
+        // Confirm the picker dismissed (option disappears once a selection is made).
         let dismissedPred = NSPredicate(format: "exists == false")
-        let dismissExp = XCTNSPredicateExpectation(predicate: dismissedPred, object: picker)
+        let dismissExp = XCTNSPredicateExpectation(predicate: dismissedPred, object: option)
         _ = XCTWaiter().wait(for: [dismissExp], timeout: 5)
     }
 }

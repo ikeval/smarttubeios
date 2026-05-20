@@ -7,6 +7,10 @@ extension PlaybackViewModel {
 
     public func selectFormat(_ format: VideoFormat?) {
         qualityManager.selectFormat(format)
+        // Refresh Stats for Nerds immediately so the overlay shows the new quality
+        // without waiting for the next periodic-observer tick (which may not fire
+        // while the player is loading the replacement item).
+        if statsForNerdsVisible { updateStatsSnapshot() }
     }
 
     func reloadHLSItem(seekTo time: TimeInterval, quality: AppSettings.VideoQuality) async {

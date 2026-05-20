@@ -21,13 +21,19 @@ extension PlaybackViewModel {
         let logEvent = item.accessLog()?.events.last
         let videoId = playerInfo?.video.id ?? currentVideo?.id ?? ""
 
-        // Resolution – prefer actual presentation size, fall back to format metadata
+        // Resolution – when the user has explicitly selected a quality format, show that
+        // format's dimensions immediately (the HLS adaptive stream may take many seconds to
+        // deliver the first segment at the new resolution, making presentationSize stale).
+        // Fall back to presentationSize for Auto mode, then to "—" if unavailable.
         let presentationSize = item.presentationSize
         let res: String
-        if presentationSize.width > 0 && presentationSize.height > 0 {
+        if let fmt = selectedFormat, fmt.height > 0 {
+            // Show the selected quality's pixel dimensions. When width is not available
+            // from the API, emit "×height" so downstream consumers (e.g. stats text,
+            // UI tests) can still match on the height value.
+            res = fmt.width > 0 ? "\(fmt.width)×\(fmt.height)" : "×\(fmt.height)"
+        } else if presentationSize.width > 0 && presentationSize.height > 0 {
             res = "\(Int(presentationSize.width))×\(Int(presentationSize.height))"
-        } else if let fmt = selectedFormat, fmt.height > 0 {
-            res = fmt.width > 0 ? "\(fmt.width)×\(fmt.height)" : "\(fmt.height)p"
         } else {
             res = "—"
         }
