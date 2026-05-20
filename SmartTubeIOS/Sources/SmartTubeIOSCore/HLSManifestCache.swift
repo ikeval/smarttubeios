@@ -10,7 +10,7 @@ import Foundation
 /// is cleared on `reset()`). This eliminates the ~8 s manifest fetch when a user
 /// revisits a video during the same app session.
 ///
-/// - TTL: 5 minutes — conservative to avoid serving stale CDN token URLs.
+/// - TTL: 30 minutes — YouTube CDN tokens typically live hours; `invalidate(for:)` handles 403s on retry.
 /// - Capacity: 30 entries — matches `VideoPreloadCache` LRU limit; eviction is
 ///   oldest-first by `fetchedAt` date.
 public struct HLSManifestCache {
@@ -23,7 +23,7 @@ public struct HLSManifestCache {
 
     // MARK: - Configuration
 
-    public static let ttl: TimeInterval = 5 * 60
+    public static let ttl: TimeInterval = 30 * 60
     public static let maxEntries = 30
 
     // MARK: - Storage
