@@ -205,6 +205,7 @@
 		C3E4F5A6B7C8D9E0F1A2B3C4 /* SubscriptionsPlaybackUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionsPlaybackUITests.swift; sourceTree = "<group>"; };
 		C5D9E4F5A6B7C8D9E0F1A2B3 /* HomeFeedAndSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedAndSettingsUITests.swift; sourceTree = "<group>"; };
 		CA34C2AD8A70726C11C5F851 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		CA34C2AD8A70726C11C5F852 /* Info-macOS.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		D5E6F7A8B9C0D1E2F3A4B5C6 /* SubscriptionsScrollRestorationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionsScrollRestorationUITests.swift; sourceTree = "<group>"; };
 		DA3810E40296738F4C5E0B95 /* SmartTubeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SmartTubeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E2F3A4B5C6D7E8F9A0B1C2D3 /* HomeShortsRowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeShortsRowUITests.swift; sourceTree = "<group>"; };
@@ -372,6 +373,7 @@
 				AA01000000000000000000C1 /* SmartTubeApp.entitlements */,
 				FA01000000000000000000A1 /* GoogleService-Info.plist */,
 				AA01000000000000000000D1 /* PrivacyInfo.xcprivacy */,
+				CA34C2AD8A70726C11C5F852 /* Info-macOS.plist */,
 			);
 			path = SmartTubeApp;
 			sourceTree = "<group>";
@@ -903,6 +905,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = SmartTubeApp/Info.plist;
+				"INFOPLIST_FILE[sdk=macosx*]" = SmartTubeApp/Info-macOS.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Smart Tube";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -1379,6 +1382,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = SmartTubeApp/Info.plist;
+				"INFOPLIST_FILE[sdk=macosx*]" = SmartTubeApp/Info-macOS.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Smart Tube";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
