@@ -113,7 +113,18 @@ final class PlaybackQualityManager {
         qualityTask = nil
         guard let delegate else { return }
         let savedTime = delegate.currentTime
-        let quality = format.flatMap { AppSettings.VideoQuality.from(height: $0.height) } ?? .auto
+        let quality: AppSettings.VideoQuality
+        if let fmt = format {
+            if let q = AppSettings.VideoQuality.from(height: fmt.height) {
+                quality = q
+            } else {
+                playerLog.error("selectFormat: non-standard height \(fmt.height)p — no matching VideoQuality; falling back to .auto")
+                assertionFailure("selectFormat received format with non-standard height \(fmt.height) not in VideoQuality enum")
+                quality = .auto
+            }
+        } else {
+            quality = .auto
+        }
         qualityTask = Task { [weak self] in
             await self?.reloadHLSItem(seekTo: savedTime, quality: quality)
         }

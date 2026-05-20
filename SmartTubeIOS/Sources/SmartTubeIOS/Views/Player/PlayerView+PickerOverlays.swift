@@ -69,7 +69,13 @@ extension PlayerView {
                         ForEach(vm.availableFormats) { fmt in
                             Button {
                                 vm.selectFormat(fmt)
-                                store.settings.preferredQuality = AppSettings.VideoQuality.from(height: fmt.height) ?? .auto
+                                if let q = AppSettings.VideoQuality.from(height: fmt.height) {
+                                    store.settings.preferredQuality = q
+                                } else {
+                                    pickerLog.error("Quality picker: non-standard height \(fmt.height)p — falling back to .auto")
+                                    assertionFailure("Quality picker tapped for format with non-standard height \(fmt.height)")
+                                    store.settings.preferredQuality = .auto
+                                }
                                 showQualityPicker = false
                             } label: {
                                 HStack {

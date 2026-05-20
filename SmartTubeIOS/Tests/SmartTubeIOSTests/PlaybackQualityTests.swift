@@ -214,6 +214,20 @@ struct PlaybackQualityTests {
         #expect(selected?.height == 1080, "Should fall to 1080p — best available when 2160p is not in HLS manifest")
     }
 
+    /// Task #161: VideoQuality.from(height:) returns nil for non-standard heights so that
+    /// selectFormat and the quality picker can detect and log/assert the unexpected case.
+    @Test func videoQuality_fromHeight_returnsNilForNonStandardHeight() {
+        // Standard heights must resolve correctly
+        #expect(AppSettings.VideoQuality.from(height: 1080) == .q1080)
+        #expect(AppSettings.VideoQuality.from(height: 720)  == .q720)
+        #expect(AppSettings.VideoQuality.from(height: 144)  == .q144)
+        // Non-standard heights must return nil so call sites can log/assert
+        #expect(AppSettings.VideoQuality.from(height: 1088) == nil, "1088p is non-standard — must return nil, not silently map to a quality")
+        #expect(AppSettings.VideoQuality.from(height: 540)  == nil, "540p is non-standard — must return nil")
+        #expect(AppSettings.VideoQuality.from(height: 0)    == nil, "0 is non-standard — must return nil")
+    }
+
+
     @Test func qualityHint_notAppliedForDirectMP4_guardConditionEvaluatesToFalse() {
         // The guard: `preferredQuality != .auto && maxH != nil && info.hlsURL != nil`
         // When hlsURL is nil (direct MP4 asset), the hint must NOT be applied.
