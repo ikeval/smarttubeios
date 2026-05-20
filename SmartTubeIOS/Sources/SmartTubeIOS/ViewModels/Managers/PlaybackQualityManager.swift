@@ -26,7 +26,6 @@ protocol QualityContext: AnyObject {
     var currentVideo: Video? { get }
     var currentTime: TimeInterval { get }
     var toastMessage: String? { get set }
-    var isSwappingItem: Bool { get set }
 }
 
 // MARK: - QualityEventHandler
@@ -43,6 +42,9 @@ protocol QualityEventHandler: AnyObject {
     /// The coordinator uses `qualityRecoveryAction(for:qualityCap:hasAppliedH264Cap:)` to
     /// dispatch the appropriate recovery path.
     func qualityItemDidFail(error: Error?, qualityCap: Int?, hasAppliedH264Cap: Bool) async
+    /// Written by `reloadHLSItem` around `player.replaceCurrentItem` to suppress
+    /// rate-observer false positives during the item swap.
+    var isSwappingItem: Bool { get set }
 }
 
 /// Combined alias used by `PlaybackQualityManager.delegate`.
