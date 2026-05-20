@@ -394,6 +394,7 @@ extension PlaybackViewModel: QualityEventHandler {
             if let video = currentVideo {
                 playerLog.notice("Quality-switch 403 — invalidating cache and re-fetching player info")
                 await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
+                HLSManifestCache.shared.invalidate(for: video.id)
                 qualityManager.selectedFormat = nil
                 await retryWith403Recovery(video: video, originalError: error)
             }

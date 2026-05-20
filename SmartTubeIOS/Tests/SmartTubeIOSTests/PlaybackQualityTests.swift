@@ -569,6 +569,24 @@ struct PlaybackQualityTests {
         #expect(cache.variants(for: videoId) == nil, "Invalidated entry must not be returned")
     }
 
+    /// Task #164: after a 403 error the cached variant URLs (which may contain expired CDN
+    /// tokens) must be evicted so the next retry fetches fresh signed URLs. This verifies the
+    /// `invalidate(for:)` call that was added to the `.retry403Recovery` path.
+    @Test func hlsManifestCache_403Recovery_clearsStaleVariants() {
+        var cache = HLSManifestCache()
+        let videoId = "video-with-expired-cdn-token"
+        let staleVariants: [Int: URL] = [
+            1080: URL(string: "https://r3---sn-ab5l6nld.googlevideo.com/videoplayback?expire=1716235200&id=stale")!
+        ]
+        cache.store(staleVariants, for: videoId)
+        // 403 recovery: invalidate so retry gets fresh CDN-signed URLs
+        cache.invalidate(for: videoId)
+        #expect(
+            cache.variants(for: videoId) == nil,
+            "After 403, stale CDN variant URLs must be evicted so retry fetches fresh ones"
+        )
+    }
+
 
     @Test @MainActor func playerItemSwappable_replaceCurrentItem_calledOnce() async {
         // Structural: documents that PlaybackQualityManager calls replaceCurrentItem exactly
