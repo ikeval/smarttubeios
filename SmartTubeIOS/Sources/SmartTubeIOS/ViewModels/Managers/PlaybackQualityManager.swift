@@ -215,6 +215,10 @@ final class PlaybackQualityManager {
         let candidates = formats.filter { $0.url != nil && $0.height > 0 }
         var seen = Set<String>()
         var result: [VideoFormat] = []
+        // Sort: height desc → fps desc → mp4 first → bitrate desc.
+        // Codec preference (H.264 first) is intentionally absent here — this list feeds the
+        // quality picker which should show all height options, not pre-filter by codec.
+        // (Compare: selectBestVideoFormat applies H.264 preference for a single best-pick.)
         for fmt in candidates.sorted(by: {
             if $0.height != $1.height { return $0.height > $1.height }
             if $0.fps != $1.fps { return $0.fps > $1.fps }
