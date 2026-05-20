@@ -91,6 +91,7 @@ extension PlaybackViewModel {
             observedBitrate: observedBitrate,
             droppedFrames: droppedFrames,
             stalls: stalls,
+            pendingQualityLabel: qualityManager.pendingQualityLabel,
             reportID: CrashlyticsLogger.sessionReportID
         )
     }
@@ -131,6 +132,9 @@ public struct StatsForNerdsSnapshot: Sendable {
     public var observedBitrate: String
     public var droppedFrames: Int
     public var stalls: Int
+    /// Quality label most recently selected by the user — persists after CDN failures
+    /// so Stats for Nerds can show user intent vs actual delivery.
+    public var pendingQualityLabel: String
     /// Session report ID — matches the `report_id` custom key stamped on Crashlytics
     /// reports. Quote this when sending a diagnostic report so the developer can
     /// locate the exact session in Firebase.
@@ -145,6 +149,7 @@ public struct StatsForNerdsSnapshot: Sendable {
         observedBitrate: "",
         droppedFrames: 0,
         stalls: 0,
+        pendingQualityLabel: "",
         reportID: CrashlyticsLogger.sessionReportID
     )
 }

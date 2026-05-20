@@ -69,6 +69,12 @@ final class PlaybackQualityManager {
     // MARK: - State
 
     var selectedFormat: VideoFormat? = nil
+    /// The quality label most recently chosen by the user (e.g. "720p60").
+    /// Unlike `selectedFormat`, this is NOT cleared when a CDN/composition failure
+    /// reverts `selectedFormat` to nil. It reflects user *intent*, used by the
+    /// Stats for Nerds "Selected" row and by UI tests that verify selectFormat was called.
+    /// Cleared only when the user picks Auto or a new video loads.
+    var pendingQualityLabel: String = ""
     var availableFormats: [VideoFormat] = []
     var hlsVariantURLs: [Int: URL] = [:]
     var hasAppliedH264Cap: Bool = false
@@ -105,6 +111,7 @@ final class PlaybackQualityManager {
 
     func reset() {
         selectedFormat = nil
+        pendingQualityLabel = ""
         availableFormats = []
         hlsVariantURLs = [:]
         hasAppliedH264Cap = false
@@ -128,6 +135,7 @@ final class PlaybackQualityManager {
         let newLabel = format.map { "\($0.height)p" } ?? "Auto"
         playerLog.notice("[quality] selectFormat: \(previousLabel) → \(newLabel)")
         selectedFormat = format
+        pendingQualityLabel = format?.qualityLabel ?? ""
         delegate?.toastMessage = format.map { "\($0.height)p" } ?? "Auto"
         qualityTask?.cancel()
         qualityTask = nil

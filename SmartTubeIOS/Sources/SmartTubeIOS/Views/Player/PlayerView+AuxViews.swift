@@ -17,6 +17,10 @@ struct StatsForNerdsOverlay: View {
             row("Resolution",       snapshot.fps > 0
                     ? "\(snapshot.displayResolution) @ \(snapshot.fps) fps"
                     : snapshot.displayResolution)
+            if !snapshot.pendingQualityLabel.isEmpty {
+                identifiedRow("Selected", snapshot.pendingQualityLabel,
+                              valueId: "stats.selectedQuality")
+            }
             row("Codec",            snapshot.codec)
             row("Nominal Bitrate",  snapshot.nominalBitrate)
             row("Connection Speed", snapshot.observedBitrate)
@@ -45,6 +49,20 @@ struct StatsForNerdsOverlay: View {
                 .frame(minWidth: 130, alignment: .leading)
             Text(value.isEmpty ? "—" : value)
                 .foregroundStyle(.white)
+        }
+        .font(.system(.caption, design: .monospaced))
+    }
+
+    /// Like `row` but applies an accessibility identifier to the value text,
+    /// allowing XCUITest to locate it directly by identifier.
+    private func identifiedRow(_ key: String, _ value: String, valueId: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(key)
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(minWidth: 130, alignment: .leading)
+            Text(value.isEmpty ? "—" : value)
+                .foregroundStyle(.white)
+                .accessibilityIdentifier(valueId)
         }
         .font(.system(.caption, design: .monospaced))
     }
