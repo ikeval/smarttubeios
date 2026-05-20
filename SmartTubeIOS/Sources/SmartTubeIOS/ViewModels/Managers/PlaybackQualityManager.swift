@@ -150,23 +150,22 @@ final class PlaybackQualityManager {
         let uaOpts: [String: Any] = [
             "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": InnerTubeClients.iOS.userAgent]
         ]
-        let cap = quality.maxHeight
-        let streamURL: URL
-        if let cap, let variantURL = hlsVariantURLs[cap] {
-            streamURL = variantURL
-            playerLog.notice("Quality → \(cap)p via direct variant playlist")
-        } else {
-            streamURL = hlsURL
-            playerLog.notice("Quality → \(cap.map { "\($0)p" } ?? "Auto") via HLS master (reloaded)")
-        }
+        // Always use the master HLS URL so EXT-X-MEDIA alternate audio renditions are
+        // preserved after a quality switch. YouTube variant playlists at 480p+ are
+        // video-only and have no EXT-X-MEDIA groups → silent audio when used directly.
+        // Quality preference is applied as ABR hints (preferredMaximumResolution +
+        // preferredPeakBitRate), which strongly guide AVPlayer without replacing the item.
         itemObserverTask?.cancel()
-        let asset = AVURLAsset(url: streamURL, options: uaOpts)
+        let asset = AVURLAsset(url: hlsURL, options: uaOpts)
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .spectral
-        if let cap, hlsVariantURLs[cap] == nil {
+        if let cap = quality.maxHeight {
             let h = CGFloat(cap)
             item.preferredMaximumResolution = CGSize(width: h * 4, height: h)
             item.preferredPeakBitRate = peakBitRate(for: cap)
+            playerLog.notice("Quality → \(cap)p via HLS master + ABR hints")
+        } else {
+            playerLog.notice("Quality → Auto via HLS master")
         }
         itemObserverTask = Task { [weak self] in
             for await status in item.statusStream {

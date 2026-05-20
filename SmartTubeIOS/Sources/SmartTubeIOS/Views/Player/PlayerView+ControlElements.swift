@@ -684,10 +684,9 @@ extension PlayerControlsOverlay {
             if !vm.availableFormats.isEmpty && !vm.isAudioOnlyMode {
                 quickAccessButton(
                     systemImage: "4k.tv",
-                    label: "Auto",
+                    label: qualityLabel,
                     accessibilityId: "player.quickAccess.quality"
-                ) { }
-                .disabled(true)
+                ) { showQualityPicker = true }
             }
 
             if vm.availableAudioTracks.count > 1 {

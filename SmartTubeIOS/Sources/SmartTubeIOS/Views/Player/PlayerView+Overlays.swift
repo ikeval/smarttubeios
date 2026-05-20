@@ -359,11 +359,15 @@ extension PlayerView {
 
     @ViewBuilder private var moreMenuQualityRow: some View {
         if !vm.availableFormats.isEmpty && !vm.isAudioOnlyMode {
-            Button { } label: {
+            Button {
+                menuLog.notice("[moreMenu] Quality row tapped — closing moreMenu, opening qualityPicker")
+                showMoreMenu = false
+                showQualityPicker = true
+            } label: {
                 HStack {
                     Label("Quality", systemImage: "4k.tv")
                     Spacer()
-                    Text("Auto")
+                    Text(vm.selectedFormat?.qualityLabel ?? "Auto")
                         .foregroundStyle(.secondary)
                 }
                 .padding()
@@ -371,7 +375,6 @@ extension PlayerView {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.primary)
-            // Action is intentionally empty — quality picker not yet enabled on tvOS.
             .accessibilityIdentifier("player.moreMenu.qualityRow")
             #if os(tvOS)
             .background(moreMenuFocusedRow == .quality ? Color.gray.opacity(0.35) : Color.clear)
