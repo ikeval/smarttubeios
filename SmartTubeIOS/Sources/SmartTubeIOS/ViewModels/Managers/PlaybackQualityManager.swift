@@ -41,7 +41,11 @@ protocol QualityEventHandler: AnyObject {
     /// Called when a quality-switch `AVPlayerItem` enters `.failed` with the full error context.
     /// The coordinator uses `qualityRecoveryAction(for:qualityCap:hasAppliedH264Cap:)` to
     /// dispatch the appropriate recovery path.
-    func qualityItemDidFail(error: Error?, qualityCap: Int?, hasAppliedH264Cap: Bool) async
+    func qualityItemDidFail(
+        error: Error?,
+        qualityCap: Int?,
+        hasAppliedH264Cap: Bool  // snapshot: avoid race with qualityManager.hasAppliedH264Cap
+    ) async
     /// Written by `reloadHLSItem` around `player.replaceCurrentItem` to suppress
     /// rate-observer false positives during the item swap.
     var isSwappingItem: Bool { get set }
