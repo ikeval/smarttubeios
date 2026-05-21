@@ -57,31 +57,133 @@ extension InnerTubeAPI {
         body["racyCheckOk"] = true
         body["contentCheckOk"] = true
         let data = try await postAndroid(endpoint: "player", body: body)
-        return try parsePlayerInfo(from: data, videoId: videoId)
+        var info = try parsePlayerInfo(from: data, videoId: videoId)
+        // Apply pot to CDN URLs if a valid token is cached for this video.
+        // PO tokens are not client-specific — a token fetched for the iOS client
+        // is valid for Android-signed CDN URLs (rqh=1) as well.
+        if let pot = poToken, poTokenVideoId == videoId {
+            info = info.applyingPoToken(pot)
+        }
+        return info
     }
 
     /// Fetches player info using the Android VR (Oculus) client.
-    /// Used as a fallback in audio-only mode when the iOS client audio URL is inaccessible.
+    /// Uses the correct Android VR transport (nameID=28, Oculus UA on googleapis.com)
+    /// so YouTube identifies the request as an Oculus Quest client — not a Web client.
     /// Per yt-dlp (May 2026), this client does not require a PO token for adaptive audio.
     public func fetchPlayerInfoAndroidVR(videoId: String) async throws -> PlayerInfo {
         var body = makeBody(client: androidVRClientContext)
         body["videoId"] = videoId
         body["racyCheckOk"] = true
         body["contentCheckOk"] = true
-        let data = try await post(endpoint: "player", body: body)
+        let data = try await postAndroidVR(body: body)
         return try parsePlayerInfo(from: data, videoId: videoId)
+    }
+
+    /// Fetches player info using the TVHTML5_SIMPLY_EMBEDDED_PLAYER client.
+    /// This embedded-player client returns an HLS manifest for most videos without
+    /// requiring a PO token — used in `exhaustiveRetry` to obtain a working HLS URL
+    /// when iOS/Android adaptive CDN URLs have `rqh=1` enforcement active.
+    public func fetchPlayerInfoTVEmbedded(videoId: String) async throws -> PlayerInfo {
+        var body = makeBody(client: tvEmbeddedClientContext)
+        body["videoId"] = videoId
+        body["racyCheckOk"] = true
+        body["contentCheckOk"] = true
+        // Embed context — mirrors yt-dlp's tv_embedded player request.
+        var comps = URLComponents(string: "https://www.youtube.com/watch")!
+        comps.queryItems = [URLQueryItem(name: "v", value: videoId)]
+        let referer = comps.url?.absoluteString ?? "https://www.youtube.com"
+        body["playbackContext"] = [
+            "contentPlaybackContext": [
+                "referer": referer,
+                "html5Preference": "HTML5_PREF_WANTS",
+            ]
+        ]
+        let data = try await postTVEmbedded(body: body)
+        return try parsePlayerInfo(from: data, videoId: videoId)
+    }
+
+    /// Fetches player info using the WEB_CREATOR (YouTube Studio) client.
+    /// Per yt-dlp documentation, this client is exempt from rqh=1 CDN enforcement on
+    /// adaptive streams — the returned video/audio URLs do NOT require a pot= token.
+    /// Used in `exhaustiveRetry` as a fallback before the muxed-only phase.
+    public func fetchPlayerInfoWebCreator(videoId: String) async throws -> PlayerInfo {
+        var body = makeBody(client: webCreatorClientContext)
+        body["videoId"] = videoId
+        body["racyCheckOk"] = true
+        body["contentCheckOk"] = true
+        let data = try await postWebCreator(body: body)
+        return try parsePlayerInfo(from: data, videoId: videoId)
+    }
+
+    /// Fetches player info using the authenticated iOS client.
+    /// The unauthenticated iOS player request omits `streamingData` for some videos
+    /// (e.g. embed-disabled or account-restricted content). Adding a Bearer auth token
+    /// may cause YouTube to return an HLS manifest and adaptive streams without `rqh=1`.
+    /// Falls back to `fetchPlayerInfo` (unauthenticated) when no auth token is stored.
+    public func fetchPlayerInfoiOSAuthenticated(videoId: String) async throws -> PlayerInfo {
+        var body = makeBody(client: iosClientContext, includePoToken: true)
+        body["videoId"] = videoId
+        body["racyCheckOk"] = true
+        body["contentCheckOk"] = true
+        let data = try await postPlayerAuthenticated(body: body)
+        var info = try parsePlayerInfo(from: data, videoId: videoId)
+        if let pot = poToken, poTokenVideoId == videoId {
+            info = info.applyingPoToken(pot)
+        }
+        return info
     }
 
     /// Fetches player info using the authenticated TV client.
     /// Used as a fallback when the anonymous Web client returns UNPLAYABLE —
     /// membership-only, age-restricted, or subscription-paywalled videos require auth.
+    /// Includes `html5Preference: HTML5_PREF_WANTS` and `signatureTimestamp` so YouTube
+    /// returns `streamingData` (including an `hlsManifestUrl`) rather than the
+    /// "The page needs to be reloaded" rejection that occurs without the STS value.
+    /// Also injects `visitorData` into the client context so personalized auth resolves.
     public func fetchPlayerInfoAuthenticated(videoId: String) async throws -> PlayerInfo {
-        var body = makeBody(client: tvClientContext)
-        body["videoId"] = videoId
-        body["racyCheckOk"] = true
-        body["contentCheckOk"] = true
-        let data = try await postTV(endpoint: "player", body: body)
-        return try parsePlayerInfo(from: data, videoId: videoId)
+        // Build a TV client context that includes visitorData when available.
+        // YouTube's TV auth endpoint needs visitorData inside context.client to correctly
+        // identify the session; without it, sign-in-required or region-gated videos return
+        // UNPLAYABLE even when the Bearer token is valid.
+        var clientFields = (tvClientContext["client"] as? [String: Any]) ?? [:]
+        let hadVisitorData = visitorData != nil
+        if let vd = visitorData { clientFields["visitorData"] = vd }
+
+        // signatureTimestamp (STS) validates the player JS version on YouTube's backend.
+        // Without it, TV auth player requests return "The page needs to be reloaded" for
+        // sign-in-required or age-restricted content even with a valid Bearer token.
+        let sts = await fetchSignatureTimestampIfNeeded()
+        var cpbc: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
+        if let sts { cpbc["signatureTimestamp"] = sts }
+
+        func buildBody(fields: [String: Any]) -> [String: Any] {
+            var body = makeBody(client: ["client": fields])
+            body["videoId"] = videoId
+            body["racyCheckOk"] = true
+            body["contentCheckOk"] = true
+            body["playbackContext"] = ["contentPlaybackContext": cpbc]
+            return body
+        }
+
+        let firstData = try await postTV(endpoint: "player", body: buildBody(fields: clientFields))
+
+        // TV auth responses always contain responseContext.visitorData, even when unplayable.
+        // On the very first call visitorData is nil, which causes YouTube to return no
+        // streamingData. Extract and cache it here, then immediately retry so the quality
+        // switch succeeds without waiting 60+ s for background browse calls to populate it.
+        if !hadVisitorData,
+           let rc = firstData["responseContext"] as? [String: Any],
+           let newVD = rc["visitorData"] as? String, !newVD.isEmpty {
+            tubeLog.notice("TVAuth: seeded visitorData from player response — retrying")
+            visitorData = newVD
+            var retryFields = (tvClientContext["client"] as? [String: Any]) ?? [:]
+            retryFields["visitorData"] = newVD
+            let retryData = try await postTV(endpoint: "player", body: buildBody(fields: retryFields))
+            return try parsePlayerInfo(from: retryData, videoId: videoId)
+        }
+
+        return try parsePlayerInfo(from: firstData, videoId: videoId)
     }
 
     /// Fetches end-screen cards for a video using the Web client.

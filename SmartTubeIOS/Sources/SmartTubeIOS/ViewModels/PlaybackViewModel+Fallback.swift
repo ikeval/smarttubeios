@@ -12,9 +12,19 @@ extension PlaybackViewModel {
 
     /// Main retry entry point. Called whenever the primary iOS stream fails.
     ///
-    /// Strategy: exhaust all stream formats (HLS → adaptive composition → muxed direct) from
-    /// both iOS and Android clients before giving up; repeat the full cycle up to 3 times to
-    /// survive transient network errors and stale cache entries (the hls=false root cause).
+    /// Strategy:
+    ///   Phase 0 — Authenticated TV client: when logged in, the TV client with
+    ///             `html5Preference: HTML5_PREF_WANTS` returns `streamingData` including
+    ///             an `hlsManifestUrl`. Authenticated HLS URLs bypass rqh=1 CDN enforcement
+    ///             and enable quality switching via AVPlayer ABR. Skipped if not logged in.
+    ///   Phase 1 — TV embedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER): returns HLS for most
+    ///             embeddable videos without pot/rqh=1 restriction.
+    ///   Phase 2 — try HLS + adaptive from iOS and Android clients in order.
+    ///   Phase 3 — Android VR (Oculus Quest client, nameID=28): per yt-dlp research, this
+    ///             client is exempt from the PO-token / rqh=1 requirement on adaptive streams.
+    ///             Correct VR headers (nameID=28, Oculus UA on googleapis.com) are required.
+    ///   Phase 4 — if all adaptive attempts fail, fall back to the Android muxed 360p stream.
+    ///   The entire cycle repeats up to 3 times to survive transient network errors.
     func exhaustiveRetry(video: Video, originalError: Error?) async {
         for attempt in 1...3 {
             guard !Task.isCancelled else { return }
@@ -24,11 +34,50 @@ extension PlaybackViewModel {
             // Evict the stale cache entry so each attempt gets fresh signed URLs.
             await VideoPreloadCache.shared.invalidatePlayerInfo(for: video.id)
 
+            // --- Phase 0: Authenticated TV client (logged-in users only) ---
+            // With `html5Preference: HTML5_PREF_WANTS` the TV client returns streamingData
+            // including an HLS manifest URL. Authenticated HLS manifests do not have rqh=1
+            // on their segment/variant URLs, so quality switching works via AVPlayer ABR.
+            // Skip when no auth token is present (unauthenticated flow continues to Phase 1).
+            if hasAuthToken {
+                do {
+                    let tvAuthInfo = try await api.fetchPlayerInfoAuthenticated(videoId: video.id)
+                    if await tryAllStreams(video: video, info: tvAuthInfo,
+                                          label: "TVAuth[\(attempt)]", skipMuxed: true) {
+                        return
+                    }
+                } catch {
+                    playerLog.error("TV auth client fetch failed (attempt \(attempt)): \(error)")
+                }
+                guard !Task.isCancelled else { return }
+            }
+
+            // --- Phase 1: TV Embedded client ---
+            // TVHTML5_SIMPLY_EMBEDDED_PLAYER (client ID 85) returns an HLS manifest
+            // for most embeddable videos. HLS streams bypass the rqh=1/pot CDN enforcement
+            // that causes HTTP 403 on adaptive streams. If HLS loads, quality switching
+            // works via AVPlayer ABR (preferredMaximumResolution) — no composition needed.
+            // Videos with embedding disabled will fail this phase and continue to Phase 2.
+            do {
+                let tvEmbedInfo = try await api.fetchPlayerInfoTVEmbedded(videoId: video.id)
+                if await tryAllStreams(video: video, info: tvEmbedInfo,
+                                      label: "TVEmbedded[\(attempt)]", skipMuxed: true) {
+                    return
+                }
+            } catch {
+                playerLog.error("TV embedded client fetch failed (attempt \(attempt)): \(error)")
+            }
+
+            guard !Task.isCancelled else { return }
+
             // --- iOS client (fresh network fetch) ---
+            // Tries HLS + adaptive only (iOS rarely has muxed; muxed fallback happens below).
+            var androidInfoForMuxed: PlayerInfo? = nil
             do {
                 let iosInfo = try await api.fetchPlayerInfo(videoId: video.id)
                 await VideoPreloadCache.shared.store(playerInfo: iosInfo, for: video.id)
-                if await tryAllStreams(video: video, info: iosInfo, label: "iOS[\(attempt)]") {
+                if await tryAllStreams(video: video, info: iosInfo, label: "iOS[\(attempt)]",
+                                      skipMuxed: true) {
                     return
                 }
             } catch {
@@ -42,10 +91,12 @@ extension PlaybackViewModel {
 
             guard !Task.isCancelled else { return }
 
-            // --- Android client ---
+            // --- Android client (HLS + adaptive only; muxed reserved for phase 3) ---
             do {
                 let androidInfo = try await api.fetchPlayerInfoAndroid(videoId: video.id)
-                if await tryAllStreams(video: video, info: androidInfo, label: "Android[\(attempt)]") {
+                androidInfoForMuxed = androidInfo  // save for muxed fallback below
+                if await tryAllStreams(video: video, info: androidInfo,
+                                      label: "Android[\(attempt)]", skipMuxed: true) {
                     return
                 }
             } catch {
@@ -55,6 +106,52 @@ extension PlaybackViewModel {
                     return
                 }
                 playerLog.error("Android client fetch failed (attempt \(attempt)): \(error)")
+            }
+
+            guard !Task.isCancelled else { return }
+
+            // --- Android VR client (adaptive only, no PO token required) ---
+            // The Oculus Quest client (ANDROID_VR, nameID=28) is exempt from the
+            // rqh=1 / pot enforcement that YouTube applies to standard Android and iOS
+            // adaptive streams. Correct VR headers (nameID=28, Oculus UA on googleapis.com)
+            // are required — sending Web client headers causes bot-detection.
+            do {
+                let vrInfo = try await api.fetchPlayerInfoAndroidVR(videoId: video.id)
+                if await tryAllStreams(video: video, info: vrInfo,
+                                      label: "AndroidVR[\(attempt)]", skipMuxed: true) {
+                    return
+                }
+            } catch {
+                playerLog.error("Android VR client fetch failed (attempt \(attempt)): \(error)")
+            }
+
+            guard !Task.isCancelled else { return }
+
+            // --- WEB_CREATOR client (adaptive, rqh=1 exempt per yt-dlp docs) ---
+            // The YouTube Studio client (WEB_CREATOR, nameID=62) is documented by yt-dlp
+            // as not requiring a Proof-of-Origin (POT) token for adaptive streams — its
+            // CDN URLs should not carry rqh=1. If this client's adaptive streams load,
+            // quality switching via AVMutableComposition works without 403 errors.
+            do {
+                let wcInfo = try await api.fetchPlayerInfoWebCreator(videoId: video.id)
+                if await tryAllStreams(video: video, info: wcInfo,
+                                      label: "WebCreator[\(attempt)]", skipMuxed: true) {
+                    return
+                }
+            } catch {
+                playerLog.error("WebCreator client fetch failed (attempt \(attempt)): \(error)")
+            }
+
+            guard !Task.isCancelled else { return }
+
+            // --- Phase 2: muxed direct MP4 (360p last resort) ---
+            // Only reached when ALL adaptive attempts above failed.
+            if let androidInfo = androidInfoForMuxed, androidInfo.bestMuxedDownloadURL != nil {
+                playerLog.notice("[Android[\(attempt)]] All adaptive failed — trying muxed fallback")
+                if await tryAllStreams(video: video, info: androidInfo,
+                                      label: "Android[\(attempt)]/muxed") {
+                    return
+                }
             }
         }
 
@@ -73,14 +170,18 @@ extension PlaybackViewModel {
 
     // MARK: - Stream Exhaustion
 
-    /// Tries HLS → adaptive composition → muxed direct from one PlayerInfo.
+    /// Tries HLS → adaptive composition → (optionally) muxed direct from one PlayerInfo.
     /// Returns true if any stream starts playing successfully.
-    private func tryAllStreams(video: Video, info: PlayerInfo, label: String) async -> Bool {
+    /// - Parameter skipMuxed: When `true`, the muxed direct-MP4 fallback is skipped so that
+    ///   the caller can try higher-priority clients (e.g. Android VR adaptive) before
+    ///   accepting the 360p muxed last-resort. Defaults to `false`.
+    private func tryAllStreams(video: Video, info: PlayerInfo, label: String,
+                               skipMuxed: Bool = false) async -> Bool {
         let hasHLS = info.hlsURL != nil
         let hasAdaptiveVideo = qualityCapVideoURL(from: info.formats) != nil
         let hasAdaptiveAudio = info.bestAdaptiveAudioURL != nil
         let hasMuxed = info.bestMuxedDownloadURL != nil
-        playerLog.notice("[\(label)] streams available: HLS=\(hasHLS) adaptiveVideo=\(hasAdaptiveVideo) adaptiveAudio=\(hasAdaptiveAudio) muxed=\(hasMuxed)")
+        playerLog.notice("[\(label)] streams available: HLS=\(hasHLS) adaptiveVideo=\(hasAdaptiveVideo) adaptiveAudio=\(hasAdaptiveAudio) muxed=\(hasMuxed) skipMuxed=\(skipMuxed)")
 
         // 1. HLS manifest — best quality, native AVPlayer ABR, alternate audio renditions
         if let hlsURL = info.hlsURL {
@@ -109,10 +210,15 @@ extension PlaybackViewModel {
             playerLog.notice("[\(label)] Adaptive composition failed — trying muxed")
         }
 
-        // 3. Muxed direct MP4 (itag=18, 360p — last resort)
-        if let muxedURL = info.bestMuxedDownloadURL {
+        // 3. Muxed direct MP4 (itag=18, 360p — last resort, skipped when skipMuxed=true)
+        if !skipMuxed, let muxedURL = info.bestMuxedDownloadURL {
             playerLog.notice("[\(label)] Trying muxed")
-            if await attemptURL(muxedURL, for: video, info: info, label: "\(label)/muxed") { return true }
+            // Use asMuxedOnly to strip adaptive-only formats from the quality picker.
+            // The full `info` includes 720p/480p/etc adaptive video formats that 403 at
+            // the CDN (rqh=1 enforcement). Showing them in the picker would let the user
+            // select 720p, triggering a rebuild that always fails. asMuxedOnly keeps only
+            // the combined muxed format so the picker correctly reflects playback reality.
+            if await attemptURL(muxedURL, for: video, info: info.asMuxedOnly, label: "\(label)/muxed") { return true }
             playerLog.notice("[\(label)] Muxed failed — no more alternatives for this client")
         }
 
@@ -321,10 +427,12 @@ extension PlaybackViewModel {
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
         let audioItag = URLComponents(url: audioURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
-        // Infer the correct User-Agent from the URL's `c=` parameter so that
-        // Android-client-signed URLs (c=ANDROID) are served with the Android UA.
-        let ua = Self.userAgent(for: videoURL)
-        playerLog.notice("[quality/DASH] rebuilding composition — videoItag=\(videoItag) audioItag=\(audioItag) ua=\(ua == InnerTubeClients.Android.userAgent ? "Android" : "iOS")")
+        // Always use the iOS UA regardless of URL signing (c=ANDROID or c=IOS).
+        // The initial attemptComposition path uses iOS UA for all URLs including
+        // Android-client-signed ones, and it succeeds. Using Android UA for c=ANDROID
+        // URLs was an incorrect assumption — it caused HTTP 403 instead of preventing it.
+        let ua = InnerTubeClients.iOS.userAgent
+        playerLog.notice("[quality/DASH] rebuilding composition — videoItag=\(videoItag) audioItag=\(audioItag) ua=iOS")
 
         let videoAsset = AVURLAsset(url: videoURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
         let audioAsset = AVURLAsset(url: audioURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
@@ -398,9 +506,11 @@ extension PlaybackViewModel {
 
     // MARK: - Helpers
 
-    /// Returns the AVFoundation User-Agent matching the client that signed `url`.
-    /// YouTube adaptive streams are client-signed: an Android-signed URL (`c=ANDROID`)
-    /// returns HTTP 403 when requested with an iOS User-Agent, and vice versa.
+    /// Returns the AVFoundation User-Agent for `url` based on its `c=` signing parameter.
+    /// NOTE: This helper is no longer used by `rebuildCompositionForQuality`, which now always
+    /// uses iOS UA. Kept for reference — the original assumption (Android UA needed for
+    /// c=ANDROID URLs) was incorrect; the initial `attemptComposition` path proves iOS UA
+    /// works for all URL signing variants.
     static func userAgent(for url: URL) -> String {
         let client = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "c" })?.value ?? ""

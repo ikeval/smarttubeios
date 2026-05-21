@@ -6,25 +6,27 @@ import XCTest
 // the extracted device log. Classify every skip and failure before closing the task:
 //
 // EXPECTED (per-step skip — not a bug):
-//   - "not available in picker" — this quality option doesn't exist for this video. Fine.
+//   - "not available in picker" — quality doesn't exist for this video. Fine.
 //
 // BUG (must fix before closing):
 //   - XCTAssertTrue failure: "Stats 'Selected' row did not show 'Xp' within 5 s"
-//     → selectFormat() was never called, or pendingQualityLabel not propagated to snapshot
+//     → selectFormat() was never called, or pendingQualityLabel not in snapshot
+//   - XCTAssertTrue failure: "Resolution did not change to ×Xp within 15 s"
+//     → DASH rebuild failed — loadTracks() threw (403?), replaceCurrentItem never called
 //   - "player.quickAccess.quality not hittable" — controls overlay didn't appear
 //   - "player.moreButton not found" / "player.moreMenu.statsForNerds not found" — UI missing
 //   - "Player did not open" / "DASH video never became ready" — playback failed entirely
-//   - Any whole-test XCTSkip without confirming CDN/network cause in the device log
 //
-// Log events to verify for each quality step:
-//   ✓ [qualityPicker] selected <quality> (was: ...)
-//   ✓ [quality] selectFormat → <quality> (<codec>) <W>×<H>@<fps>fps
-//   ✓ [stats] snapshot … pendingQualityLabel should update to the chosen quality
-//   ✗ source=selectedFormat(<quality>) in [stats] snapshot
-//     (may revert to presentationSize due to CDN 403 in simulator — that is fine)
+// Root-cause checklist for resolution failure:
+//   In the device log look for:
+//   ❌ [quality/DASH] composition build error: — loadTracks threw (URL 403 / network error)
+//   ❌ [quality/DASH] no tracks in remote assets — response was empty
+//   ❌ [quality/DASH] AVPlayerItem failed: — item reached .failed status
+//   If one of those appears for the failing quality step, the stream URL is the problem.
+//   Check the `c=` param: ANDROID-signed URLs need the Android UA (set automatically).
+//   On simulator ANDROID-signed URLs may still return 403 — run on real device to confirm.
 //
-// GOOD run in simulator: all 6 quality steps either PASS (selectFormat called) or skip (not in picker).
-// GOOD run on device: all quality steps PASS + Stats resolution matches selected quality.
+// GOOD run: all available quality steps PASS both assertions. Resolution matches selected quality.
 
 // MARK: - DASHQualitySwitchUITests
 //
@@ -103,15 +105,15 @@ final class DASHQualitySwitchUITests: XCTestCase {
 
     /// Shared body for all DASH quality-cycle tests.
     ///
-    /// Verifies via the Stats for Nerds "Selected" row that each quality switch records
-    /// `selectFormat` was called with the correct quality, and that the quick-access quality
-    /// button label persists after a CDN 403 failure (pendingQualityLabel fix).
+    /// For each available quality:
+    ///  1. Asserts `selectFormat()` was called — via `stats.selectedQuality` (synchronous,
+    ///     CDN-independent).
+    ///  2. Asserts the video **actually plays** at the selected resolution — waits up to 15 s
+    ///     for `presentationSize` to contain the expected height. This catches the bug where
+    ///     the DASH rebuild fails (loadTracks 403, composition error) and the player silently
+    ///     stays at the original quality.
     ///
-    /// CDN-independent: `pendingQualityLabel` is set synchronously and never cleared on failure.
-    ///
-    /// Per-step behaviour:
-    ///  - Quality not in picker → step is silently skipped (not a failure).
-    ///  - Quality in picker but Stats "Selected" not updated within 5 s → XCTFail (real bug).
+    ///  Quality not in picker → step is silently skipped (not a failure).
     private func runQualityCycle() throws {
 
         // ── Step 1: Wait for DASH playback to start ──────────────────────────
@@ -152,34 +154,34 @@ final class DASHQualitySwitchUITests: XCTestCase {
                 continue
             }
 
-            // `pendingQualityLabel` is set synchronously when selectFormat is called and
-            // persists even if CDN fails. 5 s is very generous for an accessibility update.
+            // Assertion 1: selectFormat() was called.
+            // `pendingQualityLabel` is set synchronously at tap time, so the stats overlay
+            // will show the quality label within one stats-timer tick (≤ 0.5 s).
             let selected = waitForSelectedQuality(containing: quality, timeout: 5)
-            captureState(
-                "after \(quality) — selected: \(currentSelectedQualityLabel() ?? "nil"), " +
-                "resolution: \(currentResolutionLabel() ?? "nil")",
-                in: app
-            )
-            UITestHelpers.assertNoPlayerErrorBanner(in: app)
             XCTAssertTrue(
                 selected,
                 "Stats 'Selected' row did not show '\(quality)' within 5 s — " +
                 "selectFormat() may not have been called after tapping the quality option."
             )
 
-            // Verify that the quality button label persists after CDN failure.
-            // The button should show the user's selection (via pendingQualityLabel),
-            // not revert to "Auto" when composition rebuild fails with HTTP 403.
-            showControls()
-            let qBtn = app.buttons["player.quickAccess.quality"].firstMatch
-            if qBtn.waitForExistence(timeout: 3) && qBtn.isHittable {
-                let btnLabel = qBtn.label
-                XCTAssertTrue(
-                    btnLabel.contains(quality),
-                    "Quality button shows '\(btnLabel)' after CDN failure — " +
-                    "expected '\(quality)' to persist via pendingQualityLabel (bug: revert to Auto)"
-                )
-            }
+            // Assertion 2: actual playback resolution changed to match.
+            // presentationSize is updated after the DASH composition becomes readyToPlay.
+            // If loadTracks() throws (e.g. URL 403), replaceCurrentItem is never called
+            // and resolution stays at the previous quality → this assertion FAILS.
+            let heightStr = quality.prefix(while: { $0.isNumber })  // "720", "1080", "144", …
+            let resChanged = waitForResolution(containing: Self.cross + heightStr, timeout: 15)
+            captureState(
+                "after \(quality) — selected: \(currentSelectedQualityLabel() ?? "nil"), " +
+                "resolution: \(currentResolutionLabel() ?? "nil")",
+                in: app
+            )
+            XCTAssertTrue(
+                resChanged,
+                "Resolution did not change to ×\(heightStr) within 15 s after selecting \(quality) — " +
+                "DASH rebuild failed (loadTracks 403? composition error?). " +
+                "Check device log for '❌ [quality/DASH]' lines near this step."
+            )
+            UITestHelpers.assertNoPlayerErrorBanner(in: app)
         }
     }
 
@@ -218,12 +220,23 @@ final class DASHQualitySwitchUITests: XCTestCase {
     }
 
     /// Polls until `stats.selectedQuality` contains `quality` (e.g. "720p") or times out.
-    /// This is CDN-independent because `pendingQualityLabel` is set synchronously in
-    /// `selectFormat` and never cleared on composition failure.
+    /// The `pendingQualityLabel` is set synchronously in `selectFormat` before any async
+    /// DASH rebuild runs, so this check succeeds quickly regardless of CDN outcome.
     private func waitForSelectedQuality(containing quality: String, timeout: TimeInterval) -> Bool {
         let el = app.staticTexts["stats.selectedQuality"].firstMatch
         let pred = NSPredicate(format: "label CONTAINS %@", quality)
         let exp = XCTNSPredicateExpectation(predicate: pred, object: el)
+        return XCTWaiter().wait(for: [exp], timeout: timeout) == .completed
+    }
+
+    /// Polls until the Stats resolution label contains `substring` (e.g. "×720") or times out.
+    /// Use this on real device to verify the DASH composition actually played at the selected quality.
+    private func waitForResolution(containing substring: String, timeout: TimeInterval) -> Bool {
+        let pred = NSPredicate(format: "label CONTAINS[c] %@", substring)
+        let exp = XCTNSPredicateExpectation(
+            predicate: pred,
+            object: app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.cross)).firstMatch
+        )
         return XCTWaiter().wait(for: [exp], timeout: timeout) == .completed
     }
 

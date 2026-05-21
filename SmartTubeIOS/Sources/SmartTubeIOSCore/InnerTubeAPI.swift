@@ -25,6 +25,16 @@ public actor InnerTubeAPI {
     var visitorData: String?
     var authToken: String?
 
+    // MARK: - signatureTimestamp (STS) cache
+    //
+    // The TV authenticated player request requires `signatureTimestamp` inside
+    // `playbackContext.contentPlaybackContext` to validate the current player JS
+    // version. Without it, YouTube returns "The page needs to be reloaded" for
+    // sign-in-required or age-restricted content even with a valid Bearer token.
+    // The value is fetched lazily from YouTube's homepage and cached for 1 hour.
+    var signatureTimestamp: Int?
+    var signatureTimestampFetchedAt: Date?
+
     // MARK: - poToken storage (Step 1)
     //
     // Populated by a PoTokenProvider when configured; nil until then (zero behaviour change).
@@ -107,14 +117,46 @@ public actor InnerTubeAPI {
     /// The Android VR (Oculus Quest) client context used for audio-only fallback.
     /// Per yt-dlp research (May 2026), this client does not require a PO token for
     /// adaptive audio streams. Used exclusively by `fetchPlayerInfoAndroidVR`.
+    /// deviceMake/deviceModel/androidSdkVersion must match yt-dlp's android_vr definition
+    /// exactly — omitting them causes YouTube bot-detection ("Sign in to confirm...").
     let androidVRClientContext: [String: Any] = [
         "client": [
             "hl": "en",
             "gl": "US",
             "clientName": InnerTubeClients.AndroidVR.name,
             "clientVersion": InnerTubeClients.AndroidVR.version,
+            "deviceMake": "Oculus",
+            "deviceModel": "Quest 3",
+            "androidSdkVersion": 32,
             "osName": "Android",
-            "osVersion": "12",
+            "osVersion": "12L",
+            "utcOffsetMinutes": 0,
+        ]
+    ]
+
+    /// The TVHTML5_SIMPLY_EMBEDDED_PLAYER client context used for embedded player requests.
+    /// Returns an HLS manifest for most videos without requiring a PO token —
+    /// preferred over adaptive DASH when rqh=1 CDN enforcement is active.
+    let tvEmbeddedClientContext: [String: Any] = [
+        "client": [
+            "hl": "en",
+            "gl": "US",
+            "clientName": InnerTubeClients.TVEmbedded.name,
+            "clientVersion": InnerTubeClients.TVEmbedded.version,
+            "clientScreen": "EMBED",
+        ]
+    ]
+
+    /// The WEB_CREATOR (YouTube Studio) client context used as a fallback player source.
+    /// Per yt-dlp documentation, this client is exempt from rqh=1 CDN enforcement on
+    /// adaptive streams — URLs returned by WEB_CREATOR do not require a pot= token.
+    let webCreatorClientContext: [String: Any] = [
+        "client": [
+            "hl": "en",
+            "gl": "US",
+            "clientName": InnerTubeClients.WebCreator.name,
+            "clientVersion": InnerTubeClients.WebCreator.version,
+            "clientScreen": "WATCH",
         ]
     ]
 

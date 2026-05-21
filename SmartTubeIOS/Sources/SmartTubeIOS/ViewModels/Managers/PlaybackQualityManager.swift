@@ -299,37 +299,30 @@ final class PlaybackQualityManager {
         return variants
     }
 
+    /// Returns all playable video-only formats for the quality picker, sorted for display.
+    ///
+    /// Only `video/mp4` formats are included. WebM/VP9 is excluded because:
+    /// - AVFoundation does not decode VP9/WebM on iOS.
+    /// - YouTube's VP9 DASH streams (itag 278/598) return HTTP 403 from iOS, causing
+    ///   quality switches to silently hang in `.unknown` status forever.
+    ///
+    /// Multiple formats at the same height (e.g. H.264 and AV1 at 1080p) are each shown
+    /// as separate picker entries — the picker label includes the codec ("1080p H.264",
+    /// "1080p AV1"). Selecting a specific entry uses that format's URL directly, so the
+    /// user gets exactly the codec they tapped.
     static func deduplicatedVideoFormats(_ formats: [VideoFormat]) -> [VideoFormat] {
-        // Only video/mp4 formats are playable by AVFoundation. WebM (VP9) is excluded:
-        // - AVFoundation does not decode VP9/WebM on iOS.
-        // - YouTube's VP9 DASH streams (e.g. itag 278/598) return HTTP 403 when fetched
-        //   via AVURLAsset, causing quality switches to silently hang in .unknown status.
-        // - The fps field is often absent in the YouTube API response for adaptive formats,
-        //   defaulting to 30. This gave VP9 a different height:fps dedup key than the
-        //   H.264 format at the same resolution, causing duplicate quality-picker entries.
         let candidates = formats.filter {
             $0.url != nil && $0.height > 0 && $0.mimeType.hasPrefix("video/mp4")
         }
-        var seen = Set<String>()
-        var result: [VideoFormat] = []
         // Sort: height desc → fps desc → H.264 (avc1) first → bitrate desc.
-        // Using qualityLabel (e.g. "144p", "720p60") as the dedup key ensures at most one
-        // picker entry per visible label, regardless of fps metadata variance from the API.
-        for fmt in candidates.sorted(by: {
+        return candidates.sorted(by: {
             if $0.height != $1.height { return $0.height > $1.height }
             if $0.fps != $1.fps { return $0.fps > $1.fps }
             let lhsH264 = $0.mimeType.contains("avc1")
             let rhsH264 = $1.mimeType.contains("avc1")
             if lhsH264 != rhsH264 { return lhsH264 }
             return ($0.bitrate ?? 0) > ($1.bitrate ?? 0)
-        }) {
-            let key = fmt.qualityLabel
-            if !seen.contains(key) {
-                seen.insert(key)
-                result.append(fmt)
-            }
-        }
-        return result
+        })
     }
 
     /// Returns the best video-only MP4 format for adaptive composition.

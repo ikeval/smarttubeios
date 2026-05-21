@@ -183,6 +183,30 @@ public struct PlayerInfo: Sendable {
             endCards: endCards
         )
     }
+
+    /// Returns a copy that contains only the muxed (combined video+audio) formats,
+    /// with adaptive-only formats and the dashURL removed.
+    ///
+    /// Used in `tryAllStreams` when loading the muxed direct-MP4 fallback: the quality
+    /// picker is driven by `availableFormats` which is set from `playerInfo.formats`.
+    /// If we passed the full client info (which includes adaptive-only video/audio
+    /// formats), the picker would incorrectly show 720p/480p/etc even though adaptive
+    /// streams are unavailable — every client's adaptive CDN URLs are rqh=1 403 or
+    /// DRM-encrypted. Filtering to muxed-only ensures the picker reflects playback reality.
+    public var asMuxedOnly: PlayerInfo {
+        let muxedFormats = formats.filter {
+            $0.mimeType.hasPrefix("video/mp4") && $0.mimeType.contains(", ") && $0.url != nil
+        }
+        return PlayerInfo(
+            video: video,
+            formats: muxedFormats,
+            hlsURL: nil,
+            dashURL: nil,
+            captionTracks: captionTracks,
+            trackingURLs: trackingURLs,
+            endCards: endCards
+        )
+    }
 }
 
 // MARK: - APIError
