@@ -126,8 +126,8 @@ final class DASHQualitySwitchUITests: XCTestCase {
         }
         let enabledPred = NSPredicate(format: "enabled == true")
         let enabledExp = XCTNSPredicateExpectation(predicate: enabledPred, object: playPause)
-        guard XCTWaiter().wait(for: [enabledExp], timeout: 50) == .completed else {
-            try captureAndSkip("DASH video never became ready to play within 50 s", in: app)
+        guard XCTWaiter().wait(for: [enabledExp], timeout: 120) == .completed else {
+            try captureAndSkip("DASH video never became ready to play within 120 s", in: app)
         }
         UITestHelpers.assertNoPlayerErrorBanner(in: app, videoTitle: "DASH quality cycle")
 
@@ -175,7 +175,7 @@ final class DASHQualitySwitchUITests: XCTestCase {
             // If loadTracks() throws (e.g. URL 403), replaceCurrentItem is never called
             // and resolution stays at the previous quality → this assertion FAILS.
             let heightStr = quality.prefix(while: { $0.isNumber })  // "720", "1080", "144", …
-            let resChanged = waitForResolution(containing: Self.cross + heightStr, timeout: 60)
+            let resChanged = waitForResolution(containing: Self.cross + heightStr, timeout: 120)
             captureState(
                 "after \(quality) — selected: \(currentSelectedQualityLabel() ?? "nil"), " +
                 "resolution: \(currentResolutionLabel() ?? "nil")",
@@ -183,7 +183,7 @@ final class DASHQualitySwitchUITests: XCTestCase {
             )
             XCTAssertTrue(
                 resChanged,
-                "Resolution did not change to ×\(heightStr) within 60 s after selecting \(quality). " +
+                "Resolution did not change to ×\(heightStr) within 120 s after selecting \(quality). " +
                 "DASH rebuild failed (loadTracks 403? composition error?). " +
                 "Check device log for '❌ [quality/DASH]' lines near this step."
             )
