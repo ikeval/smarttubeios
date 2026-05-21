@@ -1,5 +1,8 @@
 import AVFoundation
 import os
+#if canImport(UIKit)
+import UIKit
+#endif
 import SmartTubeIOSCore
 
 private let playerLog = CrashlyticsLogger(category: "Player")
@@ -283,8 +286,15 @@ extension PlaybackViewModel {
 
         lastAttemptedStreamURL = effectiveURL
         let item = AVPlayerItem(url: effectiveURL)
-        if applyHLSHints, settings.preferredQuality != .auto,
-           let maxH = settings.preferredQuality.maxHeight {
+        if applyHLSHints {
+            let maxH: Int
+            if settings.preferredQuality != .auto, let h = settings.preferredQuality.maxHeight {
+                maxH = h
+            } else {
+                // Auto: steer ABR toward the display's native resolution so the player
+                // never fetches variants it cannot render.
+                maxH = Self.displayMaxVideoHeight()
+            }
             item.preferredMaximumResolution = CGSize(width: CGFloat(maxH) * 4, height: CGFloat(maxH))
             item.preferredPeakBitRate = peakBitRate(for: maxH)
             playerLog.notice("[\(label)] HLS ABR hints: maxH=\(maxH)p peakBitRate=\(peakBitRate(for: maxH) / 1_000_000)Mbps (master URL preserved)")
@@ -559,22 +569,40 @@ extension PlaybackViewModel {
     /// When `preferredQuality != .auto`, filters to formats at or below `maxHeight`, sorts
     /// by height descending then bitrate descending. Falls back to highest bitrate when no
     /// format meets the height cap.
+    /// When `preferredQuality == .auto`, caps at the display's native resolution so the
+    /// player never fetches a resolution higher than the screen can render.
     ///
     /// H.264 (avc1) is preferred over AV1 (av01) at any given resolution because Android-client
     /// AV1 streams require a proof-of-origin token (pot) that the app does not supply, causing
     /// systematic HTTP 403 errors on adaptive composition. H.264 streams are served without
     /// that restriction and are well-supported by AVFoundation.
     private func qualityCapVideoURL(from formats: [VideoFormat]) -> URL? {
-        let maxH: Int?
+        let maxH: Int
         if settings.preferredQuality != .auto, let h = settings.preferredQuality.maxHeight {
             maxH = h
         } else {
-            maxH = nil
+            // Auto: cap at the display's native resolution — no benefit loading higher
+            // than what the screen can actually render.
+            maxH = Self.displayMaxVideoHeight()
         }
         return PlaybackQualityManager.selectBestVideoFormat(
             from: formats,
             preferredMaxHeight: maxH,
             preferH264: true
         )?.url
+    }
+
+    /// Returns the maximum video height (pixels) that this display can render for
+    /// landscape 16:9 content. Used to cap quality in Auto mode.
+    ///
+    /// The shorter native-pixel dimension equals the landscape height — the maximum
+    /// video height the screen can actually show for standard 16:9 YouTube content.
+    static func displayMaxVideoHeight() -> Int {
+        #if canImport(UIKit)
+        let bounds = UIScreen.main.nativeBounds
+        return Int(min(bounds.width, bounds.height))
+        #else
+        return 1080  // Conservative fallback for non-UIKit targets
+        #endif
     }
 }

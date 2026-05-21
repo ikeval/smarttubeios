@@ -454,10 +454,17 @@ extension PlaybackViewModel {
             // Quality is steered via AVPlayerItem hints (preferredMaximumResolution /
             // preferredPeakBitRate) which AVPlayer honours during ABR adaptation.
             let initialStreamURL = masterStreamURL
-            if settings.preferredQuality != .auto, let maxH = settings.preferredQuality.maxHeight {
-                let matchingFormat = availableFormats.first { $0.height <= maxH }
+            // Compute effective quality cap: explicit setting, or display-native resolution
+            // for Auto so the player never fetches variants the screen cannot render.
+            let initialMaxH: Int
+            if settings.preferredQuality != .auto, let h = settings.preferredQuality.maxHeight {
+                initialMaxH = h
+                let matchingFormat = availableFormats.first { $0.height <= h }
                 selectedFormat = matchingFormat
-                playerLog.notice("Initial quality \(maxH)p — using master URL with ABR hints")
+                playerLog.notice("Initial quality \(h)p — using master URL with ABR hints")
+            } else {
+                initialMaxH = PlaybackViewModel.displayMaxVideoHeight()
+                playerLog.notice("Initial quality Auto — capping at display resolution \(initialMaxH)p")
             }
             playerLog.notice("Starting AVPlayer with: \(initialStreamURL.absoluteString.prefix(120))")
             lastAttemptedStreamURL = initialStreamURL
@@ -474,12 +481,12 @@ extension PlaybackViewModel {
             // ABR algorithm toward the user's preferred resolution without bypassing audio
             // metadata (which variant URLs would lose). Hints are applied unconditionally
             // to the master URL for all HLS streams.
-            if settings.preferredQuality != .auto, let maxH = settings.preferredQuality.maxHeight,
-               info.hlsURL != nil {
-                let h = CGFloat(maxH)
+            // Apply quality hints for all HLS items — explicit setting or display-based cap.
+            if info.hlsURL != nil {
+                let h = CGFloat(initialMaxH)
                 item.preferredMaximumResolution = CGSize(width: h * 4, height: h)
-                item.preferredPeakBitRate = peakBitRate(for: maxH)
-                playerLog.notice("Initial quality \(maxH)p hint set (master with ABR)")
+                item.preferredPeakBitRate = peakBitRate(for: initialMaxH)
+                playerLog.notice("Initial quality \(initialMaxH)p hint set (master with ABR)")
             }
             // Observe item status using async/await (withCheckedContinuation is not needed
             // here since we only need to react to status changes, not await them).
