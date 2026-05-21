@@ -234,20 +234,28 @@ final class PlaybackQualityManager {
 
         let label = format.map { "\($0.height)p" } ?? "Auto"
 
-        // For explicit quality: use the format's direct URL.
-        // Guard: if the selected format is not video/mp4 (e.g. a VP9/WebM format that
-        // somehow reached this path), fall back to the best H.264 at or below that height.
-        // This is a defensive fallback — deduplicatedVideoFormats now filters out WebM
-        // before it reaches the quality picker.
-        // For Auto: fall back to the best available video-only MP4 (mirrors the initial load path).
+        // Always resolve the video URL from playerInfo.formats (the client that
+        // successfully played) rather than using availableFormats' URL directly.
+        // Reason: availableFormats may retain URLs from a different client than
+        // playerInfo due to the max-count policy (e.g. TVAuth has 113 entries vs
+        // AndroidVR's 23, so TVAuth formats are preserved for picker display but
+        // their URLs return SABR binary data → AVFoundationErrorDomain -11828).
+        // Using playerInfo.formats guarantees the URL comes from the working client.
         let videoURL: URL?
-        if let fmt = format, fmt.mimeType.hasPrefix("video/mp4") {
-            videoURL = fmt.url
-        } else if let fmt = format {
-            playerLog.error("[quality] reloadDASHItem: non-MP4 format selected (\(fmt.mimeType)) — falling back to best H.264 at \(fmt.height)p")
-            videoURL = PlaybackQualityManager.selectBestVideoFormat(
+        if let fmt = format {
+            if let infoURL = PlaybackQualityManager.selectBestVideoFormat(
                 from: info.formats, preferredMaxHeight: fmt.height
-            )?.url
+            )?.url {
+                videoURL = infoURL
+                playerLog.notice("[quality] reloadDASHItem: resolved \(fmt.height)p from playerInfo.formats")
+            } else if fmt.mimeType.hasPrefix("video/mp4") {
+                // playerInfo lacks this quality — fall back to availableFormats URL.
+                playerLog.notice("[quality] reloadDASHItem: \(fmt.height)p not in playerInfo.formats, using availableFormats URL")
+                videoURL = fmt.url
+            } else {
+                playerLog.error("[quality] reloadDASHItem: non-MP4 format (\(fmt.mimeType)) not in playerInfo.formats")
+                videoURL = nil
+            }
         } else {
             videoURL = PlaybackQualityManager.selectBestVideoFormat(
                 from: info.formats, preferredMaxHeight: nil

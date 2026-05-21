@@ -183,10 +183,15 @@ extension PlaybackViewModel {
     private func tryAllStreams(video: Video, info: PlayerInfo, label: String,
                                skipMuxed: Bool = false) async -> Bool {
         let hasHLS = info.hlsURL != nil
+        let hasDASH = info.dashURL != nil
         let hasAdaptiveVideo = qualityCapVideoURL(from: info.formats) != nil
         let hasAdaptiveAudio = info.bestAdaptiveAudioURL != nil
         let hasMuxed = info.bestMuxedDownloadURL != nil
-        playerLog.notice("[\(label)] streams available: HLS=\(hasHLS) adaptiveVideo=\(hasAdaptiveVideo) adaptiveAudio=\(hasAdaptiveAudio) muxed=\(hasMuxed) skipMuxed=\(skipMuxed)")
+        // Diagnostic: show first adaptive video URL prefix to detect SABR (c=TVHTML5) vs standard
+        let firstAdaptiveURL = info.formats.first(where: {
+            $0.mimeType.hasPrefix("video/mp4") && !$0.mimeType.contains(", ") && $0.url != nil
+        })?.url?.absoluteString.prefix(200) ?? "none"
+        playerLog.notice("[\(label)] streams: HLS=\(hasHLS) DASH=\(hasDASH) adaptiveVideo=\(hasAdaptiveVideo) adaptiveAudio=\(hasAdaptiveAudio) muxed=\(hasMuxed) skipMuxed=\(skipMuxed) firstAdaptiveURL=\(firstAdaptiveURL)")
 
         // 1. HLS manifest — best quality, native AVPlayer ABR, alternate audio renditions
         if let hlsURL = info.hlsURL {
@@ -233,7 +238,17 @@ extension PlaybackViewModel {
         playerLog.notice("[\(label)]: \(url.absoluteString.prefix(120))")
 
         playerInfo = info
-        availableFormats = Self.deduplicatedVideoFormats(info.formats)
+        let newFormats = Self.deduplicatedVideoFormats(info.formats)
+        // Never reduce quality options — preserve the richest availableFormats seen so far.
+        // When muxed fallback (360p) plays after adaptive failure, Android formats may have
+        // height=0 or url=nil for adaptive entries, giving fewer picker options than the initial
+        // iOS-unauth response. Keep whichever set has more entries.
+        let maxCurrentHeight = availableFormats.map(\.height).max() ?? 0
+        let maxNewHeight = newFormats.map(\.height).max() ?? 0
+        if newFormats.count > availableFormats.count || maxNewHeight > maxCurrentHeight || availableFormats.isEmpty {
+            availableFormats = newFormats
+        }
+        playerLog.notice("[\(label)] availableFormats after dedup: input=\(info.formats.count) output=\(newFormats.count) kept=\(availableFormats.count) maxH=\(availableFormats.map(\.height).max() ?? 0)")
         availableCaptions = info.captionTracks
         autoApplyCaptionPreference(tracks: info.captionTracks)
 
@@ -324,7 +339,14 @@ extension PlaybackViewModel {
         playerLog.notice("[\(label)/adaptive] videoItag=\(videoItag) rqh=\(videoRqh) audioItag=\(audioItag)")
 
         playerInfo = info
-        availableFormats = Self.deduplicatedVideoFormats(info.formats)
+        let newFormats = Self.deduplicatedVideoFormats(info.formats)
+        // Never reduce quality options — same policy as attemptURL.
+        let maxCurrentHeight = availableFormats.map(\.height).max() ?? 0
+        let maxNewHeight = newFormats.map(\.height).max() ?? 0
+        if newFormats.count > availableFormats.count || maxNewHeight > maxCurrentHeight || availableFormats.isEmpty {
+            availableFormats = newFormats
+        }
+        playerLog.notice("[\(label)/adaptive] availableFormats after dedup: input=\(info.formats.count) output=\(newFormats.count) kept=\(availableFormats.count) maxH=\(availableFormats.map(\.height).max() ?? 0)")
         availableCaptions = info.captionTracks
         autoApplyCaptionPreference(tracks: info.captionTracks)
 

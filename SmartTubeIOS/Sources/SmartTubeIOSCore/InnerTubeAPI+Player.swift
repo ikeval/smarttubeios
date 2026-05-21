@@ -157,12 +157,21 @@ extension InnerTubeAPI {
         var cpbc: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
         if let sts { cpbc["signatureTimestamp"] = sts }
 
+        // att/get: fetch a proof-of-origin attestation token for the TV session.
+        // Including it as serviceIntegrityDimensions.poToken signals to YouTube that this
+        // is a legitimate TV client — YouTube may then return hlsManifestUrl or standard
+        // CDN adaptive URLs rather than the SABR-only response.
+        let attToken = await fetchAttestationToken(videoId: videoId)
+
         func buildBody(fields: [String: Any]) -> [String: Any] {
             var body = makeBody(client: ["client": fields])
             body["videoId"] = videoId
             body["racyCheckOk"] = true
             body["contentCheckOk"] = true
             body["playbackContext"] = ["contentPlaybackContext": cpbc]
+            if let token = attToken {
+                body["serviceIntegrityDimensions"] = ["poToken": token]
+            }
             return body
         }
 
@@ -369,7 +378,14 @@ extension InnerTubeAPI {
                 let quality = f["qualityLabel"] as? String ?? f["quality"] as? String ?? "unknown"
                 let mimeType = f["mimeType"] as? String ?? ""
                 let width = f["width"] as? Int ?? 0
-                let height = f["height"] as? Int ?? 0
+                var height = f["height"] as? Int ?? 0
+                // SABR adaptive formats (TV auth) often omit the "height" JSON field even
+                // though qualityLabel is present (e.g. "720p60"). Derive height from the
+                // label so deduplicatedVideoFormats (which requires height > 0) includes them.
+                if height == 0 {
+                    let digits = quality.prefix(while: { $0.isNumber })
+                    if !digits.isEmpty { height = Int(digits) ?? 0 }
+                }
                 let fps = f["fps"] as? Int ?? 30
                 let bitrate = f["bitrate"] as? Int
                 return VideoFormat(label: quality, width: width, height: height, fps: fps, mimeType: mimeType, url: url, bitrate: bitrate)
@@ -394,6 +410,15 @@ extension InnerTubeAPI {
 
         let hlsURL = (streamingData?["hlsManifestUrl"] as? String).flatMap { URL(string: $0) }
         let dashURL = (streamingData?["dashManifestUrl"] as? String).flatMap { URL(string: $0) }
+
+        // Diagnostics: log adaptive format heights and first URL param snapshot.
+        let adaptiveFormatsRaw = streamingData?["adaptiveFormats"] as? [[String: Any]] ?? []
+        let adaptiveHeights = adaptiveFormatsRaw.compactMap { $0["height"] as? Int }
+        let firstAdaptiveC = adaptiveFormatsRaw.first(where: {
+            ($0["mimeType"] as? String)?.hasPrefix("video/") == true && $0["url"] != nil
+        }).flatMap { ($0["url"] as? String)?.components(separatedBy: "&").first(where: { $0.hasPrefix("c=") }) } ?? "none"
+        let streamingKeys = streamingData.map { Array($0.keys.sorted().prefix(12)) } ?? []
+        tubeLog.notice("parsePlayerInfo id=\(videoId, privacy: .public) hls=\(hlsURL != nil, privacy: .public) dash=\(dashURL != nil, privacy: .public) totalFormats=\(formats.count, privacy: .public) adaptiveHeights=\(adaptiveHeights.prefix(8), privacy: .public) firstAdaptiveC=\(firstAdaptiveC, privacy: .public) streamingKeys=\(streamingKeys, privacy: .public)")
 
         // Captions — parse from captions.playerCaptionsTracklistRenderer.captionTracks
         let captionTracks: [CaptionTrack] = {

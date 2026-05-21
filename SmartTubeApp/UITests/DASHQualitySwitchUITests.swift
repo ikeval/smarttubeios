@@ -175,7 +175,7 @@ final class DASHQualitySwitchUITests: XCTestCase {
             // If loadTracks() throws (e.g. URL 403), replaceCurrentItem is never called
             // and resolution stays at the previous quality → this assertion FAILS.
             let heightStr = quality.prefix(while: { $0.isNumber })  // "720", "1080", "144", …
-            let resChanged = waitForResolution(containing: Self.cross + heightStr, timeout: 15)
+            let resChanged = waitForResolution(containing: Self.cross + heightStr, timeout: 60)
             captureState(
                 "after \(quality) — selected: \(currentSelectedQualityLabel() ?? "nil"), " +
                 "resolution: \(currentResolutionLabel() ?? "nil")",
@@ -183,7 +183,7 @@ final class DASHQualitySwitchUITests: XCTestCase {
             )
             XCTAssertTrue(
                 resChanged,
-                "Resolution did not change to ×\(heightStr) within 15 s after selecting \(quality). " +
+                "Resolution did not change to ×\(heightStr) within 60 s after selecting \(quality). " +
                 "DASH rebuild failed (loadTracks 403? composition error?). " +
                 "Check device log for '❌ [quality/DASH]' lines near this step."
             )

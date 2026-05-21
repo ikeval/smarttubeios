@@ -63,6 +63,47 @@ extension InnerTubeAPI {
         return body
     }
 
+    // MARK: - Attestation
+
+    /// Fetches a proof-of-origin attestation token via YouTube's att/get endpoint.
+    /// Sends the TV client context + Bearer auth + contentBindingContext so YouTube
+    /// can confirm the request originates from a legitimate TV session.
+    /// The returned `attestationToken` is included as `serviceIntegrityDimensions.poToken`
+    /// in subsequent TV auth player requests — YouTube may then return `hlsManifestUrl`
+    /// or standard CDN adaptive URLs rather than the SABR-only streaming response.
+    /// Returns nil silently on any failure so callers are unaffected.
+    func fetchAttestationToken(videoId: String) async -> String? {
+        guard let token = authToken else { return nil }
+        guard let url = baseURL.appendingPathComponent("att/get") as URL? else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(InnerTubeClients.TV.nameID, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(InnerTubeClients.TV.version, forHTTPHeaderField: "X-YouTube-Client-Version")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 8
+        var clientFields = (tvClientContext["client"] as? [String: Any]) ?? [:]
+        if let vd = visitorData { clientFields["visitorData"] = vd }
+        var body: [String: Any] = ["context": ["client": clientFields]]
+        body["contentBindingContext"] = ["videoId": videoId]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, response) = try await session.data(for: request)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(statusCode),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let attToken = json["attestationToken"] as? String, !attToken.isEmpty else {
+                tubeLog.notice("att/get: statusCode=\(statusCode, privacy: .public) — no attestationToken")
+                return nil
+            }
+            tubeLog.notice("att/get: ✅ attestationToken obtained (prefix=\(attToken.prefix(20), privacy: .public)…)")
+            return attToken
+        } catch {
+            tubeLog.notice("att/get: failed — \(error, privacy: .public)")
+            return nil
+        }
+    }
+
     // MARK: - Transport
 
     /// Player requests use the iOS client UA, googleapis.com base, and no auth header.
@@ -109,11 +150,9 @@ extension InnerTubeAPI {
         guard let token = authToken else {
             return try await postPlayer(body: body)
         }
-        guard var comps = URLComponents(url: playerBaseURL.appendingPathComponent("player"), resolvingAgainstBaseURL: false) else {
+        guard let url = playerBaseURL.appendingPathComponent("player") as URL? else {
             throw APIError.invalidURL("player")
         }
-        comps.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        guard let url = comps.url else { throw APIError.invalidURL("player") }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -143,28 +182,54 @@ extension InnerTubeAPI {
         return json
     }
 
-    /// Android VR (Oculus Quest) client player request on youtubei.googleapis.com.
+    /// Android VR (Oculus Quest) client player request on www.youtube.com.
     /// Uses the correct client headers (nameID=28) so YouTube identifies the request
     /// as an Oculus VR client. Per yt-dlp research, this client is exempt from rqh=1
     /// PO-token enforcement that affects standard Android and iOS adaptive streams.
-    /// yt-dlp sends android_vr to www.youtube.com (not googleapis.com) without an API key.
-    /// Using googleapis.com with an API key causes YouTube bot-detection for this client.
-    /// Cookies must be suppressed — this is an unauthenticated client; auth cookies from
-    /// the shared cookie store would confuse YouTube and trigger bot-detection responses.
+    /// yt-dlp sends android_vr to www.youtube.com with the TV API key as a query param
+    /// and without an Origin header (Android apps don't send Origin). The previous version
+    /// of this function sent Origin: https://www.youtube.com without an API key — YouTube's
+    /// Android VR (Oculus Quest, clientName=ANDROID_VR, nameID=28) player request.
+    /// Uses the public Android/TV API key and includes X-Goog-Visitor-Id from the
+    /// actor's stored visitorData (populated by prior TVAuth/iOS responses). yt-dlp
+    /// bypasses bot-detection by downloading the YouTube webpage first to seed visitor
+    /// cookies; we approximate this by passing visitorData via the header.
     func postAndroidVR(body: [String: Any]) async throws -> [String: Any] {
-        guard let url = baseURL.appendingPathComponent("player") as URL? else {
+        // yt-dlp android_vr uses the TV/Android API key (same value). nosec: published in yt-dlp.
+        let vrApiKey = "AIzaSyDCU8mBbAkSfXX4txZFpEpPEBoAOUMCxkU" // gitleaks:allow
+        guard var comps = URLComponents(url: baseURL.appendingPathComponent("player"),
+                                        resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL("player")
         }
+        comps.queryItems = [
+            URLQueryItem(name: "key", value: vrApiKey),
+            URLQueryItem(name: "prettyPrint", value: "false"),
+        ]
+        guard let url = comps.url else { throw APIError.invalidURL("player") }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // yt-dlp sends Origin: https://www.youtube.com for android_vr (derived from
+        // api_hostname in generate_api_headers). This is required — omitting it causes
+        // YouTube to return a bot-detection LOGIN_REQUIRED response.
         request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
         request.setValue(InnerTubeClients.AndroidVR.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(InnerTubeClients.AndroidVR.nameID, forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(InnerTubeClients.AndroidVR.version, forHTTPHeaderField: "X-YouTube-Client-Version")
-        // Suppress shared-session cookies — android_vr is unauthenticated; sending
-        // YouTube auth cookies from previous TV-client requests triggers bot-detection.
-        request.httpShouldHandleCookies = false
+        // yt-dlp sends X-Goog-Visitor-Id populated from the YouTube webpage download.
+        // Without a valid visitor context, YouTube returns a bot-detection response.
+        // We use the visitorData captured from previous TVAuth/iOS player responses —
+        // it is in the same protobuf format and confirms we have a legitimate YouTube session.
+        if let vd = visitorData {
+            request.setValue(vd, forHTTPHeaderField: "X-Goog-Visitor-Id")
+            tubeLog.notice("POST /player [AndroidVR] using visitorData (len=\(vd.count, privacy: .public))")
+        } else {
+            tubeLog.notice("POST /player [AndroidVR] — no visitorData available (may bot-detect)")
+        }
+        // Use the shared session to carry any YouTube cookies set by previous TVAuth/iOS
+        // player responses — these help establish a legitimate session context for android_vr.
+        // (Previously used an ephemeral session which stripped all session state, causing
+        // YouTube to treat this as a raw API call from an unknown client.)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let videoId = body["videoId"] as? String ?? ""
         tubeLog.notice("POST /player [AndroidVR] videoId=\(videoId, privacy: .public)")
