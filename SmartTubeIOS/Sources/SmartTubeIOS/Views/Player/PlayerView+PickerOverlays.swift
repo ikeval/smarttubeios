@@ -47,6 +47,7 @@ extension PlayerView {
                             pickerLog.notice("[qualityPicker] selected Auto (was: \(vm.selectedFormat?.qualityLabel ?? "Auto"))")
                             vm.selectFormat(nil)
                             store.settings.preferredQuality = .auto
+                            vm.updateSettings(store.settings)
                             showQualityPicker = false
                         } label: {
                             HStack {
@@ -78,6 +79,7 @@ extension PlayerView {
                                     assertionFailure("Quality picker tapped for format with non-standard height \(fmt.height)")
                                     store.settings.preferredQuality = .auto
                                 }
+                                vm.updateSettings(store.settings)
                                 showQualityPicker = false
                             } label: {
                                 HStack {

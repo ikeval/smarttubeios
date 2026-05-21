@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import os
 #if canImport(UIKit)
 import UIKit
@@ -172,6 +172,13 @@ extension PlaybackViewModel {
     /// Quality-switch 403 errors start a fresh 3-attempt exhaustive cycle.
     func retryWith403Recovery(video: Video, originalError: Error?) async {
         playerLog.notice("403 recovery (quality switch) — exhaustive retry for \(video.id)")
+        // Capture the current playback position so the new stream resumes from here.
+        // Without this, attemptComposition / attemptURL have no seekTo target and the
+        // new item starts from t=0 — causing the position-preservation assertion to fail.
+        let pos = currentTime
+        if pos > 0 {
+            savedPositionToRestore = pos
+        }
         retryAttempts = 0
         await exhaustiveRetry(video: video, originalError: originalError)
     }
@@ -317,6 +324,7 @@ extension PlaybackViewModel {
                     seek(to: pos)
                 }
                 loadAudioTracks(from: item)
+                needsQuickStartup = false
                 isLoading = false
                 player.rate = Float(settings.playbackSpeed)
                 isPlaying = true
@@ -365,9 +373,61 @@ extension PlaybackViewModel {
         let audioAsset = AVURLAsset(url: audioURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
 
         do {
-            async let videoTracks = videoAsset.loadTracks(withMediaType: .video)
-            async let audioTracks = audioAsset.loadTracks(withMediaType: .audio)
-            let (vTracks, aTracks) = try await (videoTracks, audioTracks)
+            // loadTracks can stall indefinitely when rqh=1 CDN URLs don't fail fast.
+            // @MainActor task-group child tasks are subject to main-actor scheduling
+            // pressure (XCTest accessibility callbacks), so withThrowingTaskGroup is
+            // unreliable here even with Task.detached wrappers.
+            //
+            // Solution: use AsyncStream as a cross-thread coordination channel.
+            // Both the loadTracks work AND the 8-second timeout run in fully-detached
+            // tasks (thread pool, no actor isolation). Whichever finishes first yields
+            // to the stream. The main-actor consumer resumes when either signal arrives,
+            // regardless of main-actor scheduling pressure.
+            let vTracks: [AVAssetTrack]
+            let aTracks: [AVAssetTrack]
+            do {
+                // AVAssetTrack is not Sendable in Swift 6 strict mode.
+                // Wrap the pair so AsyncStream<TrackBox?> satisfies Sendable.
+                // Ownership is transferred atomically through the stream; no concurrent
+                // access occurs after the box is read on the main actor.
+                struct TrackBox: @unchecked Sendable {
+                    let video: [AVAssetTrack]
+                    let audio: [AVAssetTrack]
+                }
+                let (raceStream, raceCont) = AsyncStream<TrackBox?>.makeStream()
+
+                // loadTracks on thread pool — yields result or nil on error
+                Task.detached {
+                    let box: TrackBox? = try? await { () async throws -> TrackBox in
+                        async let v = videoAsset.loadTracks(withMediaType: .video)
+                        async let a = audioAsset.loadTracks(withMediaType: .audio)
+                        let (vv, aa) = try await (v, a)
+                        return TrackBox(video: vv, audio: aa)
+                    }()
+                    raceCont.yield(box)
+                    raceCont.finish()
+                }
+                // Apply the 8-second timeout only during the initial load sequence.
+                // Quality-switch retries (triggered by qualityItemDidFail after first play)
+                // have needsQuickStartup=false and must wait the full CDN time (43-105 s
+                // for rqh=1 streams) to complete successfully.
+                if needsQuickStartup {
+                    Task.detached {
+                        try? await Task.sleep(for: .seconds(8))
+                        raceCont.yield(nil)
+                        raceCont.finish()
+                    }
+                }
+
+                if let firstOrNil = await raceStream.first(where: { @Sendable _ in true }),
+                   let box = firstOrNil {
+                    vTracks = box.video
+                    aTracks = box.audio
+                } else {
+                    playerLog.error("❌ [\(label)/adaptive] loadTracks timed out after 8s (rqh=\(videoRqh))")
+                    return false
+                }
+            }
 
             guard let sourceVideoTrack = vTracks.first,
                   let sourceAudioTrack = aTracks.first else {
@@ -411,6 +471,7 @@ extension PlaybackViewModel {
                         seek(to: pos)
                     }
                     loadAudioTracks(from: compositeItem)
+                    needsQuickStartup = false
                     isLoading = false
                     player.rate = Float(settings.playbackSpeed)
                     isPlaying = true

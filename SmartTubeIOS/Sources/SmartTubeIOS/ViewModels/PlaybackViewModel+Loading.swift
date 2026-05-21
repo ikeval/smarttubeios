@@ -198,6 +198,7 @@ extension PlaybackViewModel {
 
     func loadAsync(video: Video) async {
         isLoading = true
+        needsQuickStartup = true
         // Note: isLoading = false is set in the AVPlayerItem .readyToPlay observer so the
         // spinner stays visible until the first frame is actually ready. It was previously
         // cleared after player.rate was set, which dismissed the spinner before buffering

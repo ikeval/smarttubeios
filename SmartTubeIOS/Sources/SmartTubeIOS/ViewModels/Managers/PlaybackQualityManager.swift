@@ -243,14 +243,29 @@ final class PlaybackQualityManager {
         // Using playerInfo.formats guarantees the URL comes from the working client.
         let videoURL: URL?
         if let fmt = format {
-            if let infoURL = PlaybackQualityManager.selectBestVideoFormat(
+            // Diagnostic: log all video/mp4 heights available in playerInfo for this switch.
+            let infoMp4Heights = info.formats
+                .filter { $0.mimeType.hasPrefix("video/mp4") && !$0.mimeType.contains(", ") && $0.url != nil }
+                .map { "\($0.height)p" }
+                .joined(separator: ",")
+            playerLog.notice("[quality] reloadDASHItem: requested=\(fmt.height)p playerInfo mp4 heights=[\(infoMp4Heights)]")
+
+            let bestFromInfo = PlaybackQualityManager.selectBestVideoFormat(
                 from: info.formats, preferredMaxHeight: fmt.height
-            )?.url {
+            )
+            let resolvedHeight = bestFromInfo?.height ?? -1
+            playerLog.notice("[quality] reloadDASHItem: selectBestVideoFormat(maxH=\(fmt.height)) → resolvedHeight=\(resolvedHeight)p")
+
+            // Guard: selectBestVideoFormat falls back to the highest available format when
+            // no format at or below preferredMaxHeight exists. Only use the result if it
+            // actually satisfies the height constraint — otherwise fall through to the
+            // availableFormats URL path to avoid silently rebuilding at the wrong quality.
+            if let matchedFmt = bestFromInfo, matchedFmt.height <= fmt.height, let infoURL = matchedFmt.url {
                 videoURL = infoURL
-                playerLog.notice("[quality] reloadDASHItem: resolved \(fmt.height)p from playerInfo.formats")
+                playerLog.notice("[quality] reloadDASHItem: ✅ resolved \(matchedFmt.height)p from playerInfo.formats")
             } else if fmt.mimeType.hasPrefix("video/mp4") {
-                // playerInfo lacks this quality — fall back to availableFormats URL.
-                playerLog.notice("[quality] reloadDASHItem: \(fmt.height)p not in playerInfo.formats, using availableFormats URL")
+                // playerInfo lacks this quality at or below — fall back to availableFormats URL.
+                playerLog.notice("[quality] reloadDASHItem: ⚠️ \(fmt.height)p not in playerInfo ≤\(fmt.height)p (best=\(resolvedHeight)p), using availableFormats URL")
                 videoURL = fmt.url
             } else {
                 playerLog.error("[quality] reloadDASHItem: non-MP4 format (\(fmt.mimeType)) not in playerInfo.formats")

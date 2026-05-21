@@ -75,6 +75,7 @@ final class DASHQualitySwitchUITests: XCTestCase {
         app.terminate()
         app.launchArguments = [
             "--uitesting",
+            "--uitesting-reset-settings",
             "--uitesting-deeplink-video=\(videoID)",
             "--uitesting-show-controls",
             "--uitesting-disable-sponsorblock"
@@ -126,8 +127,15 @@ final class DASHQualitySwitchUITests: XCTestCase {
         }
         let enabledPred = NSPredicate(format: "enabled == true")
         let enabledExp = XCTNSPredicateExpectation(predicate: enabledPred, object: playPause)
-        guard XCTWaiter().wait(for: [enabledExp], timeout: 120) == .completed else {
-            try captureAndSkip("DASH video never became ready to play within 120 s", in: app)
+        let startupTimeout: TimeInterval = 20
+        guard XCTWaiter().wait(for: [enabledExp], timeout: startupTimeout) == .completed else {
+            captureState("video start timeout — not ready after \(Int(startupTimeout))s", in: app)
+            XCTFail(
+                "DASH video did not become ready to play within \(Int(startupTimeout)) s — " +
+                "startup too slow. exhaustiveRetry must complete a working stream in " +
+                "\(Int(startupTimeout)) s. Check device log for slow client phases."
+            )
+            return
         }
         UITestHelpers.assertNoPlayerErrorBanner(in: app, videoTitle: "DASH quality cycle")
 
@@ -137,6 +145,17 @@ final class DASHQualitySwitchUITests: XCTestCase {
 
         let baseline = currentResolutionLabel() ?? "nil"
         captureState("baseline — resolution: \(baseline)", in: app)
+
+        // Assertion: Auto quality must start at ≥ 360p (not muxed 144p fallback).
+        let baselineResHeight = resolutionHeight(from: baseline)
+        XCTAssertGreaterThanOrEqual(
+            baselineResHeight, 360,
+            "Auto quality started at '\(baseline)' (\(baselineResHeight)p) — " +
+            "initial resolution is below the minimum of 360p. " +
+            "exhaustiveRetry fell all the way to the muxed 144p fallback, meaning " +
+            "all adaptive DASH clients (TVAuth, TVEmbedded, iOS, Android, AndroidVR, WebCreator) failed. " +
+            "Check device log for exhaustiveRetry phase errors."
+        )
 
         // ── Step 2.5: Assert quality picker has adaptive options ──────────────
         // Fail immediately when the picker shows only 360p (and/or Auto).
@@ -152,6 +171,8 @@ final class DASHQualitySwitchUITests: XCTestCase {
 
         for quality in steps {
             showControls()
+            // Record playback position before the switch so we can verify it is preserved.
+            let timeBefore = readCurrentTimeSeconds()
             let found = switchQualityIfAvailable(quality)
             guard found else {
                 XCTContext.runActivity(named: "skip \(quality): not in picker") { _ in
@@ -188,6 +209,26 @@ final class DASHQualitySwitchUITests: XCTestCase {
                 "Check device log for '❌ [quality/DASH]' lines near this step."
             )
             UITestHelpers.assertNoPlayerErrorBanner(in: app)
+
+            // Assertion 3: playback position preserved within ±5 s after quality switch.
+            // rebuildCompositionForQuality captures currentTime before rebuilding and seeks
+            // back to it — this assertion catches regressions where seekTo is 0 or ignored.
+            // We use a one-sided check: timeAfter must not be more than 5 s BEFORE timeBefore
+            // (video must not go back to the start). timeAfter is allowed to be larger than
+            // timeBefore because test overhead (assertions, showControls) takes several seconds.
+            if timeBefore >= 0 && resChanged {
+                showControls()
+                let timeAfter = readCurrentTimeSeconds()
+                if timeAfter >= 0 {
+                    XCTAssertGreaterThanOrEqual(
+                        timeAfter, timeBefore - 5.0,
+                        "After quality switch to \(quality), playback position went from " +
+                        "\(Int(timeBefore))s back to \(Int(timeAfter))s — " +
+                        "video rewound by more than 5s (likely reset to beginning). " +
+                        "Check rebuildCompositionForQuality seekTo handling."
+                    )
+                }
+            }
         }
     }
 
@@ -348,6 +389,29 @@ final class DASHQualitySwitchUITests: XCTestCase {
         let dismissedPred = NSPredicate(format: "exists == false")
         let dismissExp = XCTNSPredicateExpectation(predicate: dismissedPred, object: option)
         _ = XCTWaiter().wait(for: [dismissExp], timeout: 5)
+    }
+
+    /// Returns the height component from a resolution label like "1280×720 @ 60 fps" → 720.
+    /// Returns 0 when the label cannot be parsed (e.g. "nil", empty string).
+    private func resolutionHeight(from label: String) -> Int {
+        guard let crossRange = label.range(of: Self.cross) else { return 0 }
+        let afterCross = String(label[crossRange.upperBound...])
+        let heightStr = afterCross.prefix(while: { $0.isNumber })
+        return Int(heightStr) ?? 0
+    }
+
+    /// Reads `player.currentTimeLabel` (e.g. "1:23") as a `TimeInterval` in seconds.
+    /// The caller must ensure player controls are already visible.
+    /// Returns -1 when the label is absent or cannot be parsed.
+    private func readCurrentTimeSeconds() -> TimeInterval {
+        let lbl = app.staticTexts["player.currentTimeLabel"].firstMatch
+        guard lbl.exists else { return -1 }
+        let parts = lbl.label.split(separator: ":").compactMap { Int($0) }
+        switch parts.count {
+        case 2: return TimeInterval(parts[0] * 60 + parts[1])
+        case 3: return TimeInterval(parts[0] * 3600 + parts[1] * 60 + parts[2])
+        default: return -1
+        }
     }
 }
 

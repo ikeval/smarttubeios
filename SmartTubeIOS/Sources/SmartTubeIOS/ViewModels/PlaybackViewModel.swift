@@ -32,6 +32,12 @@ public final class PlaybackViewModel {
 
     public internal(set) var playerInfo: PlayerInfo?
     public internal(set) var isLoading: Bool = false
+    /// True only during the initial load sequence (before first readyToPlay).
+    /// The 8s loadTracks timeout in attemptComposition is applied only while this
+    /// flag is set, giving fast startup (≤20 s) for the initial stream.
+    /// After first playback begins the flag is cleared, so quality-switch
+    /// reloads can wait the full CDN time without being cut short.
+    var needsQuickStartup: Bool = false
     public internal(set) var isPlaying: Bool = false
     public internal(set) var currentTime: TimeInterval = 0
     public internal(set) var duration: TimeInterval = 0
