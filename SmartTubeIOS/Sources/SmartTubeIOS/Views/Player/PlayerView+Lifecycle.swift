@@ -623,6 +623,13 @@ extension PlayerView {
             pipDelegate = delegate
             pipController = pip
         }
+        // When PiP ends (user returns to app), release the stale controller so the
+        // next background exit creates a fresh one attached to the current playerLayer.
+        .onChange(of: isPiPActive) { wasActive, isActive in
+            guard wasActive, !isActive else { return }
+            pipController = nil
+            pipDelegate = nil
+        }
         // Update isLandscape when the device physically rotates.
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             let orientation = UIDevice.current.orientation
