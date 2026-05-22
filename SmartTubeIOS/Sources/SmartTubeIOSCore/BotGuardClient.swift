@@ -107,33 +107,51 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
             throw BotGuardError.challengeFailed("HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
         }
 
+        // Log raw response for parse debugging (truncated to 300 chars)
+        let rawPreview = String(data: data, encoding: .utf8).map { String($0.prefix(300)) } ?? "<binary>"
+        bgLog.notice("[BotGuard] WAA Create raw response (first 300): \(rawPreview, privacy: .public)")
+
         // Response: [requestKey, [messageId?, interpreterHash, interpreterURL_or_JS, program, globalName, ...]]
-        // Some YouTube builds wrap the inner array an additional level: [requestKey, [[...]]]
+        // Some YouTube builds wrap the inner array: [requestKey, [[inner...]]].
+        // Since Swift casts [[Any]] as [Any] successfully, we must check element count
+        // to distinguish the direct layout (≥5 string elements) from the nested layout
+        // (1 element that is itself the [messageId, hash, url, program, globalName] array).
         guard let outer = try? JSONSerialization.jsonObject(with: data) as? [Any],
               outer.count >= 2 else {
             throw BotGuardError.challengeParseError("outer array missing")
         }
         let inner: [Any]
-        if let directInner = outer[1] as? [Any] {
-            inner = directInner
-        } else if let nestedOuter = outer[1] as? [[Any]], let first = nestedOuter.first {
-            inner = first
+        if let candidate = outer[1] as? [Any] {
+            bgLog.notice("[BotGuard] outer[1] count=\(candidate.count) firstIsArray=\(candidate.first is [Any])")
+            if candidate.count >= 5 {
+                inner = candidate
+            } else if let nested = candidate.first as? [Any], nested.count >= 4 {
+                inner = nested
+            } else if let nested = candidate.first as? [Any] {
+                bgLog.notice("[BotGuard] nested inner count=\(nested.count) — too short")
+                throw BotGuardError.challengeParseError("inner array too short (\(nested.count))")
+            } else {
+                bgLog.notice("[BotGuard] candidate.count=\(candidate.count) and first is not [Any]")
+                throw BotGuardError.challengeParseError("inner array too short (\(candidate.count))")
+            }
         } else {
+            bgLog.notice("[BotGuard] outer[1] is not [Any]")
             throw BotGuardError.challengeParseError("inner array missing at outer[1]")
         }
 
         // inner layout (BgUtils parseChallengeData):
-        // [0] = messageId (optional string)
-        // [1] = interpreterHash (string)
-        // [2] = interpreter URL (// prefixed) or inline JS (string)
-        // [3] = program (string – BotGuard bytecode)
-        // [4] = globalName (string – VM identifier in the interpreter global scope)
-        guard inner.count >= 5 else {
-            throw BotGuardError.challengeParseError("inner array too short (\(inner.count))")
-        }
+        // [0] = messageId (optional string — omitted in some YouTube builds)
+        // When 5+ elements: [msgId, hash, url, program, globalName]
+        // When 4 elements:  [hash, url, program, globalName]  (no messageId)
+        let hasMessageId = inner.count >= 5
+        let hashIdx    = hasMessageId ? 1 : 0
+        let urlIdx     = hasMessageId ? 2 : 1
+        let programIdx = hasMessageId ? 3 : 2
+        let nameIdx    = hasMessageId ? 4 : 3
+        bgLog.notice("[BotGuard] inner count=\(inner.count) hasMessageId=\(hasMessageId)")
 
         var interpreterJS = ""
-        if let raw = inner[2] as? String, !raw.isEmpty {
+        if let raw = inner[urlIdx] as? String, !raw.isEmpty {
             let urlStr = raw.hasPrefix("//") ? "https:\(raw)" : raw
             if let jsURL = URL(string: urlStr), jsURL.scheme != nil, jsURL.host != nil {
                 // Fetch interpreter script from URL
@@ -148,10 +166,10 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         guard !interpreterJS.isEmpty else {
             throw BotGuardError.challengeParseError("interpreter JS empty")
         }
-        guard let program = inner[3] as? String, !program.isEmpty else {
+        guard let program = inner[programIdx] as? String, !program.isEmpty else {
             throw BotGuardError.challengeParseError("program empty")
         }
-        guard let globalName = inner[4] as? String, !globalName.isEmpty else {
+        guard let globalName = inner[nameIdx] as? String, !globalName.isEmpty else {
             throw BotGuardError.challengeParseError("globalName empty")
         }
 
@@ -195,7 +213,8 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         let noopFn   = JSValue(object: { } as @convention(block) () -> Void, in: ctx)!
         let initPair = ctx.evaluateScript("[[],[]]")!
 
-        let vmCallResult = vm.objectForKeyedSubscript("a")?.call(withArguments: [
+        // invokeMethod sets this=vm, required by the real BotGuard VM's internal methods.
+        let vmCallResult = vm.invokeMethod("a", withArguments: [
             challenge.program,
             JSValue(object: vmFnCallback, in: ctx)!,
             NSNumber(value: true),
@@ -405,43 +424,56 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         for _ in 0..<count { ctx.evaluateScript("undefined") }
     }
 
-    /// Resolves a JS Promise synchronously by installing `then`/`catch` callbacks and
-    /// pumping the JSC microtask queue. Returns `promise` directly if it is not thenable.
+    /// Resolves a JS Promise synchronously using a pure-JS then-handler that writes
+    /// the settled value to a context global (`__bgR`), then reads it back in Swift.
     ///
-    /// Safe to call on `jsQueue` (real OS thread). The microtask pump is `evaluateScript`
-    /// which lets JSC drain its queue each time we re-enter the JS engine.
-    private func resolvePromise(_ promise: JSValue, in ctx: JSContext, label: String, maxPumps: Int = 50) throws -> JSValue {
-        guard let thenFn = promise.objectForKeyedSubscript("then"), thenFn.isObject else {
-            return promise   // Not a thenable — mirrors JS `await nonPromise` behaviour
+    /// Avoids crossing the JS→Swift callback boundary during microtask draining
+    /// (Swift `@convention(block)` callbacks from within JSC microtasks can be unreliable
+    /// when microtask draining occurs re-entrantly inside `JSObjectCallAsFunction`).
+    ///
+    /// The `__bgR` global is single-use and deleted after reading; safe because jsQueue is serial.
+    /// Returns `promise` directly if it is not thenable (mirrors `await nonPromise` in JS).
+    private func resolvePromise(_ promise: JSValue, in ctx: JSContext, label: String, maxPumps: Int = 20) throws -> JSValue {
+        guard promise.objectForKeyedSubscript("then")?.isObject == true else {
+            return promise
         }
 
-        var resolved: JSValue?
-        var rejection: String?
-        let sema = DispatchSemaphore(value: 0)
+        // Store the promise in a JS global so the IIFE can access it by name.
+        ctx.setObject(promise, forKeyedSubscript: "__bgP" as NSString)
 
-        let onFulfilled: @convention(block) (JSValue) -> Void = { val in
-            resolved = val; sema.signal()
+        // The IIFE calls p.then(handler) as a method (this=p, correct binding).
+        // JSEvaluateScript calls vm.drainMicrotasks() after the IIFE returns, which
+        // executes the queued then-callback and sets __bgR before returning to Swift.
+        ctx.evaluateScript("""
+        (function() {
+            var p = globalThis.__bgP;
+            delete globalThis.__bgP;
+            p.then(
+                function(v) { globalThis.__bgR = { ok: 1, v: v }; },
+                function(e) { globalThis.__bgR = { ok: 0, e: String(e) }; }
+            );
+        })();
+        """)
+        if let exc = ctx.exception {
+            throw BotGuardError.jsFailed("resolvePromise '\(label)' setup: \(exc)")
         }
-        let onRejected: @convention(block) (JSValue) -> Void = { err in
-            rejection = err.toString(); sema.signal()
-        }
 
-        thenFn.call(withArguments: [
-            JSValue(object: onFulfilled, in: ctx)!,
-            JSValue(object: onRejected, in: ctx)!
-        ])
-
-        // Pump microtasks until the Promise settles (or we time out).
+        // Read result — usually set during the evaluateScript above; pump more if needed
+        // (e.g. multi-hop Promise chains that require additional microtask turns).
         for _ in 0..<maxPumps {
-            ctx.evaluateScript("undefined")         // drain microtask queue
-            if sema.wait(timeout: .now()) == .success { break }
+            if let r = ctx.evaluateScript("globalThis.__bgR"),
+               !r.isNull, !r.isUndefined {
+                ctx.evaluateScript("delete globalThis.__bgR")
+                if r.objectForKeyedSubscript("ok")?.toInt32() == 1 {
+                    return r.objectForKeyedSubscript("v") ?? JSValue(undefinedIn: ctx)!
+                } else {
+                    let err = r.objectForKeyedSubscript("e")?.toString() ?? "rejected"
+                    throw BotGuardError.jsFailed("Promise '\(label)' rejected: \(err)")
+                }
+            }
+            ctx.evaluateScript("undefined")   // additional microtask drain
         }
 
-        guard sema.wait(timeout: .now() + .milliseconds(200)) == .success else {
-            throw BotGuardError.jsFailed("Promise '\(label)' did not settle after \(maxPumps) microtask pumps")
-        }
-
-        if let reason = rejection { throw BotGuardError.jsFailed("Promise '\(label)' rejected: \(reason)") }
-        return resolved ?? JSValue(undefinedIn: ctx)!
+        throw BotGuardError.jsFailed("Promise '\(label)' did not settle after \(maxPumps) pumps")
     }
 }

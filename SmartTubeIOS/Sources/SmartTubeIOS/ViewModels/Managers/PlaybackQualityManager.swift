@@ -409,9 +409,16 @@ final class PlaybackQualityManager {
     /// Returns `true` when `url` contains `rqh=1`, indicating YouTube CDN Proof-of-Origin
     /// enforcement. Without a PO token, the CDN holds the TCP connection open indefinitely
     /// instead of rejecting the request — `AVURLAsset.loadTracks` hangs forever on these.
+    ///
+    /// Returns `false` when `pot=` is already present — a valid PO token satisfies the
+    /// rqh=1 enforcement, so the DASH rebuild is safe to proceed.
     static func urlHasRqhEnforcement(_ url: URL) -> Bool {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.contains(where: { $0.name == "rqh" && $0.value == "1" }) == true
+        guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
+            return false
+        }
+        let hasRqh = items.contains(where: { $0.name == "rqh" && $0.value == "1" })
+        let hasPot = items.contains(where: { $0.name == "pot" })
+        return hasRqh && !hasPot
     }
 
     static let bitRateCaps: [Int: Double] = [

@@ -15,10 +15,13 @@ extension InnerTubeAPI {
     public func fetchPlayerInfo(videoId: String) async throws -> PlayerInfo {
         // Refresh poToken if a provider is configured and the current token doesn't cover this videoId.
         if let provider = poTokenProvider, poToken == nil || poTokenVideoId != videoId {
-            if let token = try? await provider.token(for: videoId) {
+            do {
+                let token = try await provider.token(for: videoId)
                 poToken = token
                 poTokenVideoId = videoId
                 poTokenExpiry = Date().addingTimeInterval(6 * 3600)
+            } catch {
+                tubeLog.error("[InnerTube] ⚠️ poToken fetch failed for \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
         var body = makeBody(client: iosClientContext, includePoToken: true)
@@ -29,6 +32,7 @@ extension InnerTubeAPI {
         var info = try parsePlayerInfo(from: data, videoId: videoId)
         // Append &pot= to CDN URLs if we have a valid token.
         if let pot = poToken, poTokenVideoId == videoId {
+            tubeLog.notice("[InnerTube] ✅ poToken applied to \(videoId, privacy: .public) via iOS client (len=\(pot.count))")
             info = info.applyingPoToken(pot)
         }
         return info
@@ -62,6 +66,7 @@ extension InnerTubeAPI {
         // PO tokens are not client-specific — a token fetched for the iOS client
         // is valid for Android-signed CDN URLs (rqh=1) as well.
         if let pot = poToken, poTokenVideoId == videoId {
+            tubeLog.notice("[InnerTube] ✅ poToken applied to \(videoId, privacy: .public) via Android client (len=\(pot.count))")
             info = info.applyingPoToken(pot)
         }
         return info
@@ -136,6 +141,7 @@ extension InnerTubeAPI {
         let data = try await postPlayerAuthenticated(body: body)
         var info = try parsePlayerInfo(from: data, videoId: videoId)
         if let pot = poToken, poTokenVideoId == videoId {
+            tubeLog.notice("[InnerTube] ✅ poToken applied to \(videoId, privacy: .public) via iOS-auth client (len=\(pot.count))")
             info = info.applyingPoToken(pot)
         }
         return info
