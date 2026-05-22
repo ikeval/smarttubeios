@@ -428,15 +428,11 @@ extension InnerTubeAPI {
         request.setValue(InnerTubeClients.MWEB.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(InnerTubeClients.MWEB.nameID, forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(InnerTubeClients.MWEB.version, forHTTPHeaderField: "X-YouTube-Client-Version")
-        // Include auth when logged in — same as the TV auth path that makes YouTube
-        // return streamingData instead of "The page needs to be reloaded".
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        // Note: www.youtube.com uses cookie-based auth, not Bearer tokens.
+        // Sending Authorization: Bearer causes HTTP 400. Auth is omitted here.
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let videoId = body["videoId"] as? String ?? ""
-        let isAuth = authToken != nil
-        tubeLog.notice("POST /player [MWEB] auth=\(isAuth, privacy: .public) videoId=\(videoId, privacy: .public)")
+        tubeLog.notice("POST /player [MWEB] videoId=\(videoId, privacy: .public)")
         let (data, response) = try await session.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

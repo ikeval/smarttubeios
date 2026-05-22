@@ -278,6 +278,12 @@ extension PlaybackViewModel {
                 playerLog.notice("[\(label)] Skipping SABR muxed URL (c=TVHTML5) — not a playable MP4")
             } else {
                 playerLog.notice("[\(label)] Trying muxed")
+                let muxedItag = muxedURL.absoluteString
+                    .components(separatedBy: "&")
+                    .first(where: { $0.contains("itag=") })
+                    .flatMap { $0.components(separatedBy: "=").last } ?? "?"
+                let muxedBitrate = info.formats.first(where: { $0.url == muxedURL })?.bitrate.map { "\($0/1000)kbps" } ?? "?"
+                playerLog.notice("[\(label)] muxed candidate: itag=\(muxedItag) bitrate=\(muxedBitrate) url=\(muxedURL.absoluteString.prefix(100))")
                 if await attemptURL(muxedURL, for: video, info: info, label: "\(label)/muxed") { return true }
                 playerLog.notice("[\(label)] Muxed failed — no more alternatives for this client")
             }
@@ -423,11 +429,39 @@ extension PlaybackViewModel {
         let audioItag = URLComponents(url: audioURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
         let videoRqh = videoURL.absoluteString.contains("rqh=1")
-        playerLog.notice("[\(label)/adaptive] videoItag=\(videoItag) rqh=\(videoRqh) audioItag=\(audioItag)")
-        // TEMP: skip rqh=1 streams entirely — don't even attempt loadTracks to
-        // avoid the ~8s CFNetwork SSL hang that blocks the whole fallback chain.
-        if videoRqh {
-            playerLog.notice("[\(label)/adaptive] skipping rqh=1 stream (temp)")
+
+        // Detect which InnerTube client signed this URL via the `c=` query parameter.
+        // TVHTML5, ANDROID_VR, and WEB_CREATOR are rqh-exempt per yt-dlp research — the CDN
+        // does not enforce Proof-of-Origin for these clients even when rqh=1 is present.
+        // The caller can also pass isRqhFreeClient=true to override the URL-based check
+        // (used by WebCreator and other clients marked exempt in the fallback chain).
+        // iOS, Android, and MWEB are NOT exempt and will cause SSL errors without pot=.
+        let clientParam = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "c" })?.value?.uppercased() ?? ""
+        let isRqhExemptClient = isRqhFreeClient
+            || clientParam == "TVHTML5"
+            || clientParam == "ANDROID_VR"
+            || clientParam == "WEB_CREATOR"
+
+        // Use the UA that matches the client that signed the URL.
+        // The CDN checks the User-Agent against the signing client identity.
+        let ua: String
+        switch clientParam {
+        case "ANDROID_VR": ua = InnerTubeClients.AndroidVR.userAgent
+        case "ANDROID":    ua = InnerTubeClients.Android.userAgent
+        case "TVHTML5":    ua = InnerTubeClients.TV.userAgent
+        case "MWEB":       ua = InnerTubeClients.MWEB.userAgent
+        default:           ua = InnerTubeClients.iOS.userAgent
+        }
+
+        playerLog.notice("[\(label)/adaptive] videoItag=\(videoItag) rqh=\(videoRqh) client=\(clientParam) exempt=\(isRqhExemptClient) audioItag=\(audioItag)")
+
+        // Skip rqh=1 streams for non-exempt clients — without a pot= token these cause
+        // SSL-level errors (errSSLRecordOverflow) that stall CFNetwork for ~8 seconds.
+        // Exempt clients (TVHTML5, ANDROID_VR) are allowed through — the CDN accepts
+        // their requests without a PO token even when rqh=1 appears in the URL.
+        if videoRqh && !isRqhExemptClient {
+            playerLog.notice("[\(label)/adaptive] skipping rqh=1 — client \(clientParam.isEmpty ? "unknown" : clientParam) is not exempt from PO-token enforcement")
             return false
         }
 
@@ -443,7 +477,6 @@ extension PlaybackViewModel {
         availableCaptions = info.captionTracks
         autoApplyCaptionPreference(tracks: info.captionTracks)
 
-        let ua = InnerTubeClients.iOS.userAgent
         let videoAsset = AVURLAsset(url: videoURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
         let audioAsset = AVURLAsset(url: audioURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": ua]])
 
@@ -481,20 +514,6 @@ extension PlaybackViewModel {
                     }()
                     raceCont.yield(box)
                     raceCont.finish()
-                }
-                // Apply the 8-second timeout during initial load so that slow/hung CDN
-                // responses don't stall the entire fallback chain. All clients — including
-                // rqh-free ones (Android VR, WebCreator) — benefit from this cap: legitimate
-                // adaptive streams load well under 8 s, and hung connections (bot-detect,
-                // login-required, slow CDN) are cut off before the 20 s test startup window
-                // is exceeded. Quality-switch retries (needsQuickStartup=false) skip this.
-                // TEMP DISABLED: timeout removed to allow rqh=1 streams more time to resolve.
-                if false && needsQuickStartup {
-                    Task.detached {
-                        try? await Task.sleep(for: .seconds(8))
-                        raceCont.yield(nil)
-                        raceCont.finish()
-                    }
                 }
 
                 if let firstOrNil = await raceStream.first(where: { @Sendable _ in true }),

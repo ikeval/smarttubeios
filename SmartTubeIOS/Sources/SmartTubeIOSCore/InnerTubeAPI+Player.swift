@@ -418,6 +418,16 @@ extension InnerTubeAPI {
 
         if let f = streamingData?["formats"] as? [[String: Any]] {
             formats += parseFormats(f)
+            // Log every muxed (video+audio) format so we can diagnose why only 360p plays.
+            let muxedSummary = f.compactMap { entry -> String? in
+                guard let itag = entry["itag"] as? Int else { return nil }
+                let q = entry["qualityLabel"] as? String ?? entry["quality"] as? String ?? "?"
+                let br = (entry["bitrate"] as? Int).map { "\($0 / 1000)kbps" } ?? "?"
+                let hasURL = entry["url"] is String ? "url=yes" : "url=no"
+                return "itag=\(itag) \(q) \(br) \(hasURL)"
+            }.joined(separator: "; ")
+            let muxedDisplay = muxedSummary.isEmpty ? "none" : muxedSummary
+            tubeLog.notice("muxedFormats for \(videoId, privacy: .public): [\(muxedDisplay, privacy: .public)]")
         }
         if let f = streamingData?["adaptiveFormats"] as? [[String: Any]] {
             formats += parseFormats(f)
