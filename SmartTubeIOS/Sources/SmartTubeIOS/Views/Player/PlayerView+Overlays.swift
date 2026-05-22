@@ -361,31 +361,7 @@ extension PlayerView {
     }
 
     @ViewBuilder private var moreMenuQualityRow: some View {
-        if !vm.availableFormats.isEmpty && !vm.isAudioOnlyMode {
-            Button {
-                menuLog.notice("[moreMenu] Quality row tapped — closing moreMenu, opening qualityPicker")
-                showMoreMenu = false
-                showQualityPicker = true
-            } label: {
-                HStack {
-                    Label("Quality", systemImage: "4k.tv")
-                    Spacer()
-                    Text(vm.selectedFormat?.qualityLabel ?? "Auto")
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.primary)
-            .accessibilityIdentifier("player.moreMenu.qualityRow")
-            #if os(tvOS)
-            .background(moreMenuFocusedRow == .quality ? Color.gray.opacity(0.35) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .focused($moreMenuFocusedRow, equals: .quality)
-            #endif
-            Divider()
-        }
+        EmptyView()
     }
 
     @ViewBuilder private var moreMenuLikeDislikeRow: some View {

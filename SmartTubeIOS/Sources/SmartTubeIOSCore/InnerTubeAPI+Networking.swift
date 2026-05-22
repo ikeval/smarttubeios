@@ -410,6 +410,52 @@ extension InnerTubeAPI {
         return json
     }
 
+    /// MWEB (m.youtube.com, iPad Safari, nameID=2) player request on www.youtube.com.
+    /// Uses the mobile web client which per yt-dlp does not require a PO Token for HLS
+    /// (`required=False`) and has no embed restriction — returns `hlsManifestUrl` for a
+    /// wider set of videos than WEB_EMBEDDED_PLAYER.
+    func postMWEB(body: [String: Any]) async throws -> [String: Any] {
+        guard var comps = URLComponents(url: baseURL.appendingPathComponent("player"),
+                                        resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL("player")
+        }
+        comps.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        guard let url = comps.url else { throw APIError.invalidURL("player") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
+        request.setValue(InnerTubeClients.MWEB.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(InnerTubeClients.MWEB.nameID, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(InnerTubeClients.MWEB.version, forHTTPHeaderField: "X-YouTube-Client-Version")
+        // Include auth when logged in — same as the TV auth path that makes YouTube
+        // return streamingData instead of "The page needs to be reloaded".
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let videoId = body["videoId"] as? String ?? ""
+        let isAuth = authToken != nil
+        tubeLog.notice("POST /player [MWEB] auth=\(isAuth, privacy: .public) videoId=\(videoId, privacy: .public)")
+        let (data, response) = try await session.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            tubeLog.error("❌ HTTP \(statusCode, privacy: .public) for /player [MWEB]")
+            throw APIError.httpError(statusCode)
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            tubeLog.error("❌ Non-dictionary JSON root for /player [MWEB]")
+            throw APIError.decodingError("Root JSON is not a dictionary")
+        }
+        if let error = json["error"] as? [String: Any] {
+            tubeLog.error("❌ API error in /player [MWEB]: \(String(describing: error["message"] ?? error), privacy: .public)")
+        } else {
+            let topKeys = Array(json.keys.prefix(6))
+            tubeLog.notice("✅ /player [MWEB] HTTP \(statusCode, privacy: .public) keys: \(topKeys, privacy: .public)")
+        }
+        return json
+    }
+
     /// Unauthenticated TVHTML5 browse on www.youtube.com.
     /// FE* category browse IDs (FEgaming, FEshorts, FEmusic, …) require the TVHTML5
     /// client format but return 400 on youtubei.googleapis.com without a valid auth token.

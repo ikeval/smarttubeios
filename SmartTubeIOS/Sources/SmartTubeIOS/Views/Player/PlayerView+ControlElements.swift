@@ -691,17 +691,6 @@ extension PlayerControlsOverlay {
                 accessibilityId: "player.quickAccess.speed"
             ) { showSpeedPicker = true }
 
-            if !vm.availableFormats.isEmpty && !vm.isAudioOnlyMode {
-                quickAccessButton(
-                    systemImage: "4k.tv",
-                    label: qualityLabel,
-                    accessibilityId: "player.quickAccess.quality"
-                ) {
-                    controlsLog.notice("[quickAccess] quality tapped — current=\(qualityLabel)")
-                    showQualityPicker = true
-                }
-            }
-
             if vm.availableAudioTracks.count > 1 {
                 quickAccessButton(
                     systemImage: "waveform",

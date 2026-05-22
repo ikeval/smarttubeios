@@ -173,8 +173,15 @@ final class PlaybackQualityManager {
             return
         }
         guard !Task.isCancelled else { return }
+        // WEB_EMBEDDED_PLAYER manifests expect a browser context.
+        // Origin + Referer match the embedUrl used in fetchPlayerInfoTVEmbedded,
+        // which may unlock higher-quality HLS variants from YouTube's CDN.
         let uaOpts: [String: Any] = [
-            "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": InnerTubeClients.iOS.userAgent]
+            "AVURLAssetHTTPHeaderFieldsKey": [
+                "User-Agent": InnerTubeClients.Web.userAgent,
+                "Origin": "https://www.youtube.com",
+                "Referer": "https://www.youtube.com/"
+            ]
         ]
         // Always use the master HLS URL so EXT-X-MEDIA alternate audio renditions are
         // preserved after a quality switch. YouTube variant playlists at 480p+ are
@@ -198,7 +205,10 @@ final class PlaybackQualityManager {
             item.preferredPeakBitRate = peakBR
             playerLog.notice("Quality → \(cap)p via HLS master + ABR hints (maxRes=\(Int(h * 4))x\(cap) peakBR=\(Int(peakBR / 1_000_000))Mbps)")
         } else {
-            playerLog.notice("Quality → Auto via HLS master (hints cleared)")
+            // Auto: remove all constraints so AVPlayer's ABR runs unconstrained.
+            item.preferredMaximumResolution = .zero
+            item.preferredPeakBitRate = 0
+            playerLog.notice("Quality → Auto via HLS master (ABR unconstrained: .zero / 0)")
         }
         itemObserverTask = Task { [weak self] in
             for await status in item.statusStream {
@@ -445,7 +455,11 @@ final class PlaybackQualityManager {
         guard let hlsURL = delegate?.playerInfo?.hlsURL else { return }
         guard !Task.isCancelled else { return }
         let uaOpts: [String: Any] = [
-            "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": InnerTubeClients.iOS.userAgent]
+            "AVURLAssetHTTPHeaderFieldsKey": [
+                "User-Agent": InnerTubeClients.Web.userAgent,
+                "Origin": "https://www.youtube.com",
+                "Referer": "https://www.youtube.com/"
+            ]
         ]
         let asset = AVURLAsset(url: hlsURL, options: uaOpts)
         let item = AVPlayerItem(asset: asset)

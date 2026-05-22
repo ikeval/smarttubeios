@@ -69,6 +69,19 @@ package enum InnerTubeClients {
         package static let version = "1.20260115.01.00"
     }
 
+    /// Mobile web client (YouTube m.youtube.com, iPad Safari).
+    /// Per yt-dlp research, MWEB does NOT require a PO Token for HLS streams
+    /// (`required=False, recommended=True`). Unlike WEB_EMBEDDED_PLAYER it has no
+    /// embedding restriction, so it may return `hlsManifestUrl` for videos that
+    /// TVEmbedded cannot serve (embedding disabled). Also returns "ultralow" HLS
+    /// variants for data-saver contexts alongside standard 360p–1080p tiers.
+    package enum MWEB {
+        package static let name      = "MWEB"
+        package static let nameID    = "2"
+        package static let version   = "2.20260115.01.00"
+        package static let userAgent = "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)"
+    }
+
     /// YouTube Studio (creator) web client. Per yt-dlp research, this client is exempt
     /// from Proof-of-Origin (rqh=1) CDN enforcement on adaptive streams, unlike the
     /// standard WEB (1), iOS (5), or Android (3) clients. Its adaptive stream URLs can

@@ -90,6 +90,31 @@ extension InnerTubeAPI {
         return try parsePlayerInfo(from: data, videoId: videoId)
     }
 
+    /// Fetches player info using the MWEB (m.youtube.com, iPad Safari) client.
+    /// Per yt-dlp, MWEB does not require a PO Token for HLS (`required=False`) and has
+    /// no embedding restriction — it may return `hlsManifestUrl` for videos that
+    /// WEB_EMBEDDED_PLAYER cannot serve (e.g. embedding-disabled content).
+    /// Mirrors the TVAuth request pattern: injects html5Preference + signatureTimestamp +
+    /// visitorData + Bearer auth so YouTube returns `streamingData` rather than
+    /// "The page needs to be reloaded" (the same fix that unlocked the TV auth client).
+    public func fetchPlayerInfoMWEB(videoId: String) async throws -> PlayerInfo {
+        var clientFields = (mwebClientContext["client"] as? [String: Any]) ?? [:]
+        if let vd = visitorData { clientFields["visitorData"] = vd }
+
+        let sts = await fetchSignatureTimestampIfNeeded()
+        var cpbc: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
+        if let sts { cpbc["signatureTimestamp"] = sts }
+
+        var body = makeBody(client: ["client": clientFields])
+        body["videoId"] = videoId
+        body["racyCheckOk"] = true
+        body["contentCheckOk"] = true
+        body["playbackContext"] = ["contentPlaybackContext": cpbc]
+
+        let data = try await postMWEB(body: body)
+        return try parsePlayerInfo(from: data, videoId: videoId)
+    }
+
     /// Fetches player info using the WEB_CREATOR (YouTube Studio) client.
     /// Per yt-dlp documentation, this client is exempt from rqh=1 CDN enforcement on
     /// adaptive streams — the returned video/audio URLs do NOT require a pot= token.

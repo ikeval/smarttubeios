@@ -73,6 +73,23 @@ extension PlaybackViewModel {
 
             guard !Task.isCancelled else { return }
 
+            // --- MWEB client (HLS, no embed restriction) ---
+            // The mobile web client (m.youtube.com, iPad Safari UA, nameID=2) is not
+            // subject to the embedding restriction that gates WEB_EMBEDDED_PLAYER.
+            // Per yt-dlp, MWEB does not require a PO Token for HLS (required=False) and
+            // may return `hlsManifestUrl` for videos TVEmbedded cannot serve.
+            do {
+                let mwebInfo = try await api.fetchPlayerInfoMWEB(videoId: video.id)
+                if await tryAllStreams(video: video, info: mwebInfo,
+                                      label: "MWEB[\(attempt)]", skipMuxed: true) {
+                    return
+                }
+            } catch {
+                playerLog.error("MWEB client fetch failed (attempt \(attempt)): \(error)")
+            }
+
+            guard !Task.isCancelled else { return }
+
             // --- iOS client (fresh network fetch) ---
             // When logged in, use the authenticated iOS client. Auth tokens cause YouTube
             // to return adaptive stream URLs without rqh=1 CDN enforcement, enabling
@@ -327,7 +344,14 @@ extension PlaybackViewModel {
         // so use the browser UA; muxed/adaptive URLs are signed by the iOS client.
         let isHLSManifest = label.contains("/HLS")
         let hlsUA = isHLSManifest ? InnerTubeClients.Web.userAgent : InnerTubeClients.iOS.userAgent
-        let uaOpts: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": hlsUA]]
+        // For HLS manifests from WEB_EMBEDDED_PLAYER, send Origin + Referer so the CDN
+        // treats the request as a legitimate browser embed — may unlock higher-quality variants.
+        var hlsHeaders: [String: String] = ["User-Agent": hlsUA]
+        if isHLSManifest {
+            hlsHeaders["Origin"] = "https://www.youtube.com"
+            hlsHeaders["Referer"] = "https://www.youtube.com/"
+        }
+        let uaOpts: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": hlsHeaders]
         let asset = AVURLAsset(url: effectiveURL, options: uaOpts)
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .spectral
@@ -339,17 +363,16 @@ extension PlaybackViewModel {
             item?.preferredForwardBufferDuration = 0
         }
         if applyHLSHints {
-            let maxH: Int
-            if settings.preferredQuality != .auto, let h = settings.preferredQuality.maxHeight {
-                maxH = h
+            if settings.preferredQuality != .auto, let maxH = settings.preferredQuality.maxHeight {
+                item.preferredMaximumResolution = CGSize(width: CGFloat(maxH) * 4, height: CGFloat(maxH))
+                item.preferredPeakBitRate = peakBitRate(for: maxH)
+                playerLog.notice("[\(label)] HLS ABR hints: maxH=\(maxH)p peakBitRate=\(peakBitRate(for: maxH) / 1_000_000)Mbps (master URL preserved)")
             } else {
-                // Auto: steer ABR toward the display's native resolution so the player
-                // never fetches variants it cannot render.
-                maxH = Self.displayMaxVideoHeight()
+                // Auto: remove all constraints so AVPlayer picks the best available variant.
+                item.preferredMaximumResolution = .zero
+                item.preferredPeakBitRate = 0
+                playerLog.notice("[\(label)] HLS ABR hints cleared (Auto quality, unconstrained)")
             }
-            item.preferredMaximumResolution = CGSize(width: CGFloat(maxH) * 4, height: CGFloat(maxH))
-            item.preferredPeakBitRate = peakBitRate(for: maxH)
-            playerLog.notice("[\(label)] HLS ABR hints: maxH=\(maxH)p peakBitRate=\(peakBitRate(for: maxH) / 1_000_000)Mbps (master URL preserved)")
         }
         player.replaceCurrentItem(with: item)
         itemObserverTask?.cancel()
@@ -401,6 +424,12 @@ extension PlaybackViewModel {
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
         let videoRqh = videoURL.absoluteString.contains("rqh=1")
         playerLog.notice("[\(label)/adaptive] videoItag=\(videoItag) rqh=\(videoRqh) audioItag=\(audioItag)")
+        // TEMP: skip rqh=1 streams entirely — don't even attempt loadTracks to
+        // avoid the ~8s CFNetwork SSL hang that blocks the whole fallback chain.
+        if videoRqh {
+            playerLog.notice("[\(label)/adaptive] skipping rqh=1 stream (temp)")
+            return false
+        }
 
         playerInfo = info
         let newFormats = Self.deduplicatedVideoFormats(info.formats)

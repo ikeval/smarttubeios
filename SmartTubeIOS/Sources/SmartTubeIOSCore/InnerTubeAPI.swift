@@ -163,6 +163,19 @@ public actor InnerTubeAPI {
         ]
     ]
 
+    /// MWEB (m.youtube.com / iPad Safari) client context.
+    /// Per yt-dlp, MWEB does not require a PO Token for HLS — returns `hlsManifestUrl`
+    /// for a wider range of videos than the embed-restricted WEB_EMBEDDED_PLAYER client.
+    let mwebClientContext: [String: Any] = [
+        "client": [
+            "hl": "en",
+            "gl": "US",
+            "clientName": InnerTubeClients.MWEB.name,
+            "clientVersion": InnerTubeClients.MWEB.version,
+            "clientScreen": "WATCH",
+        ]
+    ]
+
     let baseURL = URL(string: "https://www.youtube.com/youtubei/v1")!
     let playerBaseURL = URL(string: "https://youtubei.googleapis.com/youtubei/v1")!
     // Public InnerTube API key embedded in YouTube's own web client JS — not a developer secret.

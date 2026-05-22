@@ -458,8 +458,9 @@ extension PlaybackViewModel {
             // Quality is steered via AVPlayerItem hints (preferredMaximumResolution /
             // preferredPeakBitRate) which AVPlayer honours during ABR adaptation.
             let initialStreamURL = masterStreamURL
-            // Compute effective quality cap: explicit setting, or display-native resolution
-            // for Auto so the player never fetches variants the screen cannot render.
+            // Compute effective quality cap: explicit setting only.
+            // Auto quality leaves hints unconstrained (zero) so AVPlayer's ABR can freely
+            // select the highest variant the network supports.
             let initialMaxH: Int
             if settings.preferredQuality != .auto, let h = settings.preferredQuality.maxHeight {
                 initialMaxH = h
@@ -467,18 +468,24 @@ extension PlaybackViewModel {
                 selectedFormat = matchingFormat
                 playerLog.notice("Initial quality \(h)p — using master URL with ABR hints")
             } else {
-                initialMaxH = PlaybackViewModel.displayMaxVideoHeight()
-                playerLog.notice("Initial quality Auto — capping at display resolution \(initialMaxH)p")
+                initialMaxH = 0  // unconstrained — resolved to .zero / 0 below
+                playerLog.notice("Initial quality Auto — unconstrained (no resolution/bitrate cap)")
             }
             playerLog.notice("Starting AVPlayer with: \(initialStreamURL.absoluteString.prefix(120))")
             lastAttemptedStreamURL = initialStreamURL
-            // HLS manifests are signed by WEB_EMBEDDED_PLAYER (web client) — use browser UA.
+            // HLS manifests are signed by WEB_EMBEDDED_PLAYER (web client) — use browser UA
+            // plus Origin + Referer matching the embed context to unlock higher-quality variants.
             // Muxed/adaptive direct URLs are signed by the iOS client — use iOS UA.
             let isHLS = (info.hlsURL != nil && initialStreamURL == info.hlsURL)
             let initialUA = isHLS ? InnerTubeClients.Web.userAgent : InnerTubeClients.iOS.userAgent
+            var initialHeaders: [String: String] = ["User-Agent": initialUA]
+            if isHLS {
+                initialHeaders["Origin"] = "https://www.youtube.com"
+                initialHeaders["Referer"] = "https://www.youtube.com/"
+            }
             let playerAsset = AVURLAsset(
                 url: initialStreamURL,
-                options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": initialUA]]
+                options: ["AVURLAssetHTTPHeaderFieldsKey": initialHeaders]
             )
             let item = AVPlayerItem(asset: playerAsset)
             // .spectral gives the highest-quality pitch-preserving time-stretch at
@@ -500,10 +507,17 @@ extension PlaybackViewModel {
             // Apply ABR hints so AVPlayer selects the right variant immediately.
             // Consistent with the quality-switch path in PlaybackQualityManager.
             if info.hlsURL != nil {
-                let h = CGFloat(initialMaxH)
-                item.preferredMaximumResolution = CGSize(width: h * 4, height: h)
-                item.preferredPeakBitRate = peakBitRate(for: initialMaxH)
-                playerLog.notice("Initial quality \(initialMaxH)p hint set (master with ABR)")
+                if initialMaxH > 0 {
+                    let h = CGFloat(initialMaxH)
+                    item.preferredMaximumResolution = CGSize(width: h * 4, height: h)
+                    item.preferredPeakBitRate = peakBitRate(for: initialMaxH)
+                    playerLog.notice("Initial quality \(initialMaxH)p hint set (master with ABR)")
+                } else {
+                    // Auto: remove all constraints so AVPlayer picks the best available variant.
+                    item.preferredMaximumResolution = .zero
+                    item.preferredPeakBitRate = 0
+                    playerLog.notice("Initial quality Auto: ABR unconstrained (.zero / 0)")
+                }
             }
             // Observe item status using async/await (withCheckedContinuation is not needed
             // here since we only need to react to status changes, not await them).
