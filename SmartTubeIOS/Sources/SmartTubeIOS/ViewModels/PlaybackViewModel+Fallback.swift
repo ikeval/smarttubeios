@@ -126,7 +126,8 @@ extension PlaybackViewModel {
             do {
                 let vrInfo = try await api.fetchPlayerInfoAndroidVR(videoId: video.id)
                 if await tryAllStreams(video: video, info: vrInfo,
-                                      label: "AndroidVR[\(attempt)]", skipMuxed: true) {
+                                      label: "AndroidVR[\(attempt)]", skipMuxed: true,
+                                      isRqhFreeClient: true) {
                     return
                 }
             } catch {
@@ -143,7 +144,8 @@ extension PlaybackViewModel {
             do {
                 let wcInfo = try await api.fetchPlayerInfoWebCreator(videoId: video.id)
                 if await tryAllStreams(video: video, info: wcInfo,
-                                      label: "WebCreator[\(attempt)]", skipMuxed: true) {
+                                      label: "WebCreator[\(attempt)]", skipMuxed: true,
+                                      isRqhFreeClient: true) {
                     return
                 }
             } catch {
@@ -190,8 +192,12 @@ extension PlaybackViewModel {
     /// - Parameter skipMuxed: When `true`, the muxed direct-MP4 fallback is skipped so that
     ///   the caller can try higher-priority clients (e.g. Android VR adaptive) before
     ///   accepting the 360p muxed last-resort. Defaults to `false`.
+    /// - Parameter isRqhFreeClient: When `true`, the 8-second quick-startup timeout in
+    ///   `attemptComposition` is skipped. Use for clients whose CDN URLs are exempt from
+    ///   `rqh=1` enforcement (Android VR, WebCreator) — these are not subject to 403 errors
+    ///   but may need longer than 8 s to complete their first `loadTracks` call.
     private func tryAllStreams(video: Video, info: PlayerInfo, label: String,
-                               skipMuxed: Bool = false) async -> Bool {
+                               skipMuxed: Bool = false, isRqhFreeClient: Bool = false) async -> Bool {
         let hasHLS = info.hlsURL != nil
         let hasDASH = info.dashURL != nil
         let hasAdaptiveVideo = qualityCapVideoURL(from: info.formats) != nil
@@ -215,7 +221,8 @@ extension PlaybackViewModel {
            let audioURL = info.bestAdaptiveAudioURL {
             playerLog.notice("[\(label)] Trying adaptive composition")
             if await attemptComposition(videoURL: videoURL, audioURL: audioURL,
-                                        for: video, info: info, label: label) {
+                                        for: video, info: info, label: label,
+                                        isRqhFreeClient: isRqhFreeClient) {
                 return true
             }
             // A background prefetch may have stored an HLS URL in the cache while adaptive
@@ -347,7 +354,8 @@ extension PlaybackViewModel {
     /// Returns true on successful `.readyToPlay`.
     private func attemptComposition(
         videoURL: URL, audioURL: URL,
-        for video: Video, info: PlayerInfo, label: String
+        for video: Video, info: PlayerInfo, label: String,
+        isRqhFreeClient: Bool = false
     ) async -> Bool {
         let videoItag = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
@@ -407,11 +415,12 @@ extension PlaybackViewModel {
                     raceCont.yield(box)
                     raceCont.finish()
                 }
-                // Apply the 8-second timeout only during the initial load sequence.
-                // Quality-switch retries (triggered by qualityItemDidFail after first play)
-                // have needsQuickStartup=false and must wait the full CDN time (43-105 s
-                // for rqh=1 streams) to complete successfully.
-                if needsQuickStartup {
+                // Apply the 8-second timeout only during the initial load sequence
+                // and only for clients whose CDN URLs carry rqh=1 (iOS, Android).
+                // rqh=1-free clients (Android VR, WebCreator) are exempt from bot-detection
+                // enforcement and may legitimately need >8 s for the first loadTracks call.
+                // Quality-switch retries (needsQuickStartup=false) always skip this timeout.
+                if needsQuickStartup && !isRqhFreeClient {
                     Task.detached {
                         try? await Task.sleep(for: .seconds(8))
                         raceCont.yield(nil)
@@ -424,7 +433,8 @@ extension PlaybackViewModel {
                     vTracks = box.video
                     aTracks = box.audio
                 } else {
-                    playerLog.error("❌ [\(label)/adaptive] loadTracks timed out after 8s (rqh=\(videoRqh))")
+                    let reason = needsQuickStartup && !isRqhFreeClient ? "timed out after 8s" : "no result"
+                    playerLog.error("❌ [\(label)/adaptive] loadTracks \(reason) (rqh=\(videoRqh))")
                     return false
                 }
             }
