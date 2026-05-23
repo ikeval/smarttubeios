@@ -444,10 +444,13 @@ extension PlaybackViewModel {
             // parsePlayerInfo throws APIError.unavailable when streamingData is absent.
             guard let masterStreamURL = info.preferredStreamURL else {
                 // iOS client returned adaptive-only formats (no HLS, no muxed stream).
-                // This happens for some long-form videos where YouTube does not send itag 18.
-                // Android client always returns an HLS manifest — reuse the fallback path.
+                // Try adaptive composition first — iOS adaptive streams (c=IOS) may be rqh=0.
+                // attemptComposition has a rqh=1 guard and returns false immediately if blocked;
+                // in that case (or if AVPlayer 403s) we fall through to exhaustiveRetry.
                 if !info.formats.isEmpty {
-                    playerLog.notice("⚠️ adaptive-only iOS response — retrying with Android client for HLS")
+                    playerLog.notice("⚠️ adaptive-only iOS response — trying adaptive composition (c=IOS may be rqh=0)")
+                    if await tryAllStreams(video: video, info: info, label: "iOS", skipMuxed: true) { return }
+                    playerLog.notice("⚠️ iOS adaptive composition failed — retrying exhaustively")
                     await exhaustiveRetry(video: video, originalError: nil)
                     return
                 }

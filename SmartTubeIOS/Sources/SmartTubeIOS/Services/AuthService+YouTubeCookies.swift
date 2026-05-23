@@ -33,7 +33,7 @@ extension AuthService {
         authLog.notice("[cookies] Fetching YouTube web session cookies for SAPISIDHASH auth")
 
         // Step 1 — get uberauth via OAuthLogin endpoint (no-redirect session)
-        let oauthLoginURL = URL(string: "https://accounts.google.com/accounts/OAuthLogin?source=SmartTubeIOS&issueuberauth=1")!
+        let oauthLoginURL = URL(string: "https://accounts.google.com/accounts/OAuthLogin?source=youtube&issueuberauth=1")!
         var req1 = URLRequest(url: oauthLoginURL)
         req1.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
@@ -44,7 +44,7 @@ extension AuthService {
         do {
             (_, response1) = try await noRedirectSession.data(for: req1)
         } catch {
-            authLog.notice("[cookies] OAuthLogin request failed: \(error.localizedDescription, privacy: .public)")
+            authLog.notice("[cookies] OAuthLogin request failed: \(error.localizedDescription)")
             return
         }
 
@@ -53,7 +53,7 @@ extension AuthService {
               let location = http1.value(forHTTPHeaderField: "Location"),
               let mergeURL = URL(string: location) else {
             let code = (response1 as? HTTPURLResponse)?.statusCode ?? 0
-            authLog.notice("[cookies] OAuthLogin did not redirect (HTTP \(code, privacy: .public)) — SAPISID unavailable")
+            authLog.notice("[cookies] OAuthLogin did not redirect (HTTP \(code)) — SAPISID unavailable")
             return
         }
 
@@ -64,7 +64,7 @@ extension AuthService {
         do {
             let (_, _) = try await URLSession.shared.data(from: mergeURL)
         } catch {
-            authLog.notice("[cookies] MergeSession request failed: \(error.localizedDescription, privacy: .public)")
+            authLog.notice("[cookies] MergeSession request failed: \(error.localizedDescription)")
             return
         }
 
@@ -78,6 +78,8 @@ extension AuthService {
 
         authLog.notice("[cookies] ✅ SAPISID obtained — WEB_CREATOR SAPISIDHASH auth enabled")
         sapisid = sapisidCookie.value
+        // Persist to Keychain so it survives app restarts — no re-fetch needed on next launch.
+        Task { await tokenManager.setSAPISID(sapisidCookie.value) }
     }
 }
 

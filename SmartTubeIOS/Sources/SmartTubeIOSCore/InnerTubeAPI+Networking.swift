@@ -374,8 +374,17 @@ extension InnerTubeAPI {
         if let sid = sapisid {
             request.setValue(InnerTubeAPI.sapisidhash(sapisid: sid), forHTTPHeaderField: "Authorization")
             request.setValue("1", forHTTPHeaderField: "X-Origin")
+        } else if let token = authToken {
+            // Fallback: Bearer token + X-Goog-AuthUser header — the auth scheme yt-dlp uses
+            // when it has an OAuth token but no browser-cookie SAPISID.
+            // www.youtube.com accepts Bearer on web clients when X-Goog-AuthUser is present.
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
         }
-        let authStatus = sapisid != nil ? "SAPISIDHASH" : "unauthenticated"
+        let authStatus: String
+        if sapisid != nil { authStatus = "SAPISIDHASH" }
+        else if authToken != nil { authStatus = "Bearer+AuthUser" }
+        else { authStatus = "unauthenticated" }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let videoId = body["videoId"] as? String ?? ""
         tubeLog.notice("POST /player [WebCreator] videoId=\(videoId, privacy: .public) auth=\(authStatus, privacy: .public)")

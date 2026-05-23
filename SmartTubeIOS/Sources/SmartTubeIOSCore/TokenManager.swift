@@ -28,6 +28,8 @@ public actor TokenManager {
         public let tokenExpiry: Date?
         public let accountName: String?
         public let accountAvatarURL: URL?
+        /// YouTube.com SAPISID cookie for WEB_CREATOR SAPISIDHASH auth.
+        public let sapisid: String?
     }
 
     // MARK: - State
@@ -37,6 +39,7 @@ public actor TokenManager {
     private var tokenExpiry: Date?
     private var accountName: String?
     private var accountAvatarURL: URL?
+    private var sapisid: String?
 
     private let service: String
 
@@ -74,7 +77,8 @@ public actor TokenManager {
             }(),
             accountName:     Self.kcGet(service: keychainService, key: "st_account_name"),
             accountAvatarURL: Self.kcGet(service: keychainService, key: "st_avatar_url")
-                                .flatMap(URL.init(string:))
+                                .flatMap(URL.init(string:)),
+            sapisid:         Self.kcGet(service: keychainService, key: "st_sapisid")
         )
         initialSnapshot  = snap
         accessToken      = snap.accessToken
@@ -82,6 +86,7 @@ public actor TokenManager {
         tokenExpiry      = snap.tokenExpiry
         accountName      = snap.accountName
         accountAvatarURL = snap.accountAvatarURL
+        sapisid          = snap.sapisid
     }
 
     // MARK: - Reads
@@ -111,12 +116,20 @@ public actor TokenManager {
         continuation?.yield(.refreshed(token: access, expiresAt: expiry))
     }
 
+    /// Persists the SAPISID cookie to Keychain so it survives app restarts and
+    /// is available on the next launch without requiring a fresh cookie exchange.
+    public func setSAPISID(_ value: String?) {
+        sapisid = value
+        Self.kcSet(service: service, key: "st_sapisid", value: value)
+    }
+
     public func clearToken() {
         accessToken      = nil
         refreshToken     = nil
         tokenExpiry      = nil
         accountName      = nil
         accountAvatarURL = nil
+        sapisid          = nil
         deleteFromKeychain()
         continuation?.yield(.signedOut)
     }
@@ -134,7 +147,7 @@ public actor TokenManager {
 
     private func deleteFromKeychain() {
         for key in ["st_access_token", "st_refresh_token", "st_token_expiry",
-                    "st_account_name", "st_avatar_url"] {
+                    "st_account_name", "st_avatar_url", "st_sapisid"] {
             Self.kcDelete(service: service, key: key)
         }
     }

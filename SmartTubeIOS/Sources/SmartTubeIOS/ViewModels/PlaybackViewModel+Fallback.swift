@@ -124,15 +124,20 @@ extension PlaybackViewModel {
             guard !Task.isCancelled else { return }
 
             // --- iOS client (fresh network fetch) ---
-            // When logged in, use the authenticated iOS client. Auth tokens cause YouTube
-            // to return adaptive stream URLs without rqh=1 CDN enforcement, enabling
-            // DASH composition. The unauthenticated iOS client always returns rqh=1 URLs
-            // that 403 at the CDN. Tries HLS + adaptive only (muxed fallback happens below).
+            // Unauthenticated iOS (googleapis.com, c=IOS) returns adaptive-only streams.
+            // Per yt-dlp research, iOS adaptive streams do NOT have rqh=1 and do not
+            // require a pot= token. The authenticated path (Bearer + iOS client nameID=5)
+            // currently returns HTTP 400 — the TV-device-code token is scoped for TVHTML5,
+            // not for iOS client. Falls back to unauthenticated in that case.
+            // Tries HLS + adaptive only (muxed fallback happens below).
             var androidInfoForMuxed: PlayerInfo? = nil
             do {
-                let iosInfo = hasAuthToken
-                    ? try await api.fetchPlayerInfoiOSAuthenticated(videoId: video.id)
-                    : try await api.fetchPlayerInfo(videoId: video.id)
+                let iosInfo: PlayerInfo
+                if hasAuthToken, let auth = try? await api.fetchPlayerInfoiOSAuthenticated(videoId: video.id) {
+                    iosInfo = auth
+                } else {
+                    iosInfo = try await api.fetchPlayerInfo(videoId: video.id)
+                }
                 await VideoPreloadCache.shared.store(playerInfo: iosInfo, for: video.id)
                 if await tryAllStreams(video: video, info: iosInfo, label: "iOS[\(attempt)]",
                                       skipMuxed: true) {
@@ -247,8 +252,8 @@ extension PlaybackViewModel {
     /// Returns true if any stream starts playing successfully.
     /// - Parameter skipMuxed: When `true`, the muxed direct-MP4 fallback is skipped so that
     ///   the caller can try higher-priority clients before accepting the 360p muxed last-resort.
-    private func tryAllStreams(video: Video, info: PlayerInfo, label: String,
-                               skipMuxed: Bool = false) async -> Bool {
+    func tryAllStreams(video: Video, info: PlayerInfo, label: String,
+                        skipMuxed: Bool = false) async -> Bool {
         let hasHLS = info.hlsURL != nil
         let hasDASH = info.dashURL != nil
         let hasAdaptiveVideo = qualityCapVideoURL(from: info.formats) != nil
