@@ -348,7 +348,13 @@ final class PlaybackQualityManager {
     /// Fetches the HLS master manifest and returns a map of stream height → variant playlist URL.
     func fetchHLSVariantURLs(url: URL) async -> [Int: URL] {
         var request = URLRequest(url: url)
-        request.setValue(InnerTubeClients.iOS.userAgent, forHTTPHeaderField: "User-Agent")
+        // Use the same stable hardcoded UA as attemptURL uses for AVPlayer.
+        // InnerTubeClients.iOS.userAgent is dynamic (uses the running OS version), which on
+        // the iOS 26 simulator yields "iOS 26_5" — a beta version YouTube CDN doesn't recognise.
+        request.setValue(
+            "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)",
+            forHTTPHeaderField: "User-Agent"
+        )
         request.timeoutInterval = 8
         guard let (data, _) = try? await self.session.data(for: request),
               let text = String(data: data, encoding: .utf8) else {

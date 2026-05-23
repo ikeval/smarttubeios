@@ -92,6 +92,19 @@ package enum InnerTubeClients {
         package static let version = "1.20240723.03.00"
     }
 
+    /// WEB client with macOS Safari UA — mirrors yt-dlp's `web_safari` client config
+    /// (commit 48a61d0f). YouTube returns `hlsManifestUrl` for this client even for
+    /// non-embeddable videos, while returning only `serverAbrStreamingUrl` (SABR) for
+    /// the Chrome-UA WEB client. HLS manifest CDN URLs (manifest.googlevideo.com) do
+    /// not require a pot= token. The Safari UA is the key differentiator — the same
+    /// client nameID=1 with Chrome UA does not get `hlsManifestUrl`.
+    package enum WebSafari {
+        package static let name      = "WEB"
+        package static let nameID    = "1"
+        package static let version   = "2.20260114.08.00"
+        package static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)"
+    }
+
     package enum TV {
         package static let name      = "TVHTML5"
         package static let nameID    = "7"

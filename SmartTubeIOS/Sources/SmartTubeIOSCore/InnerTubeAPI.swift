@@ -176,6 +176,21 @@ public actor InnerTubeAPI {
         ]
     ]
 
+    /// WEB client with macOS Safari UA — mirrors yt-dlp's `web_safari` client (nameID=1).
+    /// Unlike the Chrome-UA WEB client, this configuration returns `hlsManifestUrl` for
+    /// non-embeddable videos (per yt-dlp empirical testing, May 2026). Includes
+    /// `timeZone` and `utcOffsetMinutes` to match yt-dlp's _extract_context output exactly.
+    let webSafariClientContext: [String: Any] = [
+        "client": [
+            "hl": "en",
+            "timeZone": "UTC",
+            "utcOffsetMinutes": 0,
+            "clientName": InnerTubeClients.WebSafari.name,
+            "clientVersion": InnerTubeClients.WebSafari.version,
+            "userAgent": InnerTubeClients.WebSafari.userAgent,
+        ]
+    ]
+
     let baseURL = URL(string: "https://www.youtube.com/youtubei/v1")!
     let playerBaseURL = URL(string: "https://youtubei.googleapis.com/youtubei/v1")!
     // Public InnerTube API key embedded in YouTube's own web client JS — not a developer secret.

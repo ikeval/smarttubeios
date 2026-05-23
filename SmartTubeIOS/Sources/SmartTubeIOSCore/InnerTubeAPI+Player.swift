@@ -50,12 +50,28 @@ extension InnerTubeAPI {
     /// Fetches player info using the Android VR (Oculus) client.
     /// Uses the correct Android VR transport (nameID=28, Oculus UA on googleapis.com)
     /// so YouTube identifies the request as an Oculus Quest client — not a Web client.
-    /// Per yt-dlp (May 2026), this client does not require a PO token for adaptive audio.
+    /// Per yt-dlp (May 2026): android_vr returns `hlsManifestUrl` (no rqh=1 required)
+    /// when the request includes `html5Preference: HTML5_PREF_WANTS` — yt-dlp injects
+    /// this via `_generate_player_context` for ALL clients. Without it, YouTube returns
+    /// `serverAbrStreamingUrl` (SABR only, not AVPlayer-compatible).
     public func fetchPlayerInfoAndroidVR(videoId: String) async throws -> PlayerInfo {
-        var body = makeBody(client: androidVRClientContext)
+        // Mirror yt-dlp's _generate_player_context: send html5Preference for all clients.
+        // Also inject visitorData so YouTube session resolution works (matches yt-dlp's
+        // X-Goog-Visitor-Id header → client visitorData field).
+        var clientFields = (androidVRClientContext["client"] as? [String: Any]) ?? [:]
+        if let vd = visitorData { clientFields["visitorData"] = vd }
+
+        // android_vr has REQUIRE_JS_PLAYER=False → sts may be nil; that is fine.
+        // yt-dlp still passes sts when available, so we do the same.
+        let sts = await fetchSignatureTimestampIfNeeded()
+        var cpbc: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
+        if let sts { cpbc["signatureTimestamp"] = sts }
+
+        var body = makeBody(client: ["client": clientFields])
         body["videoId"] = videoId
         body["racyCheckOk"] = true
         body["contentCheckOk"] = true
+        body["playbackContext"] = ["contentPlaybackContext": cpbc]
         let data = try await postAndroidVR(body: body)
         return try parsePlayerInfo(from: data, videoId: videoId)
     }
@@ -90,8 +106,24 @@ extension InnerTubeAPI {
         return try parsePlayerInfo(from: data, videoId: videoId)
     }
 
-    /// Fetches player info using the MWEB (m.youtube.com, iPad Safari) client.
-    /// Per yt-dlp, MWEB does not require a PO Token for HLS (`required=False`) and has
+    /// Fetches player info using the WEB client with macOS Safari UA (yt-dlp `web_safari`).
+    /// Per yt-dlp empirical testing (May 2026), this client returns `hlsManifestUrl` for
+    /// non-embeddable videos where all other clients return only `serverAbrStreamingUrl`.
+    /// The Safari UA is the key differentiator — nameID=1 with Chrome UA does not return
+    /// HLS manifest. HLS segments from manifest.googlevideo.com do not require pot= tokens.
+    public func fetchPlayerInfoWebSafari(videoId: String) async throws -> PlayerInfo {
+        let sts = await fetchSignatureTimestampIfNeeded()
+        var cpbc: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
+        if let sts { cpbc["signatureTimestamp"] = sts }
+
+        var body = makeBody(client: webSafariClientContext)
+        body["videoId"] = videoId
+        body["playbackContext"] = ["contentPlaybackContext": cpbc]
+        let data = try await postWebSafari(body: body)
+        return try parsePlayerInfo(from: data, videoId: videoId)
+    }
+
+    /// Fetches player info using the MWEB (m.youtube.com, iPad Safari) client.    /// Per yt-dlp, MWEB does not require a PO Token for HLS (`required=False`) and has
     /// no embedding restriction — it may return `hlsManifestUrl` for videos that
     /// WEB_EMBEDDED_PLAYER cannot serve (e.g. embedding-disabled content).
     /// Mirrors the TVAuth request pattern: injects html5Preference + signatureTimestamp +
@@ -118,12 +150,25 @@ extension InnerTubeAPI {
     /// Fetches player info using the WEB_CREATOR (YouTube Studio) client.
     /// Per yt-dlp documentation, this client is exempt from rqh=1 CDN enforcement on
     /// adaptive streams — the returned video/audio URLs do NOT require a pot= token.
+    /// Requires a signed-in session (Bearer auth injected by postWebCreator). Without
+    /// auth, YouTube returns signInRequired and omits streamingData entirely.
     /// Used in `exhaustiveRetry` as a fallback before the muxed-only phase.
     public func fetchPlayerInfoWebCreator(videoId: String) async throws -> PlayerInfo {
-        var body = makeBody(client: webCreatorClientContext)
+        // Inject visitorData so YouTube's session resolution works correctly.
+        var clientFields = (webCreatorClientContext["client"] as? [String: Any]) ?? [:]
+        if let vd = visitorData { clientFields["visitorData"] = vd }
+
+        // html5Preference + signatureTimestamp: same as fetchPlayerInfoAuthenticated.
+        // Without STS, YouTube may return "The page needs to be reloaded".
+        let sts = await fetchSignatureTimestampIfNeeded()
+        var cpbc: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
+        if let sts { cpbc["signatureTimestamp"] = sts }
+
+        var body = makeBody(client: ["client": clientFields])
         body["videoId"] = videoId
         body["racyCheckOk"] = true
         body["contentCheckOk"] = true
+        body["playbackContext"] = ["contentPlaybackContext": cpbc]
         let data = try await postWebCreator(body: body)
         return try parsePlayerInfo(from: data, videoId: videoId)
     }

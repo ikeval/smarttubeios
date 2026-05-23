@@ -2,37 +2,43 @@ import XCTest
 
 // MARK: - HLSResolutionUITests
 //
-// Verifies that a standard embeddable video plays at a resolution above 360p.
+// Verifies that a NON-EMBEDDABLE video plays at ≥720p via the authenticated
+// WEB_CREATOR adaptive path — no rqh=1 streams, no pot= tokens.
 //
-// 360p is the muxed-only fallback (itag=18). If Auto quality resolves to 360p it
-// means every adaptive-stream client in exhaustiveRetry failed — TVAuth, TVEmbedded,
-// MWEB, iOS, Android, AndroidVR, WebCreator — and the app fell back to the lowest-
-// quality muxed stream.  That is a regression.
+// 360p is the muxed-only fallback (itag=18). If Auto quality resolves ≤360p it
+// means every adaptive-stream client in exhaustiveRetry failed and the app fell
+// back to the lowest-quality muxed stream.  That is a regression.
 //
-// Video dQw4w9WgXcQ ("Never Gonna Give You Up" by Rick Astley) is a standard
-// embeddable video available in up to 1080p. TVEmbedded (TVHTML5_SIMPLY_EMBEDDED_PLAYER)
-// returns an HLS manifest URL for this video — the normal adaptive path without rqh=1.
-// If HLS is unavailable, exhaustiveRetry falls through MWEB/iOS/Android adaptive clients.
-// The previous video (Dy9ki9Q5nXs) had embedding disabled (TVEmbedded returned UNPLAYABLE)
-// and ALL adaptive clients returned rqh=1 URLs, making >360p impossible without a PO token.
+// Video Wu8xNx4njoM is embedding-disabled: TVEmbedded returns "This video is
+// unavailable", so ALL adaptive clients (TVHTML5, MWEB, Android, AndroidVR)
+// return rqh=1 streams which we skip without a pot= token.
+// The fix: WEB_CREATOR with Bearer auth is exempt from rqh=1. When signed in
+// (auth token loaded from Keychain, survives --uitesting-reset-settings),
+// the WebCreator path returns 1080p+ adaptive streams that compose via
+// AVMutableComposition.
+//
+// Failure means WebCreator auth is broken (signInRequired) or rqh= check is
+// catching WEB_CREATOR streams incorrectly.
 //
 // Verification: Stats for Nerds shows the current AVPlayerItem.presentationSize.
-// The resolution label contains U+00D7 (×), e.g. "1280×720 @ 30 fps".
-// The test parses the height component and asserts it is > 360.
+// The resolution label contains U+00D7 (×), e.g. "1920×1080 @ 30 fps".
+// The test parses the height component and asserts it is ≥720.
 
 #if os(iOS)
 
 final class HLSResolutionUITests: XCTestCase {
 
-    // Standard embeddable video with HLS available via TVEmbedded (no rqh=1 restriction).
-    // Available in up to 1080p. Embedding has been enabled since the video was uploaded.
-    private static let videoID = "dQw4w9WgXcQ"
+    // Non-embeddable video: TVEmbedded returns "unavailable", ALL adaptive clients return
+    // rqh=1.  Only the authenticated WEB_CREATOR path provides non-rqh adaptive streams.
+    // Auth token comes from Keychain (set during sign-in, not cleared by --uitesting-reset-settings).
+    private static let videoID = "Wu8xNx4njoM"
 
     // U+00D7 MULTIPLICATION SIGN — used as the separator in resolution labels.
     private static let cross = "\u{00D7}"
 
-    // Test fails when auto quality resolves to 360p or lower (muxed itag=18 fallback).
-    private static let minimumHeight = 361
+    // Require ≥720p: WEB_CREATOR adaptive path returns 720p–2160p streams.
+    // 360p (muxed fallback) or any height <720 means the WebCreator path failed.
+    private static let minimumHeight = 720
 
     private var app: XCUIApplication!
 
@@ -57,13 +63,14 @@ final class HLSResolutionUITests: XCTestCase {
 
     // MARK: - Test
 
-    /// Opens a standard embeddable video and asserts HLS/adaptive auto quality is above 360p.
+    /// Opens a non-embeddable video and asserts adaptive quality is ≥720p via WEB_CREATOR.
     ///
-    /// Failure means exhaustiveRetry fell back to the muxed 360p stream.
+    /// Failure means WebCreator auth failed (signInRequired) or all adaptive paths returned
+    /// rqh=1 and fell back to muxed 360p.
     /// Check device log for:
-    ///   - muxedFormats for <id>: [itag=18 …]  — only muxed available
-    ///   - rqh=1 streams skipped across all clients
-    ///   - MWEB / iOS / Android client phase errors
+    ///   - WebCreator client fetch failed … signInRequired  → auth not injected
+    ///   - [WebCreator[1]/adaptive] skipping rqh=1         → rqh detection false-positive
+    ///   - [Android[1]] All adaptive failed — trying muxed → WebCreator path exhausted
     func testAutoQualityAbove360p() throws {
         // ── Step 1: Wait for player to open ──────────────────────────────────
         guard app.staticTexts["player.titleLabel"].firstMatch.waitForExistence(timeout: 25) else {
@@ -77,10 +84,10 @@ final class HLSResolutionUITests: XCTestCase {
         }
         let enabledPred = NSPredicate(format: "enabled == true")
         let enabledExp = XCTNSPredicateExpectation(predicate: enabledPred, object: playPause)
-        guard XCTWaiter().wait(for: [enabledExp], timeout: 30) == .completed else {
-            captureState("video not ready after 30 s", in: app)
+        guard XCTWaiter().wait(for: [enabledExp], timeout: 90) == .completed else {
+            captureState("video not ready after 90 s", in: app)
             XCTFail(
-                "Video did not become ready within 30 s. " +
+                "Video did not become ready within 90 s. " +
                 "exhaustiveRetry must complete and deliver a playable stream. " +
                 "Check device log for client phase errors."
             )
@@ -101,9 +108,10 @@ final class HLSResolutionUITests: XCTestCase {
         let height = resolutionHeight(from: resLabel)
         XCTAssertGreaterThanOrEqual(
             height, Self.minimumHeight,
-            "Auto quality is \(height)p (label: '\(resLabel)') — resolution is 360p or lower. " +
-            "exhaustiveRetry fell back to muxed itag=18. All adaptive clients failed. " +
-            "Check device log for: muxedFormats, rqh=1 skips, MWEB/iOS/Android errors."
+            "Auto quality is \(height)p (label: '\(resLabel)') — expected ≥720p. " +
+            "WEB_CREATOR adaptive path failed. Check device log for: " +
+            "WebCreator signInRequired (auth not injected), rqh=1 false-positive on WEB_CREATOR streams, " +
+            "or exhaustiveRetry muxed fallback."
         )
     }
 

@@ -73,6 +73,22 @@ extension PlaybackViewModel {
 
             guard !Task.isCancelled else { return }
 
+            // --- WebSafari client (WEB nameID=1 + macOS Safari UA) ---
+            // yt-dlp's `web_safari` client returns `hlsManifestUrl` for non-embeddable
+            // videos where TVEmbedded fails. manifest.googlevideo.com HLS URLs don't need
+            // pot= tokens. This is the primary HLS path for embedding-disabled content.
+            do {
+                let wsiInfo = try await api.fetchPlayerInfoWebSafari(videoId: video.id)
+                if await tryAllStreams(video: video, info: wsiInfo,
+                                      label: "WebSafari[\(attempt)]", skipMuxed: true) {
+                    return
+                }
+            } catch {
+                playerLog.error("WebSafari client fetch failed (attempt \(attempt)): \(error)")
+            }
+
+            guard !Task.isCancelled else { return }
+
             // --- MWEB client (HLS, no embed restriction) ---
             // The mobile web client (m.youtube.com, iPad Safari UA, nameID=2) is not
             // subject to the embedding restriction that gates WEB_EMBEDDED_PLAYER.
@@ -135,16 +151,11 @@ extension PlaybackViewModel {
 
             guard !Task.isCancelled else { return }
 
-            // --- Android VR client (adaptive only, no PO token required) ---
-            // The Oculus Quest client (ANDROID_VR, nameID=28) is exempt from the
-            // rqh=1 / pot enforcement that YouTube applies to standard Android and iOS
-            // adaptive streams. Correct VR headers (nameID=28, Oculus UA on googleapis.com)
-            // are required — sending Web client headers causes bot-detection.
+            // --- Android VR client (adaptive) ---
             do {
                 let vrInfo = try await api.fetchPlayerInfoAndroidVR(videoId: video.id)
                 if await tryAllStreams(video: video, info: vrInfo,
-                                      label: "AndroidVR[\(attempt)]", skipMuxed: true,
-                                      isRqhFreeClient: true) {
+                                      label: "AndroidVR[\(attempt)]", skipMuxed: true) {
                     return
                 }
             } catch {
@@ -153,16 +164,11 @@ extension PlaybackViewModel {
 
             guard !Task.isCancelled else { return }
 
-            // --- WEB_CREATOR client (adaptive, rqh=1 exempt per yt-dlp docs) ---
-            // The YouTube Studio client (WEB_CREATOR, nameID=62) is documented by yt-dlp
-            // as not requiring a Proof-of-Origin (POT) token for adaptive streams — its
-            // CDN URLs should not carry rqh=1. If this client's adaptive streams load,
-            // quality switching via AVMutableComposition works without 403 errors.
+            // --- WEB_CREATOR client (adaptive) ---
             do {
                 let wcInfo = try await api.fetchPlayerInfoWebCreator(videoId: video.id)
                 if await tryAllStreams(video: video, info: wcInfo,
-                                      label: "WebCreator[\(attempt)]", skipMuxed: true,
-                                      isRqhFreeClient: true) {
+                                      label: "WebCreator[\(attempt)]", skipMuxed: true) {
                     return
                 }
             } catch {
@@ -223,14 +229,9 @@ extension PlaybackViewModel {
     /// Tries HLS → adaptive composition → (optionally) muxed direct from one PlayerInfo.
     /// Returns true if any stream starts playing successfully.
     /// - Parameter skipMuxed: When `true`, the muxed direct-MP4 fallback is skipped so that
-    ///   the caller can try higher-priority clients (e.g. Android VR adaptive) before
-    ///   accepting the 360p muxed last-resort. Defaults to `false`.
-    /// - Parameter isRqhFreeClient: When `true`, the 8-second quick-startup timeout in
-    ///   `attemptComposition` is skipped. Use for clients whose CDN URLs are exempt from
-    ///   `rqh=1` enforcement (Android VR, WebCreator) — these are not subject to 403 errors
-    ///   but may need longer than 8 s to complete their first `loadTracks` call.
+    ///   the caller can try higher-priority clients before accepting the 360p muxed last-resort.
     private func tryAllStreams(video: Video, info: PlayerInfo, label: String,
-                               skipMuxed: Bool = false, isRqhFreeClient: Bool = false) async -> Bool {
+                               skipMuxed: Bool = false) async -> Bool {
         let hasHLS = info.hlsURL != nil
         let hasDASH = info.dashURL != nil
         let hasAdaptiveVideo = qualityCapVideoURL(from: info.formats) != nil
@@ -254,8 +255,7 @@ extension PlaybackViewModel {
            let audioURL = info.bestAdaptiveAudioURL {
             playerLog.notice("[\(label)] Trying adaptive composition")
             if await attemptComposition(videoURL: videoURL, audioURL: audioURL,
-                                        for: video, info: info, label: label,
-                                        isRqhFreeClient: isRqhFreeClient) {
+                                        for: video, info: info, label: label) {
                 return true
             }
             // A background prefetch may have stored an HLS URL in the cache while adaptive
@@ -315,8 +315,11 @@ extension PlaybackViewModel {
         availableCaptions = info.captionTracks
         autoApplyCaptionPreference(tracks: info.captionTracks)
 
-        let effectiveURL = url
+        var effectiveURL = url
         var applyHLSHints = false
+        #if targetEnvironment(simulator)
+        var simulatorHLSProxy: HLSVariantProxy? = nil
+        #endif
         if let hlsURL = info.hlsURL, url == hlsURL {
             let videoId = video.id
             let variantURLs: [Int: URL]
@@ -333,11 +336,37 @@ extension PlaybackViewModel {
             if !variantURLs.isEmpty {
                 hlsVariantURLs = variantURLs
                 availableFormats = availableFormats.filter { variantURLs.keys.contains($0.height) }
+                // Use a variant playlist URL directly rather than the master manifest URL.
+                // The master manifest (hls_variant) stalls AVPlayer on manifest.googlevideo.com
+                // because it requires session-level auth that AVPlayer's isolated network stack
+                // cannot provide. Variant playlist URLs (hls_playlist) are directly downloadable
+                // — yt-dlp confirms 720p in 13 s, 1080p in 29 s for the same video.
+                let preferredMaxH = settings.preferredQuality == .auto ? nil : settings.preferredQuality.maxHeight
+                let chosen = preferredMaxH
+                    .flatMap { h in variantURLs.filter { $0.key <= h }.max(by: { $0.key < $1.key }) }
+                    ?? variantURLs.max(by: { $0.key < $1.key })
+                if let chosen {
+                    var variantURL = chosen.value
+                    #if targetEnvironment(simulator)
+                    // yt-dlp pre-descrambles the n parameter before returning HLS URLs, so
+                    // its URLs bypass the CDN 403 that our own InnerTube-derived URLs produce
+                    // in the iOS Simulator. Try yt-dlp first; fall back to the JS-solver
+                    // proxy path if yt-dlp is unavailable or returns no output.
+                    if let ytURL = await YouTubeNDescrambler.ytDlpHLSVariantURL(videoId: video.id) {
+                        variantURL = ytURL
+                        playerLog.notice("[\(label)] HLS: using yt-dlp pre-descrambled variant URL")
+                    } else {
+                        let (proxyURL, proxy) = await descrambledVariantURL(chosen.value, label: label)
+                        variantURL = proxyURL
+                        simulatorHLSProxy = proxy
+                    }
+                    #endif
+                    effectiveURL = variantURL
+                    playerLog.notice("[\(label)] HLS: selected variant \(chosen.key)p")
+                }
             } else {
                 playerLog.notice("[\(label)] HLS manifest fetch returned 0 variants — using master as-is")
             }
-            // Keep the master HLS URL so AVPlayer receives EXT-X-MEDIA alternate audio renditions.
-            // Variant playlist URLs strip EXT-X-MEDIA (same reason as primary load path).
             qualityManager.setSelectedFormatForCurrentPreference()
             applyHLSHints = true
         } else {
@@ -349,16 +378,36 @@ extension PlaybackViewModel {
         // segment request. HLS manifests are signed by WEB_EMBEDDED_PLAYER (a web client),
         // so use the browser UA; muxed/adaptive URLs are signed by the iOS client.
         let isHLSManifest = label.contains("/HLS")
-        let hlsUA = isHLSManifest ? InnerTubeClients.Web.userAgent : InnerTubeClients.iOS.userAgent
+        // Use a stable hardcoded iOS UA for HLS requests. InnerTubeClients.iOS.userAgent
+        // builds the UA dynamically from the RUNNING OS version (ProcessInfo), which on
+        // the iOS 26 simulator returns "iOS 26_5" — a beta version that YouTube CDN does
+        // not recognise, causing HTTP 403 for variant playlist and segment requests.
+        // The hardcoded UA matches yt-dlp's known-good iOS YouTube UA and always returns
+        // HTTP 200 for manifest.googlevideo.com + rr*.googlevideo.com segment requests.
+        let hlsUA = "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)"
         // For HLS manifests from WEB_EMBEDDED_PLAYER, send Origin + Referer so the CDN
         // treats the request as a legitimate browser embed — may unlock higher-quality variants.
         var hlsHeaders: [String: String] = ["User-Agent": hlsUA]
-        if isHLSManifest {
+        if isHLSManifest && !label.contains("WebSafari") {
             hlsHeaders["Origin"] = "https://www.youtube.com"
             hlsHeaders["Referer"] = "https://www.youtube.com/"
         }
         let uaOpts: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": hlsHeaders]
+        #if targetEnvironment(simulator)
+        let asset: AVURLAsset
+        if let proxy = simulatorHLSProxy {
+            // Custom scheme: AVAssetResourceLoader intercepts the playlist fetch and returns
+            // the pre-rewritten content. CDN segments (https://) are fetched by AVPlayer
+            // normally. Since any User-Agent works for descrambled segments, no headers needed.
+            asset = AVURLAsset(url: effectiveURL, options: nil)
+            asset.resourceLoader.setDelegate(proxy, queue: .global(qos: .userInitiated))
+            playerLog.notice("[\(label)] n-probe: asset resourceLoader delegate set")
+        } else {
+            asset = AVURLAsset(url: effectiveURL, options: uaOpts)
+        }
+        #else
         let asset = AVURLAsset(url: effectiveURL, options: uaOpts)
+        #endif
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .spectral
         // Reduce startup latency: begin playback after 2 s of buffered content,
@@ -406,7 +455,13 @@ extension PlaybackViewModel {
                 return true
             case .failed:
                 let err = item.error.map { "\($0)" } ?? "nil"
+                let nsErr = item.error as? NSError
+                let failURL = nsErr?.userInfo[NSURLErrorFailingURLStringErrorKey] as? String
+                    ?? nsErr?.userInfo["NSErrorFailingURLKey"] as? String
                 playerLog.error("❌ [\(label)] AVPlayerItem failed: \(err)")
+                if let failURL {
+                    playerLog.error("❌ [\(label)] failing URL: \(failURL.prefix(200))")
+                }
                 return false
             case .unknown:
                 continue
@@ -421,8 +476,7 @@ extension PlaybackViewModel {
     /// Returns true on successful `.readyToPlay`.
     private func attemptComposition(
         videoURL: URL, audioURL: URL,
-        for video: Video, info: PlayerInfo, label: String,
-        isRqhFreeClient: Bool = false
+        for video: Video, info: PlayerInfo, label: String
     ) async -> Bool {
         let videoItag = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
@@ -430,40 +484,33 @@ extension PlaybackViewModel {
             .queryItems?.first(where: { $0.name == "itag" })?.value ?? "?"
         let videoRqh = videoURL.absoluteString.contains("rqh=1")
 
-        // Detect which InnerTube client signed this URL via the `c=` query parameter.
-        // TVHTML5, ANDROID_VR, and WEB_CREATOR are rqh-exempt per yt-dlp research — the CDN
-        // does not enforce Proof-of-Origin for these clients even when rqh=1 is present.
-        // The caller can also pass isRqhFreeClient=true to override the URL-based check
-        // (used by WebCreator and other clients marked exempt in the fallback chain).
-        // iOS, Android, and MWEB are NOT exempt and will cause SSL errors without pot=.
-        let clientParam = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "c" })?.value?.uppercased() ?? ""
-        let isRqhExemptClient = isRqhFreeClient
-            || clientParam == "TVHTML5"
-            || clientParam == "ANDROID_VR"
-            || clientParam == "WEB_CREATOR"
-
-        // Use the UA that matches the client that signed the URL.
-        // The CDN checks the User-Agent against the signing client identity.
-        let ua: String
-        switch clientParam {
-        case "ANDROID_VR": ua = InnerTubeClients.AndroidVR.userAgent
-        case "ANDROID":    ua = InnerTubeClients.Android.userAgent
-        case "TVHTML5":    ua = InnerTubeClients.TV.userAgent
-        case "MWEB":       ua = InnerTubeClients.MWEB.userAgent
-        default:           ua = InnerTubeClients.iOS.userAgent
-        }
-
-        playerLog.notice("[\(label)/adaptive] videoItag=\(videoItag) rqh=\(videoRqh) client=\(clientParam) exempt=\(isRqhExemptClient) audioItag=\(audioItag)")
-
-        // Skip rqh=1 streams for non-exempt clients — without a pot= token these cause
-        // SSL-level errors (errSSLRecordOverflow) that stall CFNetwork for ~8 seconds.
-        // Exempt clients (TVHTML5, ANDROID_VR) are allowed through — the CDN accepts
-        // their requests without a PO token even when rqh=1 appears in the URL.
-        if videoRqh && !isRqhExemptClient {
-            playerLog.notice("[\(label)/adaptive] skipping rqh=1 — client \(clientParam.isEmpty ? "unknown" : clientParam) is not exempt from PO-token enforcement")
+        // Skip every rqh=1 stream — no client works without a pot= token.
+        // yt-dlp claims TVHTML5 and ANDROID_VR are exempt, but empirically:
+        //   TVHTML5    → immediate 403 from CDN (~163 ms)
+        //   ANDROID_VR → CDN hangs indefinitely (30 s+, no fast error)
+        // Neither reaches readyToPlay without a Proof-of-Origin token.
+        // When pot= support is added, remove this guard.
+        if videoRqh {
+            let clientParam = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "c" })?.value ?? "unknown"
+            playerLog.notice("[\(label)/adaptive] skipping rqh=1 (client=\(clientParam)) — no pot= token available")
             return false
         }
+
+        // Use the client UA that matches the URL's signing client.
+        let clientParam = URLComponents(url: videoURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "c" })?.value?.uppercased() ?? ""
+        let ua: String
+        switch clientParam {
+        case "ANDROID_VR":   ua = InnerTubeClients.AndroidVR.userAgent
+        case "ANDROID":      ua = InnerTubeClients.Android.userAgent
+        case "TVHTML5":      ua = InnerTubeClients.TV.userAgent
+        case "MWEB":         ua = InnerTubeClients.MWEB.userAgent
+        case "WEB_CREATOR":  ua = InnerTubeClients.Web.userAgent
+        default:             ua = InnerTubeClients.iOS.userAgent
+        }
+
+        playerLog.notice("[\(label)/adaptive] videoItag=\(videoItag) client=\(clientParam) audioItag=\(audioItag)")
 
         playerInfo = info
         let newFormats = Self.deduplicatedVideoFormats(info.formats)
@@ -952,4 +999,183 @@ extension PlaybackViewModel {
         return 1080  // Conservative fallback for non-UIKit targets
         #endif
     }
+
+    // MARK: - HLS n-descrambling (simulator only)
+
+    #if targetEnvironment(simulator)
+    /// Probes the first segment of an HLS variant playlist.
+    /// Returns `variantURL` unchanged if the segment is already accessible (n is valid).
+    /// If the segment returns 403 (scrambled n), applies the JS solver to descramble the n
+    /// in `variantURL` and returns the corrected URL. When the CDN receives a request with
+    /// the descrambled n, it embeds the descrambled n in all segment URLs it returns, so
+    /// AVPlayer can fetch every segment without receiving 403.
+    private func descrambledVariantURL(_ variantURL: URL, label: String) async -> (URL, HLSVariantProxy?) {
+        let ua = "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)"
+
+        // 1. Fetch the variant playlist to obtain segment URLs.
+        var req = URLRequest(url: variantURL)
+        req.setValue(ua, forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 8
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let text = String(data: data, encoding: .utf8) else {
+            playerLog.notice("[\(label)] n-probe: playlist fetch failed — using original URL")
+            return (variantURL, nil)
+        }
+
+        // 2. Find the first absolute segment URL in the playlist.
+        let lines = text.components(separatedBy: .newlines)
+        guard let segStr = lines.first(where: { !$0.hasPrefix("#") && !$0.isEmpty && $0.hasPrefix("http") }),
+              let segURL = URL(string: segStr) else {
+            playerLog.notice("[\(label)] n-probe: no segment URL found — using original URL")
+            return (variantURL, nil)
+        }
+
+        // 3. HEAD-probe the segment to detect scrambled n.
+        var segReq = URLRequest(url: segURL)
+        segReq.httpMethod = "HEAD"
+        segReq.setValue(ua, forHTTPHeaderField: "User-Agent")
+        segReq.timeoutInterval = 5
+        if let (_, resp) = try? await URLSession.shared.data(for: segReq),
+           let http = resp as? HTTPURLResponse, http.statusCode == 200 {
+            playerLog.notice("[\(label)] n-probe: segment 200 — n is valid, no descrambling needed")
+            return (variantURL, nil)
+        }
+
+        // 4. Segment inaccessible (403) — extract scrambled n from the SEGMENT URL, not the
+        //    variant playlist URL. The segment URLs inside the playlist carry an independent n
+        //    that the CDN does NOT change based on the variant URL's n. Descrambling only the
+        //    variant URL's n leaves segment n values scrambled → AVPlayer still gets 403.
+        //    We must rewrite segment n values in the playlist content itself, then serve the
+        //    modified playlist from a local temp file so AVPlayer fetches descrambled segments.
+        playerLog.notice("[\(label)] n-probe: segment not 200 — rewriting segment n in playlist")
+
+        // Extract n from segment URL (YouTube HLS uses path-based /n/VALUE/ format).
+        let segPathParts = segURL.pathComponents
+        let scrambledSegN: String?
+        if let idx = segPathParts.firstIndex(of: "n"), idx + 1 < segPathParts.count,
+           !segPathParts[idx + 1].isEmpty {
+            scrambledSegN = segPathParts[idx + 1]
+        } else if let nItem = URLComponents(url: segURL, resolvingAgainstBaseURL: false)?
+                      .queryItems?.first(where: { $0.name == "n" }),
+                  let val = nItem.value, !val.isEmpty {
+            scrambledSegN = val
+        } else {
+            scrambledSegN = nil
+        }
+
+        guard let scrambledN = scrambledSegN else {
+            playerLog.notice("[\(label)] n-probe: could not extract n from segment URL — using original")
+            return (variantURL, nil)
+        }
+
+        // 5. Descramble the segment n via the JS solver.
+        //    Build a synthetic path-format URL so YouTubeNDescrambler.extractNParam can locate n.
+        guard let syntheticURL = URL(string: "https://googlevideo.com/videoplayback/n/\(scrambledN)/seg.ts") else {
+            return (variantURL, nil)
+        }
+        let descrambledSynthetic = await YouTubeNDescrambler.shared.descrambleURL(syntheticURL)
+        guard descrambledSynthetic != syntheticURL else {
+            playerLog.notice("[\(label)] n-probe: solver returned unchanged URL for segment n — using original")
+            return (variantURL, nil)
+        }
+
+        // Extract the descrambled n value from the synthetic result.
+        let descParts = descrambledSynthetic.pathComponents
+        guard let dIdx = descParts.firstIndex(of: "n"), dIdx + 1 < descParts.count,
+              !descParts[dIdx + 1].isEmpty else {
+            return (variantURL, nil)
+        }
+        let descrambledN = descParts[dIdx + 1]
+        playerLog.notice("[\(label)] n-probe: segment n: \(scrambledN) → \(descrambledN)")
+
+        // 6. Rewrite ALL n occurrences in the playlist (path + query-string formats).
+        //    All segments in a YouTube HLS playlist share the same n value, so a single
+        //    replace-all pass covers every segment URL.
+        var rewritten = text
+        rewritten = rewritten.replacingOccurrences(of: "/n/\(scrambledN)/", with: "/n/\(descrambledN)/")
+        // Also handle query-string format (n=OLD covers ?n=OLD& and &n=OLD& and &n=OLD\n)
+        rewritten = rewritten.replacingOccurrences(of: "n=\(scrambledN)", with: "n=\(descrambledN)")
+
+        // 6b. Verify the rewrite: probe the first rewritten segment to confirm 200.
+        //     If still 403, the descrambled n is wrong (solver/player.js mismatch).
+        let rewrittenLines = rewritten.components(separatedBy: .newlines)
+        if let firstRewrittenSeg = rewrittenLines.first(where: { !$0.hasPrefix("#") && !$0.isEmpty && $0.hasPrefix("http") }),
+           let verifyURL = URL(string: firstRewrittenSeg) {
+            playerLog.notice("[\(label)] n-probe: verifying rewritten seg n=\(descrambledN)")
+            var verifyReq = URLRequest(url: verifyURL)
+            verifyReq.httpMethod = "HEAD"
+            verifyReq.setValue(ua, forHTTPHeaderField: "User-Agent")
+            verifyReq.timeoutInterval = 5
+            if let (_, verifyResp) = try? await URLSession.shared.data(for: verifyReq),
+               let verifyHTTP = verifyResp as? HTTPURLResponse {
+                playerLog.notice("[\(label)] n-probe: post-rewrite verify → HTTP \(verifyHTTP.statusCode)")
+                if verifyHTTP.statusCode == 403 {
+                    playerLog.error("[\(label)] n-probe: VERIFY FAILED — descrambled n returns 403; reverting to original URL")
+                    return (variantURL, nil)
+                }
+            } else {
+                playerLog.notice("[\(label)] n-probe: post-rewrite verify timed out or failed — proceeding anyway")
+            }
+        }
+
+        // 7. Serve the rewritten playlist via AVAssetResourceLoader (custom URL scheme).
+        //    Using a file:// URL + AVURLAssetHTTPHeaderFieldsKey causes AVPlayer to silently hang
+        //    in .unknown status indefinitely on the iOS Simulator — AVFoundation never fires
+        //    readyToPlay. The file:// + HTTP-header-options combination appears to suppress the
+        //    AVFoundation networking stack that fetches CDN segments, so the item never becomes
+        //    ready. Using a custom non-http scheme instead routes the initial playlist request
+        //    through AVAssetResourceLoader, which returns our pre-rewritten content. AVPlayer then
+        //    fetches CDN segment URLs (https://) via its normal network stack — no file I/O needed.
+        let proxy = HLSVariantProxy(playlistContent: rewritten)
+        let proxyURL = HLSVariantProxy.makeProxyURL()
+        playerLog.notice("[\(label)] n-probe: HLS proxy ready — serving \(rewritten.count) bytes")
+        return (proxyURL, proxy)
+    }
+    #endif
 }
+
+#if targetEnvironment(simulator)
+/// Minimal `AVAssetResourceLoaderDelegate` that serves a pre-rewritten HLS variant playlist
+/// via a custom `smarttubehls://` URL scheme. Simulator-only.
+///
+/// Background: `AVURLAsset(url: file://)` + `AVURLAssetHTTPHeaderFieldsKey` hangs indefinitely
+/// in `.unknown` status — AVFoundation never transitions to `.readyToPlay` on the Simulator.
+/// Routing the initial playlist fetch through `AVAssetResourceLoader` avoids the `file://` code
+/// path while still letting AVPlayer request CDN segment URLs (`https://`) normally.
+private final class HLSVariantProxy: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
+    private let playlistData: Data
+
+    init(playlistContent: String) {
+        self.playlistData = playlistContent.data(using: .utf8) ?? Data()
+    }
+
+    /// Returns a unique `smarttubehls://` URL. Each call produces a new value to prevent caching.
+    static func makeProxyURL() -> URL {
+        let ts = UInt64(Date().timeIntervalSince1970 * 1_000)
+        return URL(string: "smarttubehls://variant/\(ts).m3u8")!
+    }
+
+    // MARK: - AVAssetResourceLoaderDelegate
+
+    func resourceLoader(
+        _ resourceLoader: AVAssetResourceLoader,
+        shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
+    ) -> Bool {
+        if let info = loadingRequest.contentInformationRequest {
+            // UTI for HLS / M3U8 playlists. AVFoundation uses this to decide how to parse
+            // the returned bytes. "public.m3u-playlist" is the registered UTI for .m3u8.
+            info.contentType = "public.m3u-playlist"
+            info.contentLength = Int64(playlistData.count)
+            info.isByteRangeAccessSupported = false
+        }
+        loadingRequest.dataRequest?.respond(with: playlistData)
+        loadingRequest.finishLoading()
+        return true
+    }
+
+    func resourceLoader(
+        _ resourceLoader: AVAssetResourceLoader,
+        didCancel loadingRequest: AVAssetResourceLoadingRequest
+    ) {}
+}
+#endif
