@@ -25,12 +25,34 @@ extension AuthService {
     /// On success, sets `self.sapisid` to the extracted value.
     /// All errors are caught internally; this method never throws.
     func fetchYouTubeWebCookies() async {
-        guard let token = accessToken else {
-            authLog.notice("[cookies] fetchYouTubeWebCookies: no access token — skipping")
+        // Use validAccessToken() so we refresh an expired token before making API calls.
+        // This handles the case where accessToken was cleared at startup (expired) but
+        // refreshToken is still valid — common after an overnight Mac restart.
+        let token: String
+        do {
+            token = try await validAccessToken()
+        } catch {
+            authLog.notice("[cookies] fetchYouTubeWebCookies: no valid token (\(error)) — skipping")
             return
         }
 
         authLog.notice("[cookies] Fetching YouTube web session cookies for SAPISIDHASH auth")
+
+        // Diagnostic + gaiaId extraction: tokeninfo returns `sub` (numeric Gaia ID) when `openid`
+        // scope is present. Required for the MultiBearer Multilogin request format.
+        if let infoURL = URL(string: "https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=\(token)"),
+           let (infoData, _) = try? await URLSession.shared.data(from: infoURL) {
+            let infoStr = String(data: infoData, encoding: .utf8) ?? "<non-UTF8>"
+            authLog.notice("[cookies] tokeninfo=\(infoStr)")
+            // Extract gaiaId from `sub` claim (only present when openid scope is in token)
+            if let infoJSON = try? JSONSerialization.jsonObject(with: infoData) as? [String: Any],
+               let sub = infoJSON["sub"] as? String, !sub.isEmpty {
+                gaiaId = sub
+                authLog.notice("[cookies] gaiaId=\(sub) — MultiBearer Multilogin enabled")
+            } else {
+                authLog.notice("[cookies] gaiaId not in tokeninfo — token missing openid scope; need re-sign-in")
+            }
+        }
 
         // Step 1 — get uberauth via OAuthLogin endpoint (no-redirect session)
         let oauthLoginURL = URL(string: "https://accounts.google.com/accounts/OAuthLogin?source=youtube&issueuberauth=1")!
@@ -53,7 +75,8 @@ extension AuthService {
               let location = http1.value(forHTTPHeaderField: "Location"),
               let mergeURL = URL(string: location) else {
             let code = (response1 as? HTTPURLResponse)?.statusCode ?? 0
-            authLog.notice("[cookies] OAuthLogin did not redirect (HTTP \(code)) — trying Multilogin fallback")
+            let wwwAuth = (response1 as? HTTPURLResponse)?.value(forHTTPHeaderField: "WWW-Authenticate") ?? "none"
+            authLog.notice("[cookies] OAuthLogin did not redirect (HTTP \(code)) WWW-Authenticate=\(wwwAuth) — trying Multilogin fallback")
             await fetchSAPISIDViaMultilogin(token: token)
             return
         }
@@ -87,18 +110,30 @@ extension AuthService {
 
     /// Attempts to obtain SAPISID via the Google Multilogin endpoint.
     ///
-    /// Multilogin is used by Chromium for account session sync and accepts any valid
-    /// Google OAuth access token — no special OAuthLogin scope required. The response
-    /// body contains a JSON cookie list (with XSSI prefix) including `SAPISID`.
+    /// Uses the current Chromium Multilogin protocol (as of 2025):
+    /// - Authorization: MultiBearer {token}:{gaiaId}  (requires `openid` scope on token)
+    /// - URL param: reuseCookies=0  (replaced the old pt=I1)
+    /// - Body: " " (space) to force POST — Chromium pattern
     ///
-    /// Reference: chromium/src/components/signin/core/browser/gaia_cookie_manager_service.cc
+    /// Reference: chromium/src/google_apis/gaia/gaia_auth_fetcher.cc StartOAuthMultilogin()
     private func fetchSAPISIDViaMultilogin(token: String) async {
-        guard let url = URL(string: "https://accounts.google.com/oauth/multilogin?source=ChromiumBrowser&pt=I1") else { return }
+        guard let url = URL(string: "https://accounts.google.com/oauth/multilogin?source=ChromiumBrowser&reuseCookies=0") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("MultiLogin osid=0:\(token)", forHTTPHeaderField: "Authorization")
+        // Current Chromium format: MultiBearer {token}:{gaiaId}
+        // gaiaId is the numeric Gaia ID (OIDC `sub` claim) from tokeninfo when openid scope is present.
+        if let gid = gaiaId, !gid.isEmpty {
+            request.setValue("MultiBearer \(token):\(gid)", forHTTPHeaderField: "Authorization")
+            authLog.notice("[cookies] Multilogin MultiBearer with gaiaId=\(gid)")
+        } else {
+            // Fallback: old Bearer format — likely to fail (INVALID_INPUT) without gaiaId.
+            // User must sign out + sign in to get an openid-scoped token.
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
+            authLog.notice("[cookies] Multilogin fallback Bearer (no gaiaId — openid scope missing)")
+        }
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = "source=ChromiumBrowser".data(using: .utf8)
+        request.httpBody = " ".data(using: .utf8)  // Space forces POST (Chromium pattern)
 
         let data: Data
         let response: URLResponse
@@ -111,7 +146,8 @@ extension AuthService {
 
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            authLog.notice("[cookies] Multilogin HTTP \(code) — SAPISID via Multilogin unavailable")
+            let body = String(data: data, encoding: .utf8) ?? "<non-UTF8>"
+            authLog.notice("[cookies] Multilogin HTTP \(code) body=\(body) — SAPISID via Multilogin unavailable")
             return
         }
 

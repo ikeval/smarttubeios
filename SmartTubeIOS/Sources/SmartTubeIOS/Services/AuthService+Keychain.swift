@@ -39,8 +39,10 @@ extension AuthService {
         isSignedIn = accessToken != nil || refreshToken != nil
         if isSignedIn { scheduleProactiveRefresh() }
         // If signed in but no SAPISID, attempt to obtain it in the background.
-        // OAuthLogin may 403; falls back to Google Multilogin.
-        if isSignedIn && sapisid == nil && accessToken != nil {
+        // Trigger even when accessToken is nil (expired) — fetchYouTubeWebCookies
+        // calls validAccessToken() which refreshes the token if needed before
+        // making any API requests (OAuthLogin → Multilogin).
+        if isSignedIn && sapisid == nil {
             Task { await self.fetchYouTubeWebCookies() }
         }
     }

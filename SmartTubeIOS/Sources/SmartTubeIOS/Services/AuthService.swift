@@ -56,12 +56,24 @@ public final class AuthService {
     /// Used by InnerTubeAPI.postWebCreator to compute the SAPISIDHASH Authorization header.
     /// Set asynchronously after TV device sign-in completes; nil when signed out or not yet fetched.
     public internal(set) var sapisid: String?
+    /// Numeric Google Account ID (GAIA "sub" claim) extracted from the OpenID Connect id_token
+    /// or from tokeninfo when `openid` scope is present. Required by the Chromium-style Multilogin
+    /// endpoint (Authorization: MultiBearer {token}:{gaiaId}).
+    public internal(set) var gaiaId: String?
     var refreshToken: String?
     var tokenExpiry: Date?
     var pollTask: Task<Void, Never>?
 
     var credentialsFetcher = YouTubeClientCredentialsFetcher()
-    var scope = "http://gdata.youtube.com https://www.googleapis.com/auth/youtube-paid-content"
+    // `openid` scope: required so that the token exchange response includes an id_token whose
+    // `sub` claim is the numeric Gaia ID. Google's current Multilogin endpoint uses
+    // `Authorization: MultiBearer {token}:{gaiaId}` and requires the numeric Gaia ID.
+    // `youtube` scope: accepted by Google's Multilogin endpoint.
+    // `gdata` + `youtube-paid-content`: backwards compatibility with existing TV API calls.
+    // `accounts.reauth` scope was tested (Decision 15/16) and confirmed NOT grantable by the
+    // YouTube TV device-code client — Google returns non-2xx on the /device/code request and
+    // sign-in fails entirely. Removed. The Multilogin path remains blocked.
+    var scope = "openid http://gdata.youtube.com https://www.googleapis.com/auth/youtube-paid-content https://www.googleapis.com/auth/youtube"
     private var tokenRefreshTask: Task<Void, Never>?
 
     // State persisted across foreground/background transitions so that the

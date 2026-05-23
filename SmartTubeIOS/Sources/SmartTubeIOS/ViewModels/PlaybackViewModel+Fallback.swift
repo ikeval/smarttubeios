@@ -72,27 +72,6 @@ extension PlaybackViewModel {
                 guard !Task.isCancelled else { return }
             }
 
-            // --- Phase 0b: Authenticated WEB client (logged-in users only) ---
-            // yt-dlp `web` OAuth client pattern: WEB (nameID=1) + www.youtube.com +
-            // `Authorization: Bearer {token}` + `X-Goog-AuthUser: 0`.
-            // For authenticated users YouTube does NOT apply rqh=1 to adaptive stream URLs
-            // from the WEB client, making this the most reliable ≥720p path when signed in.
-            // Skipped when not logged in (notAuthenticated error is silently swallowed).
-            if hasAuthToken {
-                do {
-                    let webAuthInfo = try await api.fetchPlayerInfoWebAuthenticated(videoId: video.id)
-                    if await tryAllStreams(video: video, info: webAuthInfo,
-                                          label: "WebAuth[\(attempt)]", skipMuxed: true) {
-                        return
-                    }
-                } catch APIError.notAuthenticated {
-                    // No token — skip silently.
-                } catch {
-                    playerLog.error("WebAuth client fetch failed (attempt \(attempt)): \(error)")
-                }
-                guard !Task.isCancelled else { return }
-            }
-
             // --- Phase 1: TV Embedded client ---
             // TVHTML5_SIMPLY_EMBEDDED_PLAYER (client ID 85) returns an HLS manifest
             // for most embeddable videos. HLS streams bypass the rqh=1/pot CDN enforcement
@@ -389,6 +368,58 @@ extension PlaybackViewModel {
                     let variantURL = chosen.value
                     effectiveURL = variantURL
                     playerLog.notice("[\(label)] HLS: selected variant \(chosen.key)p")
+                    // DIAGNOSTIC D-14: probe variant playlist + first segment before handing to AVPlayer.
+                    // Ephemeral session → no cookies, no shared state.
+                    // 200 → URL is publicly accessible; 403 → YouTube session (SAPISID) required.
+                    // Also logs first segment URL to determine if rqh=1 is enforced at segment level.
+                    let capturedLabel = label
+                    Task.detached {
+                        var diagReq = URLRequest(url: variantURL)
+                        diagReq.setValue(
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
+                            forHTTPHeaderField: "User-Agent"
+                        )
+                        diagReq.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
+                        diagReq.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
+                        diagReq.timeoutInterval = 8
+                        guard let (diagData, diagResp) = try? await URLSession(configuration: .ephemeral).data(for: diagReq),
+                              let http = diagResp as? HTTPURLResponse else {
+                            playerLog.notice("[\(capturedLabel)] D-14 HLS variant probe: fail/timeout (no-cookie/Safari UA)")
+                            return
+                        }
+                        let playlistText = String(data: diagData, encoding: .utf8) ?? ""
+                        // Find first absolute segment URL (https:// line not starting with #)
+                        let firstSegURL = playlistText.components(separatedBy: "\n")
+                            .first { $0.hasPrefix("https://") } ?? "(no absolute URL found)"
+                        // rqh=1 appears as /rqh/1/ path-style in HLS URLs (not ?rqh=1 query-style)
+                        let hasRqh = firstSegURL.contains("/rqh/1") || firstSegURL.contains("rqh=1") || firstSegURL.contains("rqh%3D1")
+                        playerLog.notice("[\(capturedLabel)] D-14 HLS variant probe: HTTP \(http.statusCode) bytes=\(diagData.count) firstSeg_rqh=\(hasRqh) firstSeg=\(firstSegURL.prefix(600))")
+                        // If no absolute URL, log the first non-comment line to see relative segment format
+                        if !firstSegURL.hasPrefix("https://") {
+                            let firstNonComment = playlistText.components(separatedBy: "\n")
+                                .first { !$0.hasPrefix("#") && !$0.isEmpty } ?? "(empty)"
+                            playerLog.notice("[\(capturedLabel)] D-14 first non-comment line: \(firstNonComment.prefix(200))")
+                        }
+                        // Also test first segment URL (if absolute) to see if segments need auth
+                        if firstSegURL.hasPrefix("https://"), let segURL = URL(string: firstSegURL) {
+                            var segReq = URLRequest(url: segURL)
+                            segReq.setValue(
+                                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
+                                forHTTPHeaderField: "User-Agent"
+                            )
+                            segReq.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
+                            segReq.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
+                            segReq.timeoutInterval = 8
+                            // Range request — just the first byte to test access
+                            segReq.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+                            if let (_, segResp) = try? await URLSession(configuration: .ephemeral).data(for: segReq),
+                               let segHttp = segResp as? HTTPURLResponse {
+                                playerLog.notice("[\(capturedLabel)] D-14 segment probe (Safari UA/no-cookie): HTTP \(segHttp.statusCode) rqh=\(hasRqh)")
+                            } else {
+                                playerLog.notice("[\(capturedLabel)] D-14 segment probe: fail/timeout")
+                            }
+                        }
+                    }
                 }
             } else {
                 playerLog.notice("[\(label)] HLS manifest fetch returned 0 variants — using master as-is")
