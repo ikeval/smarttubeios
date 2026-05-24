@@ -80,6 +80,10 @@ final class PlaybackQualityManager {
     var hasAppliedH264Cap: Bool = false
     @ObservationIgnored var qualityTask: Task<Void, Never>? = nil
     @ObservationIgnored private var itemObserverTask: Task<Void, Never>? = nil
+    #if canImport(WebKit)
+    /// Keeps the YTHLSProxyLoader alive for the duration of WebView-HLS playback.
+    @ObservationIgnored var webHLSProxyLoader: YTHLSProxyLoader? = nil
+    #endif
 
     // MARK: - Cross-load HLS manifest cache
     //

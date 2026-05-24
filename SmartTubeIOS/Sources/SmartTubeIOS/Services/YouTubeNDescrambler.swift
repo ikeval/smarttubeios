@@ -251,16 +251,15 @@ actor YouTubeNDescrambler {
     /// AVFoundation fetches each MPEG-TS segment as a full GET — no byte-range probe needed.
     ///
     /// - Returns: A `manifest.googlevideo.com/api/manifest/hls_playlist/…` URL, or `nil`
-    ///            if yt-dlp is unavailable or no ≥720p HLS format exists for this video.
+    ///            if no ≥720p HLS format can be obtained.
     static func ytDlpHLSPlaylistURL(videoId: String) async -> URL? {
-        // Guard: only allow valid YouTube video ID characters to prevent shell injection.
+        // Guard: only allow valid YouTube video ID characters to prevent injection.
         guard videoId.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
               !videoId.isEmpty else { return nil }
 
-        // Path 1: read URL from cache file pre-fetched by the UI test class setUp.
-        // The UI test setUp runs yt-dlp on the HOST and writes the URL to /tmp.
-        // posix_spawn of /bin/cat accesses the HOST filesystem — no network needed
-        // inside the app process, so the simulator sandbox does not block it.
+        // Fast path: read URL from a pre-fetched cache file (e.g. written by a host
+        // pre-step before xcodebuild). posix_spawn /bin/cat reads the HOST filesystem
+        // without network — the simulator sandbox does not block it.
         let cacheFile = "/tmp/ytdlp-\(videoId).txt"
         let cached = spawnAndRead(path: "/bin/cat", args: ["/bin/cat", cacheFile])
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -268,22 +267,163 @@ actor YouTubeNDescrambler {
             return url
         }
 
-        // Path 2: fallback — try live yt-dlp subprocess.
-        // Note: in the iOS Simulator, spawned Python processes cannot make outbound
-        // network calls (sandbox restriction), so this path returns nil in practice.
-        // It remains here for future environments where subprocess networking works.
-        let ytDlpPath = "/opt/homebrew/bin/yt-dlp"
-        guard Darwin.access(ytDlpPath, X_OK) == 0 else { return nil }
+        // Self-contained path: replicates yt-dlp's watch-page → android_vr chain
+        // using URLSession (which works in the iOS Simulator, unlike posix_spawn
+        // children that are blocked from making outbound network calls).
+        //
+        // Chain:
+        //   1. GET youtube.com watch page → seeds VISITOR_INFO1_LIVE cookie + extracts visitorData
+        //   2. POST android_vr InnerTube to www.youtube.com (same domain → cookies auto-sent)
+        //      → response includes hlsManifestUrl with spc=-signed per-quality hls_playlist URLs
+        //   3. GET HLS master manifest → parse best ≥720p hls_playlist URL
+        return await fetchHLSPlaylistURLViaCookieSeeding(videoId: videoId)
+    }
 
-        return await withCheckedContinuation { continuation in
-            Task.detached {
-                let videoURL = "https://www.youtube.com/watch?v=\(videoId)"
-                let shellCmd = "\(ytDlpPath) -f 'best[height>=720][protocol^=m3u8]' --get-url --no-playlist '\(videoURL)'"
-                let output = spawnAndRead(path: "/bin/sh", args: ["/bin/sh", "-c", shellCmd])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                continuation.resume(returning: output.isEmpty ? nil : URL(string: output))
+    // Replicates yt-dlp's approach: seed cookies via a real watch-page visit, then call
+    // web_safari InnerTube on www.youtube.com so the seeded cookies are sent automatically.
+    // web_safari (nameID=1, Safari UA) is the client that returns hlsManifestUrl for
+    // non-embeddable videos; with VISITOR_INFO1_LIVE seeded, YouTube generates the URL
+    // with spc= (self-authenticated CDN token) so per-quality segments succeed at the CDN.
+    private static func fetchHLSPlaylistURLViaCookieSeeding(videoId: String) async -> URL? {
+        let log = Logger(subsystem: "com.void.smarttube.app", category: "NDescramble")
+
+        // Step 1: GET watch page with Safari UA to seed youtube.com cookies.
+        guard let watchURL = URL(string: "https://www.youtube.com/watch?v=\(videoId)") else { return nil }
+        var watchReq = URLRequest(url: watchURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        watchReq.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+            forHTTPHeaderField: "User-Agent"
+        )
+        watchReq.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+
+        var visitorData: String? = nil
+        if let (pageData, pageResp) = try? await URLSession.shared.data(for: watchReq) {
+            let pageStatus = (pageResp as? HTTPURLResponse)?.statusCode ?? 0
+            log.notice("⚠️ [ytDlp/sim] watch page HTTP \(pageStatus, privacy: .public) bytes=\(pageData.count, privacy: .public)")
+            if let html = String(data: pageData, encoding: .utf8) {
+                // Extract VISITOR_DATA from ytcfg.set({…}) — this is X-Goog-Visitor-Id value.
+                if let startRange = html.range(of: "\"VISITOR_DATA\":\""),
+                   let endRange   = html[startRange.upperBound...].range(of: "\"") {
+                    visitorData = String(html[startRange.upperBound ..< endRange.lowerBound])
+                    log.notice("⚠️ [ytDlp/sim] extracted visitorData len=\(visitorData?.count ?? 0, privacy: .public)")
+                } else {
+                    log.notice("⚠️ [ytDlp/sim] VISITOR_DATA not found in page HTML")
+                }
+            }
+        } else {
+            log.error("❌ [ytDlp/sim] watch page fetch failed")
+            return nil
+        }
+        // Cookies (VISITOR_INFO1_LIVE, YSC, etc.) are now in HTTPCookieStorage.shared
+        // for the .youtube.com domain — the InnerTube POST below will receive them.
+
+        // Step 2: web_safari InnerTube player request on www.youtube.com.
+        // Cookies from Step 1 are automatically sent (same .youtube.com domain).
+        // web_safari (yt-dlp nameID=1, Safari UA) returns hlsManifestUrl for non-embeddable
+        // videos; with VISITOR_INFO1_LIVE present YouTube generates the URL WITH spc= tokens.
+        // nosec: same published key used in InnerTubeAPI+Networking.swift
+        let wsApiKey = "AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8" // gitleaks:allow
+        guard let apiURL = URL(string: "https://www.youtube.com/youtubei/v1/player?key=\(wsApiKey)&prettyPrint=false") else { return nil }
+
+        var clientCtx: [String: Any] = [
+            "clientName": "WEB",
+            "clientVersion": "2.20260114.08.00",
+            "osName": "Macintosh",
+            "osVersion": "10_15_7",
+            "platform": "DESKTOP",
+            "browserName": "Safari",
+            "browserVersion": "18.0",
+            "hl": "en",
+            "gl": "US",
+            "utcOffsetMinutes": 0,
+        ]
+        if let vd = visitorData { clientCtx["visitorData"] = vd }
+
+        let bodyObj: [String: Any] = [
+            "videoId": videoId,
+            "context": ["client": clientCtx],
+            "racyCheckOk": true,
+            "contentCheckOk": true,
+            "playbackContext": [
+                "contentPlaybackContext": ["html5Preference": "HTML5_PREF_WANTS"],
+            ],
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: bodyObj) else { return nil }
+
+        var apiReq = URLRequest(url: apiURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        apiReq.httpMethod = "POST"
+        apiReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        apiReq.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
+        // WebSafari UA — matches InnerTubeClients.WebSafari.userAgent
+        apiReq.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
+            forHTTPHeaderField: "User-Agent"
+        )
+        apiReq.setValue("1", forHTTPHeaderField: "X-YouTube-Client-Name")
+        apiReq.setValue("2.20260114.08.00", forHTTPHeaderField: "X-YouTube-Client-Version")
+        if let vd = visitorData { apiReq.setValue(vd, forHTTPHeaderField: "X-Goog-Visitor-Id") }
+        apiReq.httpBody = bodyData
+
+        guard let (apiData, apiResp) = try? await URLSession.shared.data(for: apiReq) else {
+            log.error("❌ [ytDlp/sim] web_safari InnerTube request failed")
+            return nil
+        }
+        let apiStatus = (apiResp as? HTTPURLResponse)?.statusCode ?? 0
+        log.notice("⚠️ [ytDlp/sim] web_safari /player HTTP \(apiStatus, privacy: .public) bytes=\(apiData.count, privacy: .public)")
+
+        guard let json = try? JSONSerialization.jsonObject(with: apiData) as? [String: Any] else { return nil }
+        let streamingKeys = (json["streamingData"] as? [String: Any]).map { Array($0.keys).sorted() } ?? []
+        log.notice("⚠️ [ytDlp/sim] web_safari streamingKeys: \(streamingKeys, privacy: .public)")
+
+        guard let streamingData = json["streamingData"] as? [String: Any],
+              let hlsManifestStr = streamingData["hlsManifestUrl"] as? String,
+              let hlsManifestURL = URL(string: hlsManifestStr)
+        else {
+            log.notice("⚠️ [ytDlp/sim] no hlsManifestUrl in web_safari response")
+            return nil
+        }
+        let hasSpc = hlsManifestStr.contains("spc")
+        log.notice("⚠️ [ytDlp/sim] hlsManifestUrl hasSpc=\(hasSpc, privacy: .public): \(String(hlsManifestStr.prefix(80)), privacy: .public)")
+
+        // Step 3: Fetch HLS master manifest → pick best ≥720p per-quality hls_playlist URL.
+        guard let (manifestData, manifestResp) = try? await URLSession.shared.data(from: hlsManifestURL),
+              (manifestResp as? HTTPURLResponse)?.statusCode == 200,
+              let manifest = String(data: manifestData, encoding: .utf8)
+        else {
+            log.error("❌ [ytDlp/sim] HLS master manifest fetch failed")
+            return nil
+        }
+
+        let result = parseBestHLSPlaylistURL(from: manifest, minHeight: 720)
+        if let result {
+            log.notice("✅ [ytDlp/sim] self-contained HLS URL found: \(String(result.absoluteString.prefix(80)), privacy: .public)")
+        } else {
+            log.notice("⚠️ [ytDlp/sim] no ≥720p playlist found in master manifest")
+        }
+        return result
+    }
+
+    // Parses an HLS master manifest (M3U8) and returns the per-quality playlist URL for
+    // the best stream whose height is ≥ minHeight.  Returns nil if none qualifies.
+    private static func parseBestHLSPlaylistURL(from manifest: String, minHeight: Int) -> URL? {
+        var bestHeight = 0
+        var bestURLString: String? = nil
+        let lines = manifest.components(separatedBy: .newlines)
+        for (i, line) in lines.enumerated() {
+            guard line.hasPrefix("#EXT-X-STREAM-INF:"),
+                  let resRange = line.range(of: "RESOLUTION=") else { continue }
+            let afterRes = String(line[resRange.upperBound...])
+            let resPart  = afterRes.components(separatedBy: CharacterSet(charactersIn: ", \t\r\n")).first ?? afterRes
+            let dims     = resPart.components(separatedBy: "x")
+            guard dims.count >= 2, let height = Int(dims[1]) else { continue }
+            // The next non-empty, non-comment line is the playlist URL.
+            let nextURL = lines[(i + 1)...].first(where: { !$0.isEmpty && !$0.hasPrefix("#") })
+            if let urlString = nextURL, height >= minHeight, height > bestHeight {
+                bestHeight = height
+                bestURLString = urlString
             }
         }
+        return bestURLString.flatMap { URL(string: $0) }
     }
 
     // MARK: - Utilities

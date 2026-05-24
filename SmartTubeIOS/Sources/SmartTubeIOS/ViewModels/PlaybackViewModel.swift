@@ -235,6 +235,13 @@ public final class PlaybackViewModel {
         get { qualityManager.qualityTask }
         set { qualityManager.qualityTask = newValue }
     }
+    #if canImport(WebKit)
+    /// Forwarded from qualityManager; keeps YTHLSProxyLoader alive during WebView-HLS playback.
+    var webHLSProxyLoader: YTHLSProxyLoader? {
+        get { qualityManager.webHLSProxyLoader }
+        set { qualityManager.webHLSProxyLoader = newValue }
+    }
+    #endif
     /// True while `replaceCurrentItem` is executing; guards the rate observer from
     /// treating the transient rate-drop as an unexpected external pause.
     var isSwappingItem: Bool = false

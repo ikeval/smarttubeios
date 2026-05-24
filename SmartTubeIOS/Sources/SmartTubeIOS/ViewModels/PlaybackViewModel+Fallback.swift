@@ -4,6 +4,9 @@ import os
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(WebKit)
+import WebKit
+#endif
 import SmartTubeIOSCore
 
 // Disambiguate SmartTubeIOSCore.VideoFormat (stream format: height/bitrate/URL)
@@ -46,25 +49,29 @@ extension PlaybackViewModel {
     ///   Phase 4 — if all adaptive attempts fail, fall back to the Android muxed 360p stream.
     ///   The entire cycle repeats up to 3 times to survive transient network errors.
     func exhaustiveRetry(video: Video, originalError: Error?) async {
-        #if targetEnvironment(simulator)
-        // Simulator-only fast path: yt-dlp format 95 (720p muxed HLS).
-        // Root cause of test failure: ALL YouTube clients return rqh=1 adaptive progressive
-        // MP4 URLs for Wu8xNx4njoM. AVFoundation's loadTracks hangs 8 s for rqh=1 progressive
-        // MP4 because the CDN holds byte-range probe requests (moov-atom lookup). curl (full GET)
-        // and yt-dlp (HTTP/1.1) both succeed — it's AVFoundation's probe request pattern that
-        // the CDN silently holds. Format 95 (720p HLS playlist) has spc= tokens in segment URLs
-        // and segments are served as full GETs (no probe) → curl: HTTP 200 bytes=238008.
-        // This path runs once before the 3-attempt client loop to avoid 3×8s = 24 s of hangs.
-        playerLog.notice("⚠️ [ytDlp/sim] fetching 720p+ HLS playlist from yt-dlp (rqh=1 bypass)")
-        if let ytDlpURL = await YouTubeNDescrambler.ytDlpHLSPlaylistURL(videoId: video.id) {
-            playerLog.notice("⚠️ [ytDlp/sim] Got URL: \(ytDlpURL.absoluteString.prefix(80)) — trying as HLS stream")
-            if await tryYtDlpHLS(ytDlpURL, for: video) {
-                playerLog.notice("✅ [ytDlp/sim] 720p+ HLS playing — exhaustiveRetry done")
+        #if canImport(WebKit)
+        // Phase -1: WKWebView HLS extraction (device-native, no external tools required).
+        // YouTube's JavaScript player computes the spc= proof-of-context token that produces
+        // HLS segment URLs not subject to rqh=1 CDN restrictions. Raw InnerTube API calls
+        // (even with Bearer auth — confirmed by D-15 probe: HTTP 403) cannot generate spc=
+        // because YouTube verifies it originated from a browser JavaScript execution context.
+        // Running the YouTube watch page in a hidden WKWebView lets the JS player compute
+        // spc= and make its internal /player call; we intercept that response to get the URL.
+        // This runs once before the 3-attempt client loop to avoid repeated 8s CDN timeouts
+        // from rqh=1 adaptive streams that AVFoundation's byte-range probe pattern triggers.
+        playerLog.notice("⚠️ [webView] fetching HLS manifest URL via WKWebView YouTube player")
+        let webViewURL = await YouTubeWebViewHLSExtractor.shared.extractHLSURL(videoId: video.id)
+        let nSolver = YouTubeWebViewHLSExtractor.shared.extractedNSolver
+        if let webViewURL {
+            let nInfo = nSolver.map { "\($0.unsolved)→\($0.solved)" } ?? "nil"
+            playerLog.notice("⚠️ [webView] got hlsManifestUrl — nSolver=\(nInfo as NSString)")
+            if await tryWebViewHLS(webViewURL, nSolver: nSolver, for: video) {
+                playerLog.notice("✅ [webView] 720p+ HLS playing via WKWebView extraction — exhaustiveRetry done")
                 return
             }
-            playerLog.notice("⚠️ [ytDlp/sim] HLS load failed — falling through to client retry chain")
+            playerLog.notice("⚠️ [webView] HLS load failed — falling through to client retry chain")
         } else {
-            playerLog.notice("⚠️ [ytDlp/sim] yt-dlp unavailable or no 720p+ HLS — proceeding with client chain")
+            playerLog.notice("⚠️ [webView] WKWebView extraction returned nil — proceeding with client chain")
         }
         #endif
         for attempt in 1...3 {
@@ -1251,15 +1258,136 @@ extension PlaybackViewModel {
 
     // MARK: - yt-dlp HLS simulator fast-path
 
+    #if canImport(WebKit)
+    /// Loads an HLS manifest URL extracted by `YouTubeWebViewHLSExtractor` directly into AVPlayer.
+    ///
+    /// The URL was obtained by intercepting the YouTube JS player's internal InnerTube call in a
+    /// hidden WKWebView — the JS player computes the `spc=` token that bypasses `rqh=1` CDN
+    /// restrictions. Segment URLs in the manifest are signed by YouTube and served without 403.
+    ///
+    /// Fetches the `hls_variant` master manifest, parses it for a per-quality `hls_playlist`
+    /// URL at ≥720p, then loads that into AVPlayer via YTHLSProxyLoader so that ALL
+    /// HLS requests (playlist + segments) are forwarded through URLSession with the
+    /// correct desktop-Safari User-Agent that manifest.googlevideo.com requires.
+    private func tryWebViewHLS(_ masterURL: URL, nSolver: (unsolved: String, solved: String)?, for video: Video) async -> Bool {
+        playerLog.notice("[webView/HLS] fetching master manifest: \(masterURL.absoluteString.prefix(120))")
+
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+
+        // 1. Download the master M3U8 via URLSession (spc= in URL = self-authenticating)
+        var request = URLRequest(url: masterURL, timeoutInterval: 20)
+        request.setValue(ua, forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              let manifestText = String(data: data, encoding: .utf8) else {
+            playerLog.error("❌ [webView/HLS] failed to fetch master manifest")
+            return false
+        }
+        playerLog.notice("[webView/HLS] master manifest OK bytes=\(data.count)")
+
+        // 2. Parse M3U8 for best ≥720p per-quality playlist URL
+        let bestURL = parseHLSBestVariant(from: manifestText, baseURL: masterURL, minHeight: 720)
+                   ?? parseHLSBestVariant(from: manifestText, baseURL: masterURL, minHeight: 0)
+        guard let bestURL else {
+            playerLog.error("❌ [webView/HLS] no quality URL found in master manifest")
+            return false
+        }
+        playerLog.notice("[webView/HLS] selected per-quality URL: \(bestURL.absoluteString.prefix(200))")
+
+        // 3. Route through YTHLSProxyLoader so every AVPlayer request (playlist + segments)
+        //    goes via URLSession.shared with the desktop-Safari UA.
+        //    AVURLAssetHTTPHeaderFieldsKey is not reliably applied by CoreMedia's HLS stack.
+        guard let proxyURL = bestURL.proxyURL else {
+            playerLog.error("❌ [webView/HLS] failed to build proxy URL")
+            return false
+        }
+        let proxyLoader = YTHLSProxyLoader(ua: ua, nSolver: nSolver)
+        let asset = AVURLAsset(url: proxyURL)
+        // Keep proxy loader alive for the lifetime of this asset
+        asset.resourceLoader.setDelegate(proxyLoader, queue: DispatchQueue.global(qos: .userInitiated))
+        // Store reference so ARC doesn't release the loader while AVPlayer uses the asset
+        webHLSProxyLoader = proxyLoader
+
+        let item = AVPlayerItem(asset: asset)
+        item.audioTimePitchAlgorithm = .spectral
+        item.preferredForwardBufferDuration = 2.0
+        Task { [weak item] in
+            try? await Task.sleep(for: .seconds(5))
+            item?.preferredForwardBufferDuration = 0
+        }
+        player.replaceCurrentItem(with: item)
+        itemObserverTask?.cancel()
+        for await status in item.statusStream {
+            switch status {
+            case .readyToPlay:
+                playerLog.notice("✅ [webView/HLS] readyToPlay")
+                needsQuickStartup = false
+                isLoading = false
+                player.rate = Float(settings.playbackSpeed)
+                isPlaying = true
+                return true
+            case .failed:
+                let err = item.error?.localizedDescription ?? "nil"
+                playerLog.error("❌ [webView/HLS] AVPlayerItem failed: \(err)")
+                return false
+            case .unknown: continue
+            @unknown default: continue
+            }
+        }
+        return false
+    }
+
+    /// Parses an HLS master M3U8 manifest and returns the URL of the best stream at ≥ `minHeight`.
+    /// Handles both absolute URIs and relative paths (resolved against `baseURL`).
+    private func parseHLSBestVariant(from manifest: String, baseURL: URL, minHeight: Int) -> URL? {
+        let lines = manifest.components(separatedBy: "\n")
+        var bestHeight = 0
+        var bestURL: URL?
+        var i = 0
+        while i < lines.count {
+            let line = lines[i].trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("#EXT-X-STREAM-INF:") {
+                // Extract height from RESOLUTION=WxH
+                var height = 0
+                if let resRange = line.range(of: #"RESOLUTION=\d+x(\d+)"#, options: .regularExpression) {
+                    let resPart = String(line[resRange])  // "RESOLUTION=1280x720"
+                    if let h = resPart.components(separatedBy: "x").last.flatMap(Int.init) {
+                        height = h
+                    }
+                }
+                // Skip to next non-empty, non-comment line (the URI)
+                i += 1
+                while i < lines.count {
+                    let candidate = lines[i].trimmingCharacters(in: .whitespaces)
+                    if !candidate.isEmpty && !candidate.hasPrefix("#") { break }
+                    i += 1
+                }
+                if i < lines.count, height >= minHeight, height > bestHeight {
+                    let uriLine = lines[i].trimmingCharacters(in: .whitespaces)
+                    let resolved: URL?
+                    if uriLine.hasPrefix("http://") || uriLine.hasPrefix("https://") {
+                        resolved = URL(string: uriLine)
+                    } else {
+                        // Relative URI — resolve against the directory of the master manifest URL
+                        let baseDir = baseURL.deletingLastPathComponent()
+                        resolved = URL(string: uriLine, relativeTo: baseDir).map { $0.absoluteURL }
+                    }
+                    if let url = resolved {
+                        bestHeight = height
+                        bestURL = url
+                        playerLog.notice("[webView/HLS] candidate \(height)p: \(uriLine.prefix(80))")
+                    }
+                }
+            }
+            i += 1
+        }
+        return bestURL
+    }
+    #endif
+
     #if targetEnvironment(simulator)
-    /// Loads a yt-dlp `hls_playlist` URL directly into AVPlayer.
-    ///
-    /// Used as the first step in `exhaustiveRetry` when rqh=1 blocks all adaptive progressive
-    /// MP4 paths. The yt-dlp playlist has `spc=` tokens in every segment URL; each segment is
-    /// fetched as a full GET (no byte-range probe), so the CDN serves them immediately.
-    ///
-    /// Minimal state setup — no `PlayerInfo`, no quality picker formats. Acceptable for the
-    /// simulator test path where we only need the video to play at ≥720p.
+    /// Loads a yt-dlp `hls_playlist` URL directly into AVPlayer. Kept for backward compatibility.
     private func tryYtDlpHLS(_ url: URL, for video: Video) async -> Bool {
         playerLog.notice("[ytDlp[sim]/HLS]: \(url.absoluteString.prefix(120))")
         let ua = "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)"
