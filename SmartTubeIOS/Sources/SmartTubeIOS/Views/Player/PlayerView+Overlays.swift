@@ -237,6 +237,7 @@ extension PlayerView {
             .onExitCommand { showDescriptionSheet = false }
             #endif
             .padding(.horizontal, 8)
+            .safeAreaPadding(.horizontal)
             .padding(.bottom, 8)
         }
         .ignoresSafeArea()
@@ -308,6 +309,7 @@ extension PlayerView {
             .onExitCommand { showCommentsSheet = false }
             #endif
             .padding(.horizontal, 8)
+            .safeAreaPadding(.horizontal)
             .padding(.bottom, 8)
         }
         .ignoresSafeArea()
