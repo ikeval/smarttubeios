@@ -187,6 +187,11 @@ actor YouTubeNDescrambler {
     /// Launches `path` with `args`, captures stdout, and returns it as a String.
     /// Stderr is suppressed. Blocks until the child exits.
     private static func spawnAndRead(path: String, args: [String]) -> String {
+        #if os(tvOS)
+        // posix_spawn is unavailable on tvOS — yt-dlp / Deno descrambling is not supported
+        // on this platform. Callers guard against empty output and fall back gracefully.
+        return ""
+        #else
         var stdoutFDs = [Int32](repeating: 0, count: 2) // [0]=read [1]=write
         guard Darwin.pipe(&stdoutFDs) == 0 else { return "" }
 
@@ -239,6 +244,7 @@ actor YouTubeNDescrambler {
         Darwin.waitpid(pid, nil, 0)
 
         return String(data: output, encoding: .utf8) ?? ""
+        #endif
     }
 
     // MARK: - yt-dlp HLS (simulator fast-path for rqh=1 videos)
