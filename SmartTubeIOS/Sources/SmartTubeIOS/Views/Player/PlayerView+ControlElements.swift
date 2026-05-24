@@ -610,6 +610,19 @@ extension PlayerView {
                     .buttonStyle(.borderedProminent)
                     .tint(seg.category.color)
                     #if os(tvOS)
+                    // When the skip-toast button is focused, D-pad left/right must still
+                    // seek. Without this modifier the move event is consumed by the button
+                    // and the ConditionalMoveCommand on the player body never fires
+                    // (it is intentionally disabled while the toast is active so that the
+                    // focus engine can see the button). Adding onMoveCommand here gives
+                    // the button a way to pass the direction through to seeking.
+                    .onMoveCommand { direction in
+                        switch direction {
+                        case .left:  vm.seekRelative(seconds: -Double(store.settings.seekBackSeconds))
+                        case .right: vm.seekRelative(seconds: Double(store.settings.seekForwardSeconds))
+                        default: break
+                        }
+                    }
                     .focused($skipToastButtonFocused)
                     #endif
                     .padding()
