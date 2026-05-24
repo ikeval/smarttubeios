@@ -495,7 +495,21 @@ extension PlayerView {
             swipeLog.notice("[orientation] onAppear — calling beginGeneratingDeviceOrientationNotifications")
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             let rawOrientation = UIDevice.current.orientation
-            let physicallyLandscape = rawOrientation.isLandscape
+            let physicallyLandscape: Bool
+            if rawOrientation.isLandscape || rawOrientation.isPortrait {
+                // OS has delivered a definitive device orientation.
+                physicallyLandscape = rawOrientation.isLandscape
+            } else {
+                // rawOrientation is .unknown, .faceUp, or .faceDown — OS has not yet
+                // delivered the first orientation notification. Fall back to the window
+                // scene's interface orientation, which is always valid (it reflects the
+                // status-bar orientation rather than the physical device sensor).
+                let windowScene = UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .first
+                physicallyLandscape = windowScene?.interfaceOrientation.isLandscape ?? false
+                swipeLog.notice("[orientation] onAppear — rawOrientation=\(rawOrientation.rawValue) is ambiguous; using windowScene interfaceOrientation=\(windowScene?.interfaceOrientation.rawValue ?? -1)")
+            }
             let alwaysPlayOnAppear = store.settings.landscapeAlwaysPlay
             let isLandscapeOnAppear = alwaysPlayOnAppear || physicallyLandscape
             vm.isLandscape = isLandscapeOnAppear
