@@ -402,7 +402,7 @@ struct ShortsRowSection: View {
         .focusSection()
         #else
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: videoGridRowSpacing) {
+            LazyHStack(alignment: .top, spacing: videoGridRowSpacing) {
                 ForEach(videos) { video in
                     ShortsCardView(video: video, onTap: { onSelect(video) })
                         .frame(width: cardWidth, height: cardWidth * 16 / 9)
@@ -416,6 +416,7 @@ struct ShortsRowSection: View {
             .padding(.vertical, 4)
         }
         .accessibilityIdentifier(accessibilityID)
+        .accessibilityValue("\(videos.count)")
         #endif
     }
 }

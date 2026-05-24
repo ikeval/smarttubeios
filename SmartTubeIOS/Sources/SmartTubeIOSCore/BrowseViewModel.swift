@@ -337,14 +337,21 @@ public final class BrowseViewModel {
                     break
                 }
                 let group = try await api.fetchHome()
-                // Fetch FEshorts in parallel with the home feed.
-                // FEwhat_to_watch (TV client) never includes a Shorts shelf, so we need a
-                // separate call — mirroring what HomeViewModel does for the Home chip.
+                // Fetch Shorts in parallel: dedicated search + subs feed.
+                // FEshorts browseId is deprecated (HTTP 400). The subs TV-browse
+                // (tileRenderer, ustreamerConfig "GgIIBQ==") is the most reliable
+                // source of many Shorts — mirrors HomeViewModel.homeShortsVideos.
                 async let shortsFetch: VideoGroup? = try? api.fetchShorts()
-                let shortsGroup = await shortsFetch
+                async let subsFetch: VideoGroup? = try? api.fetchSubscriptions()
+                let (shortsGroup, subsGroup) = await (shortsFetch, subsFetch)
                 if !Task.isCancelled {
-                    recommendedShortsVideos = shortsGroup?.videos ?? []
-                    browseLog.notice("Recommended: loaded \(recommendedShortsVideos.count) shorts from FEshorts")
+                    let searchShorts = shortsGroup?.videos ?? []
+                    let subsShorts   = (subsGroup?.videos ?? []).filter { $0.isShort }
+                    let homeShorts   = group.videos.filter { $0.isShort }
+                    var seen = Set<String>()
+                    recommendedShortsVideos = (searchShorts + subsShorts + homeShorts)
+                        .filter { seen.insert($0.id).inserted }
+                    browseLog.notice("Recommended: \(recommendedShortsVideos.count) shorts (search=\(searchShorts.count) subs=\(subsShorts.count) home=\(homeShorts.count))")
                     if group.videos.isEmpty {
                         isAuthRequired = true
                         recommendedUsesSearchFallback = true

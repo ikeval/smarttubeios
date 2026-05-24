@@ -255,6 +255,9 @@
         }
       }
     },
+    "%lld" : {
+
+    },
     "%lld / %lld" : {
       "localizations" : {
         "ar" : {

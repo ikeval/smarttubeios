@@ -7,6 +7,15 @@ import UIKit
 
 private let menuLog = CrashlyticsLogger(category: "PlayerMenu")
 
+// Measures the natural height of moreMenuItems so the sheet hugs its content
+// instead of always expanding to moreMenuMaxHeight.
+private struct MoreMenuContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 // MARK: - PlayerView overlay sheets
 //
 // Pure-SwiftUI overlays rendered inside the player's ZStack so no UIKit
@@ -93,15 +102,25 @@ extension PlayerView {
             // is safe because .frame(maxHeight:) already caps the height appropriately.
             ScrollView {
                 moreMenuItems
+                    // Measure the VStack's natural height one pass before the
+                    // containing frame is applied, so the sheet hugs its content.
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: MoreMenuContentHeightKey.self,
+                                value: proxy.size.height
+                            )
+                        }
+                    )
             }
             .accessibilityIdentifier("player.moreMenu.scrollView")
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            // Static max height avoids GeometryReader/containerRelativeFrame feedback
-            // loops that crash SwiftUI's AttributeGraph (SIGSEGV/SIGBUS recursion).
-            // ViewThatFits uses the natural VStack height when it fits, falling back
-            // to a ScrollView capped at moreMenuMaxHeight when it overflows.
-            .frame(maxWidth: moreMenuPortraitWidth, maxHeight: moreMenuMaxHeight)
+            .onPreferenceChange(MoreMenuContentHeightKey.self) { moreMenuContentHeight = $0 }
+            // Height = natural content height capped at moreMenuMaxHeight.
+            // Falls back to moreMenuMaxHeight on the first render (before the
+            // preference arrives), then snaps to the correct size on the next pass.
+            .frame(maxWidth: moreMenuPortraitWidth, maxHeight: moreMenuContentHeight > 0 ? min(moreMenuContentHeight, moreMenuMaxHeight) : moreMenuMaxHeight)
             #if os(tvOS)
             // Native SwiftUI focus handles D-pad navigation via the .focused() bindings
             // on each row button. onMoveCommand was removed because it caused a double-step

@@ -184,73 +184,26 @@ extension InnerTubeAPI {
     // MARK: - Shorts
 
     public func fetchShorts() async throws -> VideoGroup {
-        // Mirrors fetchHome(): use postTV (TV client + Bearer auth, youtubei.googleapis.com)
-        // when a token is available — the same client that successfully returns home/subs.
-        // Without auth, fall back to postTVCategory (TV client, www.youtube.com), then
-        // the WEB client, then a "#shorts" search as a last resort.
-        let isAuth = authToken != nil
-        tubeLog.notice("fetchShorts: isAuth=\(isAuth, privacy: .public)")
+        // NOTE (2026-05-24): Strategies 1–3 (FEshorts via postTV, postTVCategory, WEB)
+        // were removed because YouTube deprecated the FEshorts browseId — all three
+        // returned HTTP 400 on every client (TV+auth, TV-category, WEB). Confirmed via
+        // log analysis: the home browse with the same token/version succeeds (200), so
+        // it is specifically FEshorts that YouTube no longer accepts, not a client version
+        // or auth issue. yt-dlp (2026.03.17) does not use FEshorts at all and does not
+        // support the Shorts homepage feed. Search is the only working path right now.
+        // TODO: re-add a FEshorts attempt if YouTube re-enables it, or find a replacement
+        // browseId/params that yields a Shorts feed.
 
-        // Strategy 1 (authenticated): postTV — mirrors fetchHome/fetchSubscriptions
-        if isAuth {
-            do {
-                var body = makeBody(client: tvClientContext)
-                body["browseId"] = "FEshorts"
-                let data = try await postTV(endpoint: "browse", body: body)
-                let group = try parseVideoGroup(from: data, title: "Shorts")
-                let shorts = group.videos.filter { $0.isShort }
-                let token = group.nextPageToken.map { String($0.prefix(16)) + "…" } ?? "nil"
-                tubeLog.notice("fetchShorts postTV → \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts, token=\(token, privacy: .public)")
-                if !shorts.isEmpty {
-                    // Tag token with "stv:" so fetchShortsMore() uses only postTV.
-                    return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: group.nextPageToken.map { "stv:" + $0 })
-                }
-                tubeLog.notice("fetchShorts postTV returned 0 shorts — trying postTVCategory")
-            } catch {
-                tubeLog.notice("fetchShorts postTV failed (\(error, privacy: .public)) — trying postTVCategory")
-            }
-        }
-
-        // Strategy 2: postTVCategory (TV client, www.youtube.com, no auth)
-        do {
-            var body = makeBody(client: tvClientContext)
-            body["browseId"] = "FEshorts"
-            let data = try await postTVCategory(endpoint: "browse", body: body)
-            let group = try parseVideoGroup(from: data, title: "Shorts")
-            let shorts = group.videos.filter { $0.isShort }
-            let token = group.nextPageToken.map { String($0.prefix(16)) + "…" } ?? "nil"
-            tubeLog.notice("fetchShorts postTVCategory → \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts, token=\(token, privacy: .public)")
-            if !shorts.isEmpty {
-                // Tag token with "stvc:" so fetchShortsMore() uses only postTVCategory.
-                return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: group.nextPageToken.map { "stvc:" + $0 })
-            }
-            tubeLog.notice("fetchShorts postTVCategory returned 0 shorts — trying WEB client")
-        } catch {
-            tubeLog.notice("fetchShorts postTVCategory failed (\(error, privacy: .public)) — trying WEB client")
-        }
-
-        // Strategy 3: WEB client (www.youtube.com) — returns richGridRenderer →
-        // richItemRenderer → reelItemRenderer which parseVideoGroup handles.
-        do {
-            var body = makeBody(client: webClientContext)
-            body["browseId"] = "FEshorts"
-            let data = try await post(endpoint: "browse", body: body)
-            let group = try parseVideoGroup(from: data, title: "Shorts")
-            let shorts = group.videos.filter { $0.isShort }
-            let token = group.nextPageToken.map { String($0.prefix(16)) + "…" } ?? "nil"
-            tubeLog.notice("fetchShorts WEB → \(group.videos.count, privacy: .public) videos, \(shorts.count, privacy: .public) shorts, token=\(token, privacy: .public)")
-            if !shorts.isEmpty {
-                // Tag token with "web:" so fetchShortsMore() uses only the WEB client.
-                return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: group.nextPageToken.map { "web:" + $0 })
-            }
-            tubeLog.notice("fetchShorts WEB returned 0 shorts — falling back to search")
-        } catch {
-            tubeLog.notice("fetchShorts WEB failed (\(error, privacy: .public)) — falling back to search")
-        }
-
-        // Strategy 4 (last resort): search "#shorts".
-        let searchGroup = try await search(query: "#shorts")
-        let shorts = searchGroup.videos.filter { $0.isShort }
+        // Search "#shorts" with the YouTube Shorts duration filter (EgIYAQ== / sp=EgIYAQ%3D%3D).
+        // WEB client videoRenderer items in search results rarely carry reelWatchEndpoint or
+        // the SHORTS overlay style, so parseVideoRenderer leaves isShort=false for most of them
+        // even though they are genuine Shorts. Since the duration:short filter guarantees
+        // every result is ≤ 4 min and we searched for "#shorts", we treat any video ≤ 180 s
+        // as a Short and override isShort in-place.
+        let shortsFilter = SearchFilter(duration: .short)
+        let searchGroup = try await search(query: "#shorts", filter: shortsFilter)
+        var shorts = searchGroup.videos.filter { $0.isShort || ($0.duration.map { $0 <= 180 } ?? false) }
+        for i in shorts.indices where !shorts[i].isShort { shorts[i].isShort = true }
         tubeLog.notice("fetchShorts search → \(searchGroup.videos.count, privacy: .public) total, \(shorts.count, privacy: .public) shorts, token=\(searchGroup.nextPageToken.map { String($0.prefix(16)) + "\u{2026}" } ?? "nil", privacy: .public)")
         // Tag token with "srch:" so fetchShortsMore() uses only the search continuation path.
         return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: searchGroup.nextPageToken.map { "srch:" + $0 })
@@ -307,7 +260,8 @@ extension InnerTubeAPI {
 
         case "srch":
             let group = try await search(query: "#shorts", continuationToken: rawToken)
-            let shorts = group.videos.filter { $0.isShort }
+            var shorts = group.videos.filter { $0.isShort || ($0.duration.map { $0 <= 180 } ?? false) }
+            for i in shorts.indices where !shorts[i].isShort { shorts[i].isShort = true }
             tubeLog.notice("fetchShortsMore search → \(shorts.count, privacy: .public) shorts")
             return VideoGroup(title: "Shorts", videos: shorts, nextPageToken: group.nextPageToken.map { "srch:" + $0 })
 

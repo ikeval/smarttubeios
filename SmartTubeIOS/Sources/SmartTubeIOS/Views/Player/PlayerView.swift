@@ -32,6 +32,7 @@ public struct PlayerView: View {
     @State var showAudioTrackPicker = false
     @State var showSleepTimerPicker = false
     @State var showMoreMenu = false
+    @State var moreMenuContentHeight: CGFloat = 0
     @State var showDescriptionSheet = false
     @State var showCommentsSheet = false
     @State var videoComments: [Comment] = []
