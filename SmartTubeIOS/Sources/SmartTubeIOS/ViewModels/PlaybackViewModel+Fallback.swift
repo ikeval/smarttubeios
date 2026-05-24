@@ -1,5 +1,4 @@
 @preconcurrency import AVFoundation
-import AetherEngine
 import os
 #if canImport(UIKit)
 import UIKit
@@ -9,9 +8,6 @@ import WebKit
 #endif
 import SmartTubeIOSCore
 
-// Disambiguate SmartTubeIOSCore.VideoFormat (stream format: height/bitrate/URL)
-// from AetherEngine.VideoFormat (dynamic range: sdr/hdr10/dolbyVision).
-// All VideoFormat uses in this file are in private functions, so private typealias is fine.
 private typealias VideoFormat = SmartTubeIOSCore.VideoFormat
 
 private let playerLog = CrashlyticsLogger(category: "Player")
@@ -19,17 +15,6 @@ private let playerLog = CrashlyticsLogger(category: "Player")
 // MARK: - Exhaustive Playback Retry
 
 extension PlaybackViewModel {
-
-    // MARK: - AetherEngine accessor
-
-    /// Typed accessor for the boxed AetherEngine stored in `_aetherEngineBox`.
-    /// Using a computed property here (rather than a stored var) avoids importing
-    /// AetherEngine in PlaybackViewModel.swift, which would introduce VideoFormat ambiguity
-    /// into that file's public API.
-    private var aetherEngine: AetherEngine? {
-        get { _aetherEngineBox as? AetherEngine }
-        set { _aetherEngineBox = newValue }
-    }
 
     // MARK: - Entry Points
 

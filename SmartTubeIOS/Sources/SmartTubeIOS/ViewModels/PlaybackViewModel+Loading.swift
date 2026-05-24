@@ -1,5 +1,4 @@
 import AVFoundation
-import AetherEngine
 import os
 #if canImport(UIKit)
 import UIKit
@@ -51,8 +50,6 @@ extension PlaybackViewModel {
         // is not visible while the next video is loading.
         player.pause()
         player.replaceCurrentItem(with: nil)
-        (_aetherEngineBox as? AetherEngine)?.stop()
-        _aetherEngineBox = nil
         isPlaying = false
         videoEnded = false
         wasPlayingBeforeSuspend = false
@@ -674,8 +671,6 @@ extension PlaybackViewModel {
         }
         player.pause()
         player.replaceCurrentItem(with: nil)
-        (_aetherEngineBox as? AetherEngine)?.stop()
-        _aetherEngineBox = nil
         isPlaying = false
         #if canImport(UIKit)
         do {

@@ -23,10 +23,7 @@ let package = Package(
             url: "https://github.com/firebase/firebase-ios-sdk",
             from: "12.0.0"
         ),
-        // Local fork of AetherEngine with Demuxer.swift patched to propagate
-        // extraHeaders (user_agent + headers) to libavformat's internal HTTP
-        // stack, fixing CDN rqh=1 segment 403s for YouTube HLS streams.
-        .package(path: "./AetherEngine"),
+
     ],
     targets: [
         // MARK: Core – iOS, macOS (Foundation only)
@@ -41,7 +38,6 @@ let package = Package(
             name: "SmartTubeIOS",
             dependencies: [
                 "SmartTubeIOSCore",
-                .product(name: "AetherEngine", package: "AetherEngine"),
                 .product(name: "FirebaseCrashlytics", package: "firebase-ios-sdk"),
             ],
             path: "Sources/SmartTubeIOS",
