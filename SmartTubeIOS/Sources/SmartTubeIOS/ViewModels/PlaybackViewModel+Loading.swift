@@ -819,6 +819,17 @@ extension PlaybackViewModel {
 
         guard !Task.isCancelled else { return }
 
+        // Launch WKWebView pre-extraction as soon as relatedVideos is populated.
+        // Starting here (before endCards/trackingURLs) gives ~0.6–3 s more lead
+        // time for the warm extraction to complete before the user swipes.
+        #if canImport(WebKit)
+        if let firstNeighbour = relatedVideos.first?.id {
+            Task(priority: .background) { [weak self] in
+                await self?.preExtractWKHLSForVideo(firstNeighbour)
+            }
+        }
+        #endif
+
         // --- End cards ---
         if let cachedCards = cached.endCards, !cached.staleFields.contains(.endCards) {
             playerLog.notice("cache HIT: endCards (skipping network)")
@@ -880,16 +891,6 @@ extension PlaybackViewModel {
                 )
             }
         }
-        // Pre-extract WKWebView HLS URL for the first neighbour while the current video
-        // is playing and WKWebView is idle. Stores the result in VideoPreloadCache so
-        // exhaustiveRetry can skip the 5–9 s extraction step when the user swipes there.
-        // Only the first neighbour is pre-extracted (serial WKWebView, one at a time).
-        if let firstNeighbour = neighbourIds.first {
-            Task(priority: .background) { [weak self] in
-                #if canImport(WebKit)
-                await self?.preExtractWKHLSForVideo(firstNeighbour)
-                #endif
-            }
-        }
+
     }
 }
