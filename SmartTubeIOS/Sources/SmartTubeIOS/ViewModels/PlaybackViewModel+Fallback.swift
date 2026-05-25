@@ -1438,6 +1438,7 @@ extension PlaybackViewModel {
             switch status {
             case .readyToPlay:
                 playerLog.notice("✅ [webView/HLS] readyToPlay")
+                loadAudioTracks(from: item)
                 needsQuickStartup = false
                 isLoading = false
                 player.rate = Float(settings.playbackSpeed)
