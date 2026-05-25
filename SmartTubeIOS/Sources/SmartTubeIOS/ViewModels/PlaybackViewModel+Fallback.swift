@@ -1356,21 +1356,14 @@ extension PlaybackViewModel {
         // neighbours) can skip the 5–9 s WKWebView extraction step entirely.
         await VideoPreloadCache.shared.store(wkHLSManifestURL: masterURL, for: video.id)
 
-        // Extract WKWebView cookies early — used for both the rqh=1 guard below and the
-        // proxy loader, avoiding an async race with HTTPCookieStorage sync.
+        // Extract WKWebView cookies for the proxy loader.
+        // Note: segment URLs in variant playlists are served natively by AVPlayer (not proxied),
+        // so the proxy does not need googlevideo.com cookies for rqh=1 content. The master
+        // manifest URL is self-authenticated via spc=, and youtube.com session cookies
+        // (VISITOR_INFO1_LIVE, YSC, etc.) are sufficient for CDN segment auth in practice.
         let webViewCookies = await extractWKWebViewCookies()
-        // Guard: if the best variant URL requires rqh=1 CDN auth and no googlevideo.com
-        // cookies were extracted from WKWebView, skip the proxy attempt. AVPlayer would
-        // receive HTTP 403 on the first segment request. Superseded when #207 provides
-        // googlevideo.com cookies (hasGoogleVideoCookies becomes true).
-        let variantNeedsRqh = bestURL.absoluteString.contains("/rqh/1") || bestURL.absoluteString.contains("rqh=1")
-        let hasGoogleVideoCookies = webViewCookies.contains { $0.domain.contains("googlevideo") }
         let gvCount = webViewCookies.filter { $0.domain.contains("googlevideo") }.count
-        playerLog.notice("[webView/HLS] variant rqh=\(variantNeedsRqh) googlevideoCoookies=\(gvCount)/\(webViewCookies.count)")
-        if variantNeedsRqh && !hasGoogleVideoCookies {
-            playerLog.notice("⚠️ [webView/HLS] variant requires rqh=1 but no googlevideo cookies — skipping proxy to avoid AVPlayer 403")
-            return false
-        }
+        playerLog.notice("[webView/HLS] extracted \(webViewCookies.count) cookies (\(gvCount) googlevideo) for proxy")
 
         // Populate the quality picker with the HLS variant heights from the master manifest.
         // These are the only formats guaranteed to work via the proxy — iOS adaptive rqh=1

@@ -14,21 +14,19 @@ import XCTest
 //
 // Log events to verify:
 //   ✓ [webView/HLS] extracted N cookies (M googlevideo) for proxy     — #207: cookies extracted
-//   ✓ [webView/HLS] variant rqh=… googlevideoCoookies=M/N             — #209: guard evaluated
 //   ✓ [HLSProxy] attaching N cookies (M googlevideo) to segment request — #207: cookies forwarded
 //   ✓ [webView] got hlsManifestUrl  OR  [webView] 720p+ HLS playing   — WKWebView path used
 //   ✓ Video is playing (play/pause button enabled within 90 s)
 //   ✗ [HLSProxy] URLSession error / HTTP=403                          — expected to NOT appear
 //
 // RED FLAGS in device log:
-//   - "⚠️ [webView/HLS] variant requires rqh=1 but no googlevideo cookies" → #209 guard fired, #207 cookies missing
 //   - "[HLSProxy] … HTTP=403"     → segment 403 still occurring (cookie fix #207 ineffective)
-//   - "googlevideo) for proxy" shows "0 googlevideo" → WKWebView did not set googlevideo cookies
-//   - "All adaptive video URLs are rqh=1 — skipping" → #208 guard fired (normal for embedded-disabled videos)
+//   - "[Android[1]/muxed/muxed] readyToPlay" on first play → WKWebView HLS path was skipped entirely
+//   - "All adaptive video URLs are rqh=1 — skipping" for ALL clients → rqh=1 guard regression
 //
 // EXPECTED for m1WGX1-uGvU (the rqh=1 log-analysis video, 2026-05-25):
-//   If WKWebView is signed in: M googlevideo cookies > 0 AND proxy proceeds without 403.
-//   If not signed in: #209 guard fires (legitimate — no auth), video plays via muxed fallback.
+//   WKWebView HLS proxy should be attempted regardless of googlevideo cookie count.
+//   Video should play via WKWebView HLS at ≥720p with audio tracks available (not muxed 360p).
 
 // MARK: - WKHLSCookieProxyUITests
 //
@@ -46,9 +44,10 @@ import XCTest
 //            and the app skips straight to WKWebView HLS extraction.
 //            Log: "[*] All adaptive video URLs are rqh=1 — skipping 8 s loadTracks stall"
 //
-//   #209  — If the best HLS variant is rqh=1 AND googlevideo cookies are absent, the
-//            proxy construction is skipped. Log: "variant requires rqh=1 but no googlevideo
-//            cookies". The test asserts video still plays (via muxed fallback) in that case.
+//   #209  — rqh=1 guard REMOVED. The proxy is always attempted regardless of googlevideo
+//            cookie count. Segment URLs are served natively by AVPlayer (not proxied), so
+//            googlevideo cookies are not required. youtube.com cookies (VISITOR_INFO1_LIVE
+//            etc.) are sufficient for CDN auth in practice.
 //
 //   #210  — Quality switches after muxed fallback are not tested here (requires manual
 //            interaction); validated in DASHQualitySwitchUITests.
@@ -88,10 +87,10 @@ final class WKHLSCookieProxyUITests: XCTestCase {
     /// Plays the rqh=1 problem video (m1WGX1-uGvU) and asserts it becomes ready within 90 s.
     ///
     /// What the device log should show (see AGENT-POST-RUN-CHECK above for full checklist):
-    ///   1. "[webView/HLS] extracted N cookies (M googlevideo)" — cookies extracted from WKWebView
-    ///   2. "[webView/HLS] variant rqh=… googlevideoCoookies=M/N" — #209 guard logged
-    ///   3. Video plays via WKWebView HLS (M googlevideo > 0) OR via muxed fallback (M == 0, #209 guard)
-    ///   4. NO "[HLSProxy] … HTTP=403" lines (cookie forwarding resolved segment 403s)
+    ///   1. "[webView/HLS] extracted N cookies (M googlevideo) for proxy" — cookies extracted from WKWebView
+    ///   2. "[webView/HLS] ✅ proxying master URL" — proxy is being used (no rqh=1 guard blocking it)
+    ///   3. Video plays via WKWebView HLS at ≥720p with audio tracks
+    ///   4. NO "[HLSProxy] … HTTP=403" lines
     func testRqh1VideoPlaysWithoutSegment403() throws {
         // ── Step 1: Wait for player to open ──────────────────────────────────
         guard app.staticTexts["player.titleLabel"].firstMatch.waitForExistence(timeout: 25) else {
