@@ -1385,10 +1385,13 @@ extension PlaybackViewModel {
         //    (dubbed tracks, original audio, etc.). Per-quality variant URLs omit these groups,
         //    which causes AudioTrackManager to find no audio → silent audio for dubbed content.
         //
-        //    AVPlayer will follow EXT-X-STREAM-INF links from the master into per-quality
-        //    variant playlists via the same ytwebhls:// scheme, so YTHLSProxyLoader intercepts
-        //    and n-rewrites all playlist requests (master + per-quality). Segment URLs in
-        //    variant playlists are https:// and served natively — no proxy needed for segments.
+        //    YTHLSProxyLoader.rewritePlaylist rewrites #EXT-X-MEDIA URI attributes in the
+        //    master manifest from https:// to ytwebhls://, so AVPlayer fetches audio rendition
+        //    playlists through the proxy with the correct desktop-Safari User-Agent. Without
+        //    this, manifest.googlevideo.com rejects native iOS requests → loadMediaSelectionGroup
+        //    returns nil → availableAudioTracks empty → no audio language selector.
+        //    #EXT-X-STREAM-INF variant URLs remain https:// (spc= token provides CDN auth
+        //    natively and quality switching already works without proxying them).
         guard let proxyURL = masterURL.proxyURL else {
             playerLog.error("❌ [webView/HLS] failed to build proxy URL for master")
             return false

@@ -256,12 +256,33 @@ final class YTHLSProxyLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecke
             proxyLog.notice("[HLSProxy] synthesized #EXTINF for \(segmentCount) segments; targetDuration=\(Int(ceil(maxDurationSecs)))s")
         }
 
-        // Step 2: Keep segment URLs as https:// — AVPlayer loads them natively.
-        // The n-challenge is already solved in Step 1, so CDN auth is embedded in
-        // the URL. AVPlayer's built-in HTTP stack handles MPEG-TS segments directly.
-        // Routing segments through the ytwebhls:// delegate causes CoreMediaErrorDomain
-        // -12881 because AVFoundation does not support serving binary media data through
-        // AVAssetResourceLoaderDelegate for standard HLS segments.
+        // Step 2: For master manifests, rewrite #EXT-X-MEDIA URI attributes so that audio
+        // rendition playlists are fetched through this proxy with the correct desktop-Safari
+        // User-Agent. Without proxying, AVPlayer fetches them natively with an iOS UA, which
+        // manifest.googlevideo.com rejects → loadMediaSelectionGroup returns nil/empty →
+        // availableAudioTracks stays empty → audio language selector never appears.
+        //
+        // Only #EXT-X-MEDIA playlist URIs are rewritten. Segment URLs inside rendition
+        // playlists remain https:// and are served natively by AVPlayer (binary media data
+        // cannot be routed through AVAssetResourceLoaderDelegate without -12881).
+        // #EXT-X-STREAM-INF variant URIs are intentionally left as https:// because quality
+        // switching already works natively for those (spc= token provides CDN auth).
+        if isMasterManifest {
+            let lines = text.components(separatedBy: "\n")
+            var audioGroupCount = 0
+            let rewrittenLines: [String] = lines.map { line in
+                guard line.hasPrefix("#EXT-X-MEDIA:"), line.contains("URI=\"https://") else {
+                    return line
+                }
+                audioGroupCount += 1
+                return line.replacingOccurrences(of: "URI=\"https://", with: "URI=\"\(proxyScheme)://")
+            }
+            if audioGroupCount > 0 {
+                proxyLog.notice("[HLSProxy] rewrote \(audioGroupCount) #EXT-X-MEDIA URI(s) to \(proxyScheme)://")
+                text = rewrittenLines.joined(separator: "\n")
+            }
+        }
+
         return text
     }
 }
