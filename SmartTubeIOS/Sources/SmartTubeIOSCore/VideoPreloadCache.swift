@@ -439,6 +439,14 @@ public actor VideoPreloadCache {
         playerInfoCache.removeValue(forKey: videoId)
     }
 
+    /// Call when the cached WKWebView HLS URL returns 403 (expired signed URL).
+    /// Evicting forces a fresh WKWebView extraction on the next load of this video.
+    public func invalidateWKHLSURL(for videoId: String) {
+        guard wkHLSCache[videoId] != nil else { return }
+        cacheLog.notice("[evict] 403 — invalidating wkHLSCache for \(videoId, privacy: .public)")
+        wkHLSCache.removeValue(forKey: videoId)
+    }
+
     // MARK: - Private: prefetch implementation
 
     private func runPrefetch(

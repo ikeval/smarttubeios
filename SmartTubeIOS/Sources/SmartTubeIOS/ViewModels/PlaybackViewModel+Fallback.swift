@@ -40,14 +40,20 @@ extension PlaybackViewModel {
         // pre-extraction. Falls through to live WKWebView extraction if the URL has expired
         // or if tryWebViewHLS fails (e.g. 403 on an expired signed URL).
         if let cachedHLSURL = await VideoPreloadCache.shared.cachedWKHLSURL(for: video.id) {
-            playerLog.notice("✅ [wkHLS] cached HLS URL found — skipping WKWebView extraction")
+            playerLog.notice("[wkHLS] cached HLS URL found — probing validity")
             let nSolver = YouTubeWebViewHLSExtractor.shared.extractedNSolver
-            if await tryWebViewHLS(cachedHLSURL, nSolver: nSolver, for: video) {
-                playerLog.notice("✅ [wkHLS] cached URL played — exhaustiveRetry done")
-                if let playerInfo { launchPhase2(video: video, info: playerInfo, cached: cached) }
-                return
+            let probeValid = await isWKHLSURLValid(cachedHLSURL)
+            if probeValid {
+                if await tryWebViewHLS(cachedHLSURL, nSolver: nSolver, for: video) {
+                    playerLog.notice("[wkHLS] cached URL played — exhaustiveRetry done")
+                    if let playerInfo { launchPhase2(video: video, info: playerInfo, cached: cached) }
+                    return
+                }
+                playerLog.notice("[wkHLS] cached URL failed (tryWebViewHLS) — falling back to live WKWebView")
+            } else {
+                playerLog.notice("[wkHLS] cached URL expired (probe 403/timeout) — invalidating and using live extraction")
+                await VideoPreloadCache.shared.invalidateWKHLSURL(for: video.id)
             }
-            playerLog.notice("⚠️ [wkHLS] cached URL failed (likely expired) — falling back to live WKWebView")
         }
         // Phase -1b: WKWebView HLS extraction (device-native, no external tools required).
         // YouTube's JavaScript player computes the spc= proof-of-context token that produces
@@ -1457,6 +1463,26 @@ extension PlaybackViewModel {
                 cont.resume(returning: cookies)
             }
         }
+    }
+
+    /// Probes a cached WKWebView HLS master manifest URL with a lightweight HEAD request
+    /// to detect expiry before constructing an AVPlayerItem.
+    /// Returns `true` if the URL is still accessible (2xx/3xx); `false` on 4xx or timeout.
+    private func isWKHLSURLValid(_ url: URL) async -> Bool {
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.setValue(ua, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
+        request.timeoutInterval = 8
+        if let (_, response) = try? await URLSession(configuration: .ephemeral).data(for: request),
+           let http = response as? HTTPURLResponse {
+            playerLog.notice("[wkHLS/probe] HEAD returned HTTP \(http.statusCode)")
+            return http.statusCode < 400
+        }
+        playerLog.notice("[wkHLS/probe] HEAD probe timeout or failed — treating as expired")
+        return false
     }
 
     /// Parses an HLS master M3U8 manifest and returns a map of stream height → variant URL
