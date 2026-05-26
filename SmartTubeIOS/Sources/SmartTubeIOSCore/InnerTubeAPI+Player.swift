@@ -18,7 +18,15 @@ extension InnerTubeAPI {
         body["racyCheckOk"] = true
         body["contentCheckOk"] = true
         let data = try await postPlayer(body: body)
-        return try parsePlayerInfo(from: data, videoId: videoId)
+        var info = try parsePlayerInfo(from: data, videoId: videoId)
+        // Apply a WKWebView-extracted pot= token (Option B) when available.
+        // The token is stored by storeExternalPoToken() after the hidden WKWebView
+        // extracts it from the YouTube player's /player API request body.
+        if let pot = poToken, poTokenVideoId == videoId {
+            tubeLog.notice("[InnerTube] ✅ poToken applied to \(videoId, privacy: .public) via iOS client (len=\(pot.count))")
+            info = info.applyingPoToken(pot)
+        }
+        return info
     }
 
     /// Fetches player info using the Web client, which returns muxed (video+audio)

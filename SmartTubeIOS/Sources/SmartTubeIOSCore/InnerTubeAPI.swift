@@ -40,11 +40,29 @@ public actor InnerTubeAPI {
 
     // MARK: - poToken storage (Step 1)
     //
-    // Populated by a PoTokenProvider when configured; nil until then (zero behaviour change).
-    // All injection points are gated on `poToken != nil`.
+    // Populated either by a PoTokenProvider (BotGuardClient) or by storeExternalPoToken()
+    // (Option B: token extracted from a running WKWebView YouTube player session).
+    // All injection points are gated on `poToken != nil` (zero behaviour change when nil).
     var poToken: String?
     var poTokenVideoId: String?
     var poTokenExpiry: Date?
+
+    // MARK: - External PoToken API (Option B)
+
+    /// Stores a PO token that was extracted from the YouTube player running inside a
+    /// hidden WKWebView (see `YouTubeWebViewHLSExtractor.extractedPoToken`).
+    /// The token is applied to all subsequent `fetchPlayerInfo` calls for `videoId`
+    /// via `applyingPoToken`, allowing rqh=1 adaptive streams to be retried with CDN auth.
+    public func storeExternalPoToken(_ token: String, for videoId: String) {
+        poToken = token
+        poTokenVideoId = videoId
+    }
+
+    /// Returns true when a PO token is cached for the given video ID.
+    /// Used by `tryAllStreams` to decide whether to attempt rqh=1 adaptive composition.
+    public func hasPoToken(for videoId: String) -> Bool {
+        return poToken != nil && poTokenVideoId == videoId
+    }
 
     // MARK: - PoTokenProvider
     let poTokenProvider: (any PoTokenProvider)?

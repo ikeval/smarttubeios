@@ -33,6 +33,10 @@ final class YouTubeWebViewHLSExtractor: NSObject {
     /// After `extractHLSURL` completes, holds the n-challenge mapping solved in-JS.
     /// `nil` when the URL had no `/n/` or the solver wasn't available.
     private(set) var extractedNSolver: (unsolved: String, solved: String)?
+    /// The pot= token extracted from the YouTube player's /player API request body,
+    /// set alongside `extractedNSolver` when the JS interceptor finds one in
+    /// `serviceIntegrityDimensions.poToken`. Nil when the player made no BotGuard call.
+    private(set) var extractedPoToken: String?
 
     // MARK: - Public API
 
@@ -47,6 +51,7 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         // Cancel any pending extraction before starting a new one.
         finish(url: nil)
         extractedNSolver = nil
+        extractedPoToken = nil
 
         extractLog.notice("⚠️ [webView] starting HLS extraction for \(videoId as NSString)")
 
@@ -458,12 +463,15 @@ final class YouTubeWebViewHLSExtractor: NSObject {
     // MARK: - Private helpers
 
     private func finishWithURL(_ url: URL, poToken: String?) {
+        // Store the pot= token as a separate property so callers can read it from
+        // `extractedPoToken` after `extractHLSURL` returns. Previously the pot was
+        // baked into the manifest URL path (/pot/<token>), which is not a valid CDN
+        // path and would cause a 404 on manifest fetch. The URL is passed unchanged.
+        extractedPoToken = (poToken?.isEmpty == false) ? poToken : nil
         if let pot = poToken, !pot.isEmpty {
-            let potURL = URL(string: url.absoluteString.appending("/pot/\(pot)")) ?? url
-            finish(url: potURL)
-        } else {
-            finish(url: url)
+            extractLog.notice("[webView] pot= token extracted (\(pot.count) chars) — stored in extractedPoToken")
         }
+        finish(url: url)
     }
 
     /// Solves an HLS n-challenge using the bundled EJS solver evaluated in JavaScriptCore.

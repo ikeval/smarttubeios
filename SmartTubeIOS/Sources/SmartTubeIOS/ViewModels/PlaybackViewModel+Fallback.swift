@@ -67,6 +67,14 @@ extension PlaybackViewModel {
         playerLog.notice("⚠️ [webView] fetching HLS manifest URL via WKWebView YouTube player")
         let webViewURL = await YouTubeWebViewHLSExtractor.shared.extractHLSURL(videoId: video.id)
         let nSolver = YouTubeWebViewHLSExtractor.shared.extractedNSolver
+        // Option B: if the YouTube player running in the WKWebView produced a BotGuard
+        // pot= token (present in serviceIntegrityDimensions.poToken of its /player call),
+        // store it on the API so subsequent iOS-client fetchPlayerInfo calls can apply it
+        // to rqh=1 adaptive URLs — potentially unlocking native adaptive streaming.
+        if let pot = YouTubeWebViewHLSExtractor.shared.extractedPoToken {
+            await api.storeExternalPoToken(pot, for: video.id)
+            playerLog.notice("[webView] pot= token stored (\(pot.count) chars) — rqh=1 adaptive will be retried with CDN auth")
+        }
         if let webViewURL {
             let nInfo = nSolver.map { "\($0.unsolved)→\($0.solved)" } ?? "nil"
             playerLog.notice("⚠️ [webView] got hlsManifestUrl — nSolver=\(nInfo as NSString)")
@@ -315,8 +323,19 @@ extension PlaybackViewModel {
             // for ~8 s on the CDN's byte-range probe because rqh=1 requires CDN auth that
             // URLSession cannot provide (same class of stall as SABR but shorter timeout).
             // Skip composition and route to WKWebView HLS (spc=-authenticated).
+            // Exception: if a WKWebView-extracted pot= token is available (Option B), the
+            // adaptive URLs have already had &pot=<token> appended via applyingPoToken(),
+            // so CDN auth may succeed — attempt composition before falling through.
             } else if info.containsRqhAdaptiveFormats {
-                playerLog.notice("[\(label)] All adaptive video URLs are rqh=1 — skipping 8 s loadTracks stall, falling through")
+                let hasPot = await api.hasPoToken(for: video.id)
+                if hasPot {
+                    playerLog.notice("[\(label)] rqh=1 but pot= token available — attempting adaptive composition")
+                    if await attemptComposition(videoURL: videoURL, audioURL: audioURL,
+                                                for: video, info: info, label: label) { return true }
+                    playerLog.notice("[\(label)] adaptive composition with pot= failed — falling through")
+                } else {
+                    playerLog.notice("[\(label)] All adaptive video URLs are rqh=1 — skipping 8 s loadTracks stall, falling through")
+                }
             } else {
                 playerLog.notice("[\(label)] Trying adaptive composition")
                 if await attemptComposition(videoURL: videoURL, audioURL: audioURL,
