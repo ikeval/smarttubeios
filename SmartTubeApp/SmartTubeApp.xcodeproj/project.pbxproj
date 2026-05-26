@@ -58,6 +58,7 @@
 		AA1100000000000000001E02 /* ScrubberUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001E01 /* ScrubberUITests.swift */; };
 		AA1100000000000000001F02 /* HLSResolutionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001F01 /* HLSResolutionUITests.swift */; };
 		AA11000000000000000020A2 /* ShortsVerticalSwipeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000000000000000020A1 /* ShortsVerticalSwipeUITests.swift */; };
+		AA11000000000000000021A2 /* PlayerMoreMenuAudioTrackUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000000000000000021A1 /* PlayerMoreMenuAudioTrackUITests.swift */; };
 		AA1200000000000000002002 /* WKHLSCookieProxyUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1200000000000000002001 /* WKHLSCookieProxyUITests.swift */; };
 		AA1300000000000000002002 /* BotGuardPoTokenUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1300000000000000002001 /* BotGuardPoTokenUITests.swift */; };
 		AA1400000000000000002002 /* BotGuardLivePipelineUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1400000000000000002001 /* BotGuardLivePipelineUITests.swift */; };
@@ -205,6 +206,7 @@
 		AA1100000000000000001E01 /* ScrubberUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrubberUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000001F01 /* HLSResolutionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSResolutionUITests.swift; sourceTree = "<group>"; };
 		AA11000000000000000020A1 /* ShortsVerticalSwipeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortsVerticalSwipeUITests.swift; sourceTree = "<group>"; };
+		AA11000000000000000021A1 /* PlayerMoreMenuAudioTrackUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerMoreMenuAudioTrackUITests.swift; sourceTree = "<group>"; };
 		AA1200000000000000002001 /* WKHLSCookieProxyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WKHLSCookieProxyUITests.swift; sourceTree = "<group>"; };
 		AA1300000000000000002001 /* BotGuardPoTokenUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotGuardPoTokenUITests.swift; sourceTree = "<group>"; };
 		AA1400000000000000002001 /* BotGuardLivePipelineUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotGuardLivePipelineUITests.swift; sourceTree = "<group>"; };
@@ -342,6 +344,7 @@
 				AA1100000000000000000AA1 /* AudioGhostStreamRegressionUITests.swift */,
 				AA1100000000000000000BA1 /* AudioOriginalTrackSelectionUITests.swift */,
 				AA1100000000000000001D01 /* SIDAudioTrackUITests.swift */,
+				AA11000000000000000021A1 /* PlayerMoreMenuAudioTrackUITests.swift */,
 				AA1100000000000000001E01 /* ScrubberUITests.swift */,
 				AA1100000000000000001F01 /* HLSResolutionUITests.swift */,
 				AA1200000000000000002001 /* WKHLSCookieProxyUITests.swift */,
@@ -838,6 +841,7 @@
 				AA1100000000000000000AA2 /* AudioGhostStreamRegressionUITests.swift in Sources */,
 				AA1100000000000000000BA2 /* AudioOriginalTrackSelectionUITests.swift in Sources */,
 				AA1100000000000000001D02 /* SIDAudioTrackUITests.swift in Sources */,
+				AA11000000000000000021A2 /* PlayerMoreMenuAudioTrackUITests.swift in Sources */,
 				AA1100000000000000001E02 /* ScrubberUITests.swift in Sources */,
 				AA1100000000000000001F02 /* HLSResolutionUITests.swift in Sources */,
 				AA1200000000000000002002 /* WKHLSCookieProxyUITests.swift in Sources */,
@@ -1034,7 +1038,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 7;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1467,7 +1471,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 7;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;

@@ -1413,9 +1413,15 @@ extension PlaybackViewModel {
             audioManager.onHLSLanguageChange = { [weak self] (track: AudioTrack?) in
                 guard let self else { return }
                 let savedPos = self.player.currentTime().seconds
+                // Use contentID (the YT-EXT-AUDIO-CONTENT-ID value) for proxy filtering.
+                // nil means original audio: for real originals that lack the attribute,
+                // contentID is nil on the synthetic "Original" entry; for real originals
+                // with the attribute (e.g. "en-US.4"), contentID equals the real value.
+                // The "Auto" picker row passes track=nil → contentID=nil → original filter.
+                let contentID = track?.contentID
                 Task { [weak self] in
                     await self?.switchHLSLanguage(
-                        to: track?.id,
+                        to: contentID,
                         masterURL: masterURL,
                         manifestText: manifestText,
                         nSolver: nSolver,
@@ -1436,16 +1442,19 @@ extension PlaybackViewModel {
             playerLog.error("❌ [webView/HLS] failed to build proxy URL for master")
             return false
         }
-        playerLog.notice("[webView/HLS] ✅ proxying master URL (original audio, YT-EXT-AUDIO-CONTENT-ID filter active)")
         // Determine the initial content ID: if the user has a saved language preference that
         // matches one of the HLS variant tracks, start with that language; otherwise nil (original).
+        // Use contentID (not id) so the synthetic "Original" entry (id="yt-original-audio",
+        // contentID=nil) correctly maps to nil → proxy keeps no-content-ID variants.
         let initialContentID: String?
         if let pref = settings.preferredAudioLanguage,
            let preferred = hlsLanguageTracks.first(where: { $0.languageCode == pref }) {
-            initialContentID = preferred.id
+            initialContentID = preferred.contentID
         } else {
             initialContentID = nil
         }
+        let langDisplay = initialContentID ?? "original"
+        playerLog.notice("[webView/HLS] ✅ proxying master URL (lang=\(langDisplay), YT-EXT-AUDIO-CONTENT-ID filter active)")
         let proxyLoader = YTHLSProxyLoader(ua: ua, nSolver: nSolver, webViewCookies: webViewCookies,
                                            selectedLanguageContentID: initialContentID)
         let asset = AVURLAsset(url: proxyURL)
@@ -1657,7 +1666,21 @@ extension PlaybackViewModel {
 
             let name = Locale.current.localizedString(forLanguageCode: langCode) ?? langCode
             tracks.append(AudioTrack(id: contentID, name: name, languageCode: langCode,
-                                     isOriginal: isOriginal))
+                                     isOriginal: isOriginal, contentID: contentID))
+        }
+
+        // If dubbed tracks were found but none is marked isOriginal (meaning the original-audio
+        // variant has no YT-EXT-AUDIO-CONTENT-ID and was not included in the loop above),
+        // add a synthetic "Original" entry at position 0.  Using contentID=nil signals the proxy
+        // to filter for variants that carry *no* YT-EXT-AUDIO-CONTENT-ID attribute.
+        // This ensures the selector always shows when dubbed content is available (count > 1)
+        // and gives the user a visible way to return to the creator's original audio.
+        if !tracks.isEmpty && !tracks.contains(where: \.isOriginal) {
+            let originalName = "Original"
+            let synthetic = AudioTrack(id: "yt-original-audio", name: originalName,
+                                       languageCode: "original", isOriginal: true,
+                                       contentID: nil)
+            tracks.insert(synthetic, at: 0)
         }
 
         // Sort: original first, then alphabetical by display name
