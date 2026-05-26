@@ -108,20 +108,34 @@ struct BotGuardClientTests {
         return URLSession(configuration: config)
     }
 
+    /// Scrambles an inner challenge array into the WAA Create outer[1] string format (BgUtils v3.2+).
+    /// Algorithm: JSON-encode → subtract 97 from every byte (mod 256) → base64-encode.
+    private func scramble(_ inner: [Any]) throws -> String {
+        let jsonData = try JSONSerialization.data(withJSONObject: inner)
+        return Data(jsonData.map { $0 &- 97 }).base64EncodedString()
+    }
+
     private func waaCreatePayload(interpreterValue: String) throws -> Data {
-        let payload: [Any] = [
-            "O43z0dpjhgX20SCx4KAo",
-            ["msgId001", "hash-abc", interpreterValue, "program-bytes", "TestBotGuardVM"]
-        ]
+        // Current WAA Create format (BgUtils v3.2+):
+        // outer[0] = requestKey echo
+        // outer[1] = scrambled base64 string containing the inner challenge array
+        //
+        // Inner array layout:
+        // [messageId, wrappedScript, wrappedUrl, interpreterHash, program, globalName]
+        //   wrappedScript: array — first non-empty String is the inline interpreter JS
+        //   wrappedUrl:    array — first non-empty String is the URL to fetch interpreter JS from
+        let isURL = interpreterValue.hasPrefix("http") || interpreterValue.hasPrefix("//")
+        let wrappedScript: [Any] = isURL ? [] : [interpreterValue]
+        let wrappedUrl: [Any]    = isURL ? [interpreterValue] : []
+        let inner: [Any] = ["msgId001", wrappedScript, wrappedUrl, "hash-abc", "program-bytes", "TestBotGuardVM"]
+        let payload: [Any] = ["O43z0dpjhgX20SCx4KAo", try scramble(inner)]
         return try JSONSerialization.data(withJSONObject: payload)
     }
 
     private func waaCreatePayloadNested(interpreterValue: String) throws -> Data {
-        // Some YouTube builds wrap: [requestKey, [[inner...]]]
-        let payload: [Any] = [
-            "O43z0dpjhgX20SCx4KAo",
-            [["msgId001", "hash-abc", interpreterValue, "program-bytes", "TestBotGuardVM"]]
-        ]
+        // Tests wrappedScript with mixed elements (including NSNull) — verifies compactMap skips nulls.
+        let inner: [Any] = ["msgId001", [NSNull(), interpreterValue], [], "hash-abc", "program-bytes", "TestBotGuardVM"]
+        let payload: [Any] = ["O43z0dpjhgX20SCx4KAo", try scramble(inner)]
         return try JSONSerialization.data(withJSONObject: payload)
     }
 
@@ -260,11 +274,13 @@ struct BotGuardClientTests {
         }
     }
 
-    @Test("token(for:) throws when inner array has fewer than 5 elements")
+    @Test("token(for:) throws when inner array has fewer than 6 elements")
     func throwsOnShortInnerArray() async throws {
+        // Scrambled inner array with only 4 elements — parseInnerArray requires ≥6
+        let shortInner: [Any] = ["msgId", [], [], "hash"]
         let bad = try JSONSerialization.data(withJSONObject: [
             "O43z0dpjhgX20SCx4KAo",
-            ["only", "four", "elements", "here"]
+            scramble(shortInner)
         ] as [Any])
         var routes: [String: Data] = [:]
         routes[Self.waaCreateURL] = bad

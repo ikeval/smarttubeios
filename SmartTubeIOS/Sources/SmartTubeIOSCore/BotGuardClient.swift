@@ -111,164 +111,104 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         let rawPreview = String(data: data, encoding: .utf8).map { String($0.prefix(300)) } ?? "<binary>"
         bgLog.notice("[BotGuard] WAA Create raw response (first 300): \(rawPreview, privacy: .public)")
 
-        // Response: [requestKey, [messageId?, interpreterHash, interpreterURL_or_JS, program, globalName, ...]]
-        // Some YouTube builds wrap the inner array: [requestKey, [[inner...]]].
-        // Since Swift casts [[Any]] as [Any] successfully, we must check element count
-        // to distinguish the direct layout (≥5 string elements) from the nested layout
-        // (1 element that is itself the [messageId, hash, url, program, globalName] array).
         guard let outer = try? JSONSerialization.jsonObject(with: data) as? [Any],
               outer.count >= 2 else {
             throw BotGuardError.challengeParseError("outer array missing")
         }
-        bgLog.notice("[BotGuard] outer array count=\(outer.count) types=\(outer.map { type(of: $0) }, privacy: .public)")
-        let inner: [Any]
-        if let candidate = outer[1] as? [Any] {
-            bgLog.notice("[BotGuard] outer[1] count=\(candidate.count) firstIsArray=\(candidate.first is [Any])")
-            if candidate.count >= 5 {
-                inner = candidate
-            } else if let nested = candidate.first as? [Any], nested.count >= 4 {
-                inner = nested
-            } else if let nested = candidate.first as? [Any] {
-                bgLog.notice("[BotGuard] nested inner count=\(nested.count) — too short")
-                throw BotGuardError.challengeParseError("inner array too short (\(nested.count))")
-            } else {
-                bgLog.notice("[BotGuard] candidate.count=\(candidate.count) and first is not [Any]")
-                throw BotGuardError.challengeParseError("inner array too short (\(candidate.count))")
-            }
-        } else if let b64str = outer[1] as? String {
-            // ──────────────────────────────────────────────────────────────────
-            // JSPB format: outer[1] is a base64-encoded binary protobuf message
-            // (application/json+protobuf response from the real YouTube WAA API).
-            // Decode it and extract challenge fields using binary proto parsing.
-            // ──────────────────────────────────────────────────────────────────
-            bgLog.notice("[BotGuard] outer[1] is String len=\(b64str.count) — JSPB binary proto")
+        bgLog.notice("[BotGuard] outer array count=\(outer.count)")
 
-            // Standard base64, no padding (JSPB omits trailing '=' chars).
-            let rem = b64str.count % 4
-            let padded = rem == 0 ? b64str : b64str + String(repeating: "=", count: 4 - rem)
-            guard let protoBytes = Data(base64Encoded: padded, options: .ignoreUnknownCharacters) else {
-                throw BotGuardError.challengeParseError("JSPB: base64 decode failed (len=\(b64str.count))")
+        // Current WAA Create format (BgUtils v3.2+): outer[1] is a scrambled base64 string.
+        // Scrambling: each byte of the UTF-8 inner JSON had 97 subtracted (mod 256).
+        // Descrambling: base64-decode → add 97 to every byte (mod 256) → UTF-8 → JSON-parse.
+        if let scrambled = outer[1] as? String, !scrambled.isEmpty {
+            bgLog.notice("[BotGuard] outer[1] is String len=\(scrambled.count) — descrambling (BgUtils v3.2 format)")
+            do {
+                return try await descrambleAndParse(scrambled)
+            } catch {
+                bgLog.notice("[BotGuard] descramble failed: \(error) — falling back")
             }
-
-            // Log first 80 bytes as hex to help identify the binary structure.
-            let hex80 = protoBytes.prefix(80).map { String(format: "%02X", $0) }.joined(separator: " ")
-            bgLog.notice("[BotGuard] JSPB binary count=\(protoBytes.count) hex80=[\(hex80, privacy: .public)]")
-
-            // Check if outer array has more elements (outer[2] = interpreterUrl, outer[3] = globalName).
-            if outer.count >= 4,
-               let urlRaw = outer[2] as? String, !urlRaw.isEmpty,
-               let program = outer[1] as? String, !program.isEmpty,
-               let globalName = outer[3] as? String, !globalName.isEmpty {
-                bgLog.notice("[BotGuard] JSPB outer[2/3] schema: url=\(String(urlRaw.prefix(60)), privacy: .public) globalName=\(globalName, privacy: .public)")
-                let js = try await fetchInterpreterJS(from: urlRaw)
-                return BotGuardChallenge(interpreterJS: js, program: program, globalName: globalName)
-            }
-            if outer.count >= 3 {
-                bgLog.notice("[BotGuard] outer[2]=\(String(describing: outer[2]).prefix(120), privacy: .public)")
-            }
-            if outer.count >= 4 {
-                bgLog.notice("[BotGuard] outer[3]=\(String(describing: outer[3]).prefix(120), privacy: .public)")
-            }
-
-            // Scan binary for embedded https:// URLs (interpreter URL may be inside).
-            let httpSig: [UInt8] = [0x68, 0x74, 0x74, 0x70, 0x73, 0x3A, 0x2F, 0x2F]
-            let rawBytes = [UInt8](protoBytes)
-            var urlScanPos = 0
-            while urlScanPos <= rawBytes.count - httpSig.count {
-                if rawBytes[urlScanPos..<urlScanPos + httpSig.count].elementsEqual(httpSig) {
-                    var urlEnd = urlScanPos + httpSig.count
-                    while urlEnd < rawBytes.count && rawBytes[urlEnd] > 0x20 && rawBytes[urlEnd] < 0x80 {
-                        urlEnd += 1
-                    }
-                    if let foundURL = String(bytes: rawBytes[urlScanPos..<urlEnd], encoding: .utf8) {
-                        bgLog.notice("[BotGuard] embedded URL at byte \(urlScanPos): \(foundURL, privacy: .public)")
-                    }
-                }
-                urlScanPos += 1
-            }
-
-            // Parse binary proto fields at the top level.
-            let topFields = Self.readProtoFields(protoBytes)
-            for (num, fdata) in topFields.sorted(by: { $0.key < $1.key }) {
-                let s = String(data: fdata, encoding: .utf8)
-                bgLog.notice("[BotGuard] JSPB top field[\(num)] len=\(fdata.count) utf8=\(s.map { String($0.prefix(80)) } ?? "<binary>", privacy: .public)")
-            }
-
-            // Field mapping for BGChallengeData (bgutils-js proto schema):
-            //   field 1  = messageId   (optional string)
-            //   field 2  = interpreterUrl
-            //   field 4  = interpreterHash
-            //   field 5  = program
-            //   field 6  = globalName
-            let topStr = topFields.compactMapValues { String(data: $0, encoding: .utf8) }
-
-            // Strategy A: flat top-level fields (fields 2, 5, 6 present directly).
-            if let urlRaw = topStr[2], !urlRaw.isEmpty,
-               let program = topStr[5], !program.isEmpty,
-               let globalName = topStr[6], !globalName.isEmpty {
-                bgLog.notice("[BotGuard] JSPB flat schema → url=\(String(urlRaw.prefix(60)), privacy: .public)")
-                let js = try await fetchInterpreterJS(from: urlRaw)
-                return BotGuardChallenge(interpreterJS: js, program: program, globalName: globalName)
-            }
-
-            // Strategy B: outer field 1 wraps inner BGChallengeData message.
-            if let innerData = topFields[1] {
-                bgLog.notice("[BotGuard] JSPB nested: parsing top field[1] (\(innerData.count) bytes) as inner")
-                let innerFields = Self.readProtoFields(innerData)
-                for (num, fdata) in innerFields.sorted(by: { $0.key < $1.key }) {
-                    let s = String(data: fdata, encoding: .utf8)
-                    bgLog.notice("[BotGuard] JSPB inner field[\(num)] len=\(fdata.count) utf8=\(s.map { String($0.prefix(80)) } ?? "<binary>", privacy: .public)")
-                }
-                let innerStr = innerFields.compactMapValues { String(data: $0, encoding: .utf8) }
-                if let urlRaw = innerStr[2], !urlRaw.isEmpty,
-                   let program = innerStr[5], !program.isEmpty,
-                   let globalName = innerStr[6], !globalName.isEmpty {
-                    bgLog.notice("[BotGuard] JSPB nested schema → url=\(String(urlRaw.prefix(60)), privacy: .public)")
-                    let js = try await fetchInterpreterJS(from: urlRaw)
-                    return BotGuardChallenge(interpreterJS: js, program: program, globalName: globalName)
-                }
-            }
-
-            // ── Fallback: proto fields not parseable — treat outer[1] as the raw program
-            // and discover the interpreter URL from YouTube's homepage player JS.
-            // This handles newer YouTube WAA Create response formats where the proto fields
-            // no longer match the expected BgChallengeData schema.
-            bgLog.notice("[BotGuard] JSPB proto parse fallback: using outer[1] as raw program, fetching interpreter from YouTube homepage")
-            let js = try await fetchInterpreterFromYouTube()
-            // globalName "" signals runPipelineSync to discover it dynamically in JSContext.
-            return BotGuardChallenge(interpreterJS: js, program: b64str, globalName: "")
-        } else {
-            bgLog.notice("[BotGuard] outer[1] type=\(type(of: outer[1])) — unrecognised")
-            throw BotGuardError.challengeParseError("outer[1] is neither Array nor String")
         }
 
-        // inner layout (BgUtils parseChallengeData):
-        // [0] = messageId (optional string — omitted in some YouTube builds)
-        // When 5+ elements: [msgId, hash, url, program, globalName]
-        // When 4 elements:  [hash, url, program, globalName]  (no messageId)
-        let hasMessageId = inner.count >= 5
-        let hashIdx    = hasMessageId ? 1 : 0
-        let urlIdx     = hasMessageId ? 2 : 1
-        let programIdx = hasMessageId ? 3 : 2
-        let nameIdx    = hasMessageId ? 4 : 3
-        bgLog.notice("[BotGuard] inner count=\(inner.count) hasMessageId=\(hasMessageId)")
-
-        var interpreterJS = ""
-        if let raw = inner[urlIdx] as? String, !raw.isEmpty {
-            interpreterJS = try await fetchInterpreterJS(from: raw)
+        // Legacy format: outer[0] is the inner challenge array directly.
+        if let candidate = outer[0] as? [Any], candidate.count >= 5 {
+            bgLog.notice("[BotGuard] outer[0] is array (legacy format) — trying inner parse")
+            do {
+                return try await parseInnerArray(candidate)
+            } catch {
+                bgLog.notice("[BotGuard] legacy inner parse failed: \(error) — falling back")
+            }
         }
 
-        guard !interpreterJS.isEmpty else {
-            throw BotGuardError.challengeParseError("interpreter JS empty")
+        // Last resort: fetch interpreter from YouTube homepage player JS.
+        bgLog.notice("[BotGuard] all parse strategies failed — fetching interpreter from YouTube homepage")
+        let js = try await fetchInterpreterFromYouTube()
+        return BotGuardChallenge(interpreterJS: js, program: "", globalName: "")
+    }
+
+    /// Descrambles a WAA Create scrambled challenge string and parses the resulting inner JSON array.
+    ///
+    /// The WAA API (BgUtils v3.2+) encodes the challenge data as follows:
+    /// 1. Inner challenge array → UTF-8 JSON
+    /// 2. Each byte `b` → `(b - 97) mod 256`  (subtract 97, wrapping)
+    /// 3. Result → base64-encoded string stored as `outer[1]`
+    ///
+    /// To descramble: base64-decode → `map { $0 &+ 97 }` → UTF-8-decode → JSON-parse.
+    private func descrambleAndParse(_ scrambled: String) async throws -> BotGuardChallenge {
+        // Restore standard base64 padding (WAA response omits trailing '=')
+        let rem = scrambled.count % 4
+        let padded = rem == 0 ? scrambled : scrambled + String(repeating: "=", count: 4 - rem)
+        guard let encoded = Data(base64Encoded: padded, options: .ignoreUnknownCharacters) else {
+            throw BotGuardError.challengeParseError("descramble: base64 decode failed (len=\(scrambled.count))")
         }
-        guard let program = inner[programIdx] as? String, !program.isEmpty else {
-            throw BotGuardError.challengeParseError("program empty")
+        // Add 97 to each byte with wrapping arithmetic — mirrors JS: Uint8Array b + 97
+        let descrambled = Data(encoded.map { $0 &+ 97 })
+        guard let json = String(data: descrambled, encoding: .utf8) else {
+            throw BotGuardError.challengeParseError("descramble: UTF-8 decode failed after unshift")
         }
-        guard let globalName = inner[nameIdx] as? String, !globalName.isEmpty else {
-            throw BotGuardError.challengeParseError("globalName empty")
+        bgLog.notice("[BotGuard] descrambled JSON (first 200): \(String(json.prefix(200)), privacy: .public)")
+        guard let inner = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [Any] else {
+            throw BotGuardError.challengeParseError("descramble: inner JSON parse failed")
+        }
+        return try await parseInnerArray(inner)
+    }
+
+    /// Parses the inner BotGuard challenge array (after descrambling).
+    ///
+    /// Expected layout from BgUtils `DescrambledChallenge`:
+    /// ```
+    /// [ messageId, wrappedScript, wrappedUrl, interpreterHash, program, globalName, ?, clientExperimentsStateBlob ]
+    /// ```
+    /// - `wrappedScript` (`inner[1]`): `[Any]` — first non-empty `String` is inline VM JS
+    /// - `wrappedUrl`    (`inner[2]`): `[Any]` — first non-empty `String` is URL to fetch VM JS from
+    /// - `program`       (`inner[4]`): `String`
+    /// - `globalName`    (`inner[5]`): `String`
+    private func parseInnerArray(_ inner: [Any]) async throws -> BotGuardChallenge {
+        guard inner.count >= 6 else {
+            throw BotGuardError.challengeParseError("inner array too short (\(inner.count), need ≥6)")
+        }
+        let wrappedScript = inner[1] as? [Any] ?? []
+        let wrappedUrl    = inner[2] as? [Any] ?? []
+        let program       = inner[4] as? String ?? ""
+        let globalName    = inner[5] as? String ?? ""
+        guard !program.isEmpty else {
+            throw BotGuardError.challengeParseError("program empty at inner[4]")
+        }
+        bgLog.notice("[BotGuard] inner parse: globalName='\(globalName, privacy: .public)' programLen=\(program.count)")
+
+        // Prefer inline JS from wrappedScript (avoids extra network round-trip)
+        if let inlineJS = wrappedScript.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) {
+            bgLog.notice("[BotGuard] using inline interpreter JS from wrappedScript (len=\(inlineJS.count))")
+            return BotGuardChallenge(interpreterJS: inlineJS, program: program, globalName: globalName)
         }
 
-        return BotGuardChallenge(interpreterJS: interpreterJS, program: program, globalName: globalName)
+        // Fall back to fetching interpreter JS from URL in wrappedUrl
+        if let urlRaw = wrappedUrl.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) {
+            bgLog.notice("[BotGuard] fetching interpreter JS from wrappedUrl: \(String(urlRaw.prefix(80)), privacy: .public)")
+            let js = try await fetchInterpreterJS(from: urlRaw)
+            return BotGuardChallenge(interpreterJS: js, program: program, globalName: globalName)
+        }
+
+        throw BotGuardError.challengeParseError("no interpreter JS source in wrappedScript or wrappedUrl")
     }
 
     /// Fetches interpreter JS from a URL, or returns `raw` directly if it is inline JS.
