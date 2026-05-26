@@ -394,8 +394,10 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
 
         // --- Phase 2: call vm.a(program, vmFunctionsCallback, true, undefined, noop, [[], []]) ---
         var asyncSnapshotFn: JSValue?
-        let vmFnCallback: @convention(block) (JSValue, JSValue, JSValue, JSValue) -> Void = { fn, _, _, _ in
-            asyncSnapshotFn = fn
+        let vmFnCallback: @convention(block) (JSValue, JSValue, JSValue, JSValue) -> Void = { fn0, _, _, _ in
+            // arg0 = integrityTokenBasedRequestKey — calls callback with snapshot response.
+            // (webPoSignalOutput[0] is the getMinter factory; fallback to websafeFallbackToken when not set)
+            asyncSnapshotFn = fn0
         }
         let undef    = JSValue(undefinedIn: ctx)!
         let noopFn   = JSValue(object: { } as @convention(block) () -> Void, in: ctx)!
@@ -427,21 +429,34 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         bgLog.notice("[BotGuard] Phase 2 ✅ VM loaded, asyncSnapshotFn set")
 
         // --- Phase 3: asyncSnapshotFn(callback, [undefined, undefined, webPoSignalOutput, undefined]) ---
+        // webPoSignalOutput must be a named JS global so __bgSO in the snapArgs array
+        // is a live reference to the same JS array object.  ctx.setObject(_:forKeyedSubscript:)
+        // doesn't reliably set globals when passed a JSValue — create the array in JS instead.
+        // --- Phase 3: call asyncSnapshotFn(callback, [undefined, undefined, webPoSignalOutput, undefined]) ---
+        // webPoSignalOutput is a JS array; the VM may populate [0] with the getMinter factory.
+        // ctx.setObject(_:forKeyedSubscript:) doesn't reliably set globals for JSValue — create in JS instead.
         var botguardResponse: String?
-        let webPoSignalOutput = ctx.evaluateScript("[]")!   // JS array, populated by VM
-        ctx.setObject(webPoSignalOutput, forKeyedSubscript: "__bgSO" as NSString)
+        ctx.evaluateScript("var __bgSO = []")
+        let webPoSignalOutput = ctx.globalObject.objectForKeyedSubscript("__bgSO")!
+        let snapArgs = ctx.evaluateScript("[undefined, undefined, __bgSO, undefined]")!
 
         let snapCallback: @convention(block) (JSValue) -> Void = { response in
             botguardResponse = response.isNull || response.isUndefined ? nil : response.toString()
         }
-        let snapArgs = ctx.evaluateScript("[undefined, undefined, __bgSO, undefined]")!
 
-        snapFn.call(withArguments: [
+        let snapResult = snapFn.call(withArguments: [
             JSValue(object: snapCallback, in: ctx)!,
             snapArgs
         ])
         if let exc = ctx.exception { throw BotGuardError.jsFailed("asyncSnapshotFn: \(exc)") }
-        pumpMicrotasks(ctx, count: 5)   // flush in case callback fires asynchronously
+        pumpMicrotasks(ctx, count: 5)   // flush synchronous callback path
+
+        // If asyncSnapshotFn returned a Promise, pump extra microtasks so the VM can settle
+        if let snapPromise = snapResult, snapPromise.objectForKeyedSubscript("then")?.isObject == true {
+            pumpMicrotasks(ctx, count: 100)
+        } else {
+            pumpMicrotasks(ctx, count: 30)
+        }
 
         guard let bgResponse = botguardResponse, !bgResponse.isEmpty else {
             throw BotGuardError.jsFailed("botguard response empty after asyncSnapshotFn")
@@ -449,21 +464,24 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         bgLog.notice("[BotGuard] Phase 3 ✅ botguardResponse len=\(bgResponse.count)")
 
         // --- Phase 4: fetch integrity token (blocking URLSession, safe on jsQueue) ---
-        let integrityB64 = try fetchIntegrityTokenSync(bgResponse: bgResponse)
-        bgLog.notice("[BotGuard] integrity token obtained (len=\(integrityB64.count))")
+        // Returns (integrityToken: json[0], websafeFallback: json[3]).
+        // json[0] is the token passed to getMinter; json[3] is used directly when getMinter is unavailable.
+        let (integrityToken, websafeFallback) = try fetchIntegrityTokenSync(bgResponse: bgResponse)
+        bgLog.notice("[BotGuard] Phase 4 ✅ integrityToken=\(integrityToken?.count ?? 0) websafeFallback=\(websafeFallback?.count ?? 0)")
 
         // --- Phase 5: mint PO token ---
         return try mintSync(
             ctx: ctx,
             signalOutput: webPoSignalOutput,
-            integrityB64: integrityB64,
+            integrityToken: integrityToken,
+            websafeFallback: websafeFallback,
             videoId: videoId
         )
     }
 
     // MARK: - Phase 4: integrity token (blocking, on jsQueue)
 
-    private func fetchIntegrityTokenSync(bgResponse: String) throws -> String {
+    private func fetchIntegrityTokenSync(bgResponse: String) throws -> (integrityToken: String?, websafeFallback: String?) {
         let payload = [Self.requestKey, bgResponse]
         var req = URLRequest(url: Self.waaGenerateITURL, timeoutInterval: 12)
         req.httpMethod = "POST"
@@ -472,19 +490,19 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         req.setValue("grpc-web-javascript/0.1",   forHTTPHeaderField: "x-user-agent")
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
-        var result: Result<String, Error>?
+        var result: Result<(integrityToken: String?, websafeFallback: String?), Error>?
         let sema = DispatchSemaphore(value: 0)
         let log = bgLog   // capture logger value to avoid 'self' capture in closure
 
         session.dataTask(with: req) { data, response, error in
             defer { sema.signal() }
             if let error { result = .failure(error); return }
-            // GenerateIT response format: [null, ttl, null, integrityToken]
-            // Token is at index 3, not index 0.
+            // GenerateIT response: [integrityToken, ttlSecs, mintRefreshThreshold, websafeFallbackToken]
+            // json[0]: integrityTokenBasedRequestKey — input to getMinter() for full minting flow (may be null)
+            // json[3]: websafeFallbackToken — ready-to-use PO token when getMinter is not available
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [Any],
-                  json.count >= 4,
-                  let token = json[3] as? String, !token.isEmpty else {
+                  json.count >= 4 else {
                 let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
                 let bodySnippet = data.flatMap { String(data: $0.prefix(200), encoding: .utf8) } ?? "<nil>"
                 log.notice("[BotGuard] GenerateIT failed: HTTP \(httpStatus) body=\(bodySnippet)")
@@ -493,7 +511,13 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
                 ))
                 return
             }
-            result = .success(token)
+            let integrityToken    = json[0] as? String  // may be nil
+            let websafeFallback   = json[3] as? String  // ready-to-use PO token fallback
+            guard integrityToken != nil || websafeFallback != nil else {
+                result = .failure(BotGuardError.integrityTokenFailed("both integrityToken and websafeFallback are nil"))
+                return
+            }
+            result = .success((integrityToken, websafeFallback))
         }.resume()
 
         sema.wait()
@@ -502,7 +526,32 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
 
     // MARK: - Phase 5: mint (JS, on jsQueue)
 
-    private func mintSync(ctx: JSContext, signalOutput: JSValue, integrityB64: String, videoId: String) throws -> String {
+    private func mintSync(
+        ctx: JSContext,
+        signalOutput: JSValue,
+        integrityToken: String?,
+        websafeFallback: String?,
+        videoId: String
+    ) throws -> String {
+
+        // getMinter = webPoSignalOutput[0] (set by the VM during asyncSnapshotFn, when available)
+        let getMinterFn = signalOutput.objectAtIndexedSubscript(0)
+        let hasMinter = getMinterFn != nil && !getMinterFn!.isNull && !getMinterFn!.isUndefined
+
+        if !hasMinter {
+            // webPoSignalOutput[0] not available — use websafeFallbackToken directly.
+            // This token from GenerateIT (json[3]) is a ready-to-use URL-safe base64 PO token.
+            guard let fallback = websafeFallback, !fallback.isEmpty else {
+                throw BotGuardError.mintFailed("getMinter not set and no websafeFallbackToken available")
+            }
+            bgLog.notice("[BotGuard] ✅ using websafe fallback token (len=\(fallback.count)) for \(videoId)")
+            return fallback
+        }
+
+        // Full minting flow: getMinter(integrityTokenBytes) → mintCallback(videoIdBytes) → PO token
+        guard let integrityB64 = integrityToken, !integrityB64.isEmpty else {
+            throw BotGuardError.mintFailed("getMinter available but integrityToken (json[0]) is nil")
+        }
 
         // Decode integrity token bytes.
         // The token uses URL-safe base64 (- and _); convert to standard base64 before decoding.
@@ -518,14 +567,8 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         // Build JS Uint8Array for integrity token bytes
         let integrityU8 = try buildUint8Array(from: integrityData, in: ctx, label: "integrityToken")
 
-        // getMinter = webPoSignalOutput[0]  (a function set by the VM during asyncSnapshotFn)
-        guard let getMinterFn = signalOutput.objectAtIndexedSubscript(0),
-              !getMinterFn.isNull, !getMinterFn.isUndefined else {
-            throw BotGuardError.mintFailed("webPoSignalOutput[0] (getMinter) not set")
-        }
-
         // mintCallback = await getMinter(integrityTokenBytes)  – may return Promise or function directly
-        let getMinterResult = getMinterFn.call(withArguments: [integrityU8])
+        let getMinterResult = getMinterFn!.call(withArguments: [integrityU8])
         if let exc = ctx.exception { throw BotGuardError.mintFailed("getMinter(): \(exc)") }
         let mintCallbackFn = try resolvePromise(getMinterResult ?? JSValue(undefinedIn: ctx)!, in: ctx, label: "getMinter")
 
