@@ -2,6 +2,7 @@ import SwiftUI
 import FirebaseCore
 import SmartTubeIOS
 import SmartTubeIOSCore
+import os
 
 /// Unified entry point for iOS, iPadOS and macOS.
 @main
@@ -210,6 +211,7 @@ struct AppEntry: App {
                             consumePendingVideoFromLaunchArgs()
                             consumeDeepLinkFromLaunchArgs()
                             consumeChannelDeepLinkFromLaunchArgs()
+                            consumeBotGuardProbeFromLaunchArgs()
                             authService.handleForeground()
                             browseViewModel.refreshIfStale()
                             consumePendingRSSFeedURL()
@@ -429,6 +431,37 @@ struct AppEntry: App {
                 object: nil,
                 userInfo: ["channelId": channelID, "channelTitle": ""]
             )
+        }
+    }
+
+    /// Handles `--uitesting-botguard-probe=<videoId>` launch argument.
+    ///
+    /// Runs the full BotGuardClient pipeline (Phases 1-5) for the given videoId in a
+    /// background task and logs the result. Intended for testing the WAA Create
+    /// descramble fix (Option A) without wiring BotGuardClient into the production
+    /// playback path.
+    ///
+    /// Log signatures to look for (AGENT-POST-RUN-CHECK):
+    ///   Phase 1 ✅  "[BotGuard] challenge ok, globalName='...' jsLen=..."
+    ///   Full ✅     "[BotGuardProbe] ✅ PIPELINE COMPLETE tokenLen=... videoId=..."
+    ///   Full ❌     "[BotGuardProbe] ❌ PIPELINE FAILED error=... videoId=..."
+    @MainActor
+    private func consumeBotGuardProbeFromLaunchArgs() {
+        let args = ProcessInfo.processInfo.arguments
+        guard let arg = args.first(where: { $0.hasPrefix("--uitesting-botguard-probe=") }) else { return }
+        let videoID = String(arg.dropFirst("--uitesting-botguard-probe=".count))
+        guard !videoID.isEmpty else { return }
+        // Use fully-qualified os.Logger to avoid type ambiguity with SmartTubeIOS imports.
+        let probeLog = os.Logger(subsystem: "com.void.smarttube.app", category: "BotGuardProbe")
+        probeLog.notice("[BotGuardProbe] 🔵 starting probe for videoId=\(videoID)")
+        Task.detached {
+            let client = BotGuardClient()
+            do {
+                let token = try await client.token(for: videoID)
+                probeLog.notice("[BotGuardProbe] ✅ PIPELINE COMPLETE tokenLen=\(token.count) videoId=\(videoID)")
+            } catch {
+                probeLog.notice("[BotGuardProbe] ❌ PIPELINE FAILED error=\(String(describing: error)) videoId=\(videoID)")
+            }
         }
     }
 

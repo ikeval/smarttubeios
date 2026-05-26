@@ -424,6 +424,7 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         guard let snapFn = asyncSnapshotFn, !snapFn.isNull, !snapFn.isUndefined else {
             throw BotGuardError.jsFailed("asyncSnapshotFn not set after vm.a() — VM may have changed API")
         }
+        bgLog.notice("[BotGuard] Phase 2 ✅ VM loaded, asyncSnapshotFn set")
 
         // --- Phase 3: asyncSnapshotFn(callback, [undefined, undefined, webPoSignalOutput, undefined]) ---
         var botguardResponse: String?
@@ -445,6 +446,7 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
         guard let bgResponse = botguardResponse, !bgResponse.isEmpty else {
             throw BotGuardError.jsFailed("botguard response empty after asyncSnapshotFn")
         }
+        bgLog.notice("[BotGuard] Phase 3 ✅ botguardResponse len=\(bgResponse.count)")
 
         // --- Phase 4: fetch integrity token (blocking URLSession, safe on jsQueue) ---
         let integrityB64 = try fetchIntegrityTokenSync(bgResponse: bgResponse)
@@ -472,15 +474,22 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
 
         var result: Result<String, Error>?
         let sema = DispatchSemaphore(value: 0)
+        let log = bgLog   // capture logger value to avoid 'self' capture in closure
 
         session.dataTask(with: req) { data, response, error in
             defer { sema.signal() }
             if let error { result = .failure(error); return }
+            // GenerateIT response format: [null, ttl, null, integrityToken]
+            // Token is at index 3, not index 0.
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [Any],
-                  let token = json.first as? String, !token.isEmpty else {
+                  json.count >= 4,
+                  let token = json[3] as? String, !token.isEmpty else {
+                let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
+                let bodySnippet = data.flatMap { String(data: $0.prefix(200), encoding: .utf8) } ?? "<nil>"
+                log.notice("[BotGuard] GenerateIT failed: HTTP \(httpStatus) body=\(bodySnippet)")
                 result = .failure(BotGuardError.integrityTokenFailed(
-                    "HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)"
+                    "HTTP \(httpStatus) body=\(bodySnippet.prefix(80))"
                 ))
                 return
             }
@@ -495,8 +504,14 @@ public final class BotGuardClient: PoTokenProvider, @unchecked Sendable {
 
     private func mintSync(ctx: JSContext, signalOutput: JSValue, integrityB64: String, videoId: String) throws -> String {
 
-        // Decode integrity token bytes
-        guard let integrityData = Data(base64Encoded: integrityB64) else {
+        // Decode integrity token bytes.
+        // The token uses URL-safe base64 (- and _); convert to standard base64 before decoding.
+        let standardB64 = integrityB64
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let rem = standardB64.count % 4
+        let paddedB64 = rem == 0 ? standardB64 : standardB64 + String(repeating: "=", count: 4 - rem)
+        guard let integrityData = Data(base64Encoded: paddedB64) else {
             throw BotGuardError.mintFailed("integrityToken base64 decode failed")
         }
 
