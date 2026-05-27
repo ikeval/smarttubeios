@@ -1124,6 +1124,7 @@ extension PlaybackViewModel {
 
             lastAttemptedStreamURL = videoURL
             let compositeItem = AVPlayerItem(asset: composition)
+            isQualityChangePending = true
             isSwappingItem = true
             player.replaceCurrentItem(with: compositeItem)
             isSwappingItem = false
@@ -1134,7 +1135,12 @@ extension PlaybackViewModel {
                 case .readyToPlay:
                     let size = compositeItem.presentationSize
                     playerLog.notice("✅ [quality/DASH] readyToPlay — presentationSize=\(Int(size.width))x\(Int(size.height))")
-                    if seekTo > 0 { seek(to: seekTo) }
+                    isQualityChangePending = false
+                    // Use currentTime (preserved by time observer freeze) instead of seekTo
+                    // to honour any user seek that occurred during the DASH rebuild transition.
+                    let seekTarget = currentTime > 0 ? currentTime : seekTo
+                    playerLog.notice("[quality/DASH] readyToPlay — seekTarget=\(seekTarget)s (currentTime=\(currentTime)s savedSeekTo=\(seekTo)s)")
+                    if seekTarget > 0 { seek(to: seekTarget) }
                     loadAudioTracks(from: compositeItem)
                     player.rate = Float(settings.playbackSpeed)
                     isPlaying = true

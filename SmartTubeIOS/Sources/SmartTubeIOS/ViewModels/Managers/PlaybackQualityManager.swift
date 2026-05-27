@@ -53,6 +53,12 @@ protocol QualityEventHandler: AnyObject {
     /// Written by `reloadHLSItem` around `player.replaceCurrentItem` to suppress
     /// rate-observer false positives during the item swap.
     var isSwappingItem: Bool { get set }
+    /// True from the moment `replaceCurrentItem` is called for a quality switch until
+    /// `qualityItemDidBecomeReady` handles the new item. The periodic time observer
+    /// suspends `currentTime` updates while this is true, preserving the last known
+    /// position so that a user seek during the transition is not overwritten by a
+    /// stale `player.currentTime()` from the not-yet-ready new item.
+    var isQualityChangePending: Bool { get set }
 }
 
 /// Combined alias used by `PlaybackQualityManager.delegate`.
@@ -271,6 +277,7 @@ final class PlaybackQualityManager {
                 }
             }
         }
+        delegate?.isQualityChangePending = true
         delegate?.isSwappingItem = true
         player.replaceCurrentItem(with: item)
         delegate?.isSwappingItem = false
@@ -611,6 +618,7 @@ final class PlaybackQualityManager {
                 }
             }
         }
+        delegate?.isQualityChangePending = true
         delegate?.isSwappingItem = true
         player.replaceCurrentItem(with: item)
         delegate?.isSwappingItem = false

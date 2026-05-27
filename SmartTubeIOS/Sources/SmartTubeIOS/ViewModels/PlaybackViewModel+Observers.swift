@@ -24,6 +24,10 @@ extension PlaybackViewModel {
                 // every 0.5 s, preventing controls from ever auto-hiding post-scrub.
                 guard !self.isScrubbing else { return }
                 guard !self.sponsorBlockManager.isSkippingSegment else { return }
+                // Suspend time updates during a quality-change transition: the new
+                // AVPlayerItem is not yet ready and player.currentTime() may return 0
+                // or a stale value. currentTime is restored by qualityItemDidBecomeReady.
+                guard !self.isQualityChangePending else { return }
                 self.currentTime = seconds
                 self.checkSponsorSkip(at: seconds)
                 self.updateCaptionCue(for: seconds)

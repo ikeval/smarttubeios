@@ -253,6 +253,10 @@ public final class PlaybackViewModel {
     /// True while `replaceCurrentItem` is executing; guards the rate observer from
     /// treating the transient rate-drop as an unexpected external pause.
     var isSwappingItem: Bool = false
+    /// True from when a quality-change replaceCurrentItem fires until readyToPlay is
+    /// handled. The time observer skips currentTime updates during this window so the
+    /// UI position is preserved and any user seek during transition is not lost.
+    var isQualityChangePending: Bool = false
     var hlsVariantURLs: [Int: URL] {
         get { qualityManager.hlsVariantURLs }
         set { qualityManager.hlsVariantURLs = newValue }
@@ -413,7 +417,17 @@ extension PlaybackViewModel: QualityEventHandler {
     }
 
     func qualityItemDidBecomeReady(_ item: AVPlayerItem, seekTo time: TimeInterval) {
-        if time > 0 { seek(to: time) }
+        // Clear the quality-change freeze so the time observer resumes.
+        isQualityChangePending = false
+        // currentTime was preserved during the transition (time observer suspended).
+        // If the user seeked while the new item was loading, currentTime reflects
+        // their intent (set in seek(to:) completion handler); otherwise it holds
+        // the position captured at quality-change start.
+        // Either way, currentTime is the authoritative target; `time` is the fallback
+        // when currentTime is 0 (e.g. video is at the very start).
+        let seekTarget = currentTime > 0 ? currentTime : time
+        playerLog.notice("[quality] readyToPlay — seekTarget=\(seekTarget)s (currentTime=\(currentTime)s savedTime=\(time)s)")
+        if seekTarget > 0 { seek(to: seekTarget) }
         isPlaying = true
         loadAudioTracks(from: item)
     }
