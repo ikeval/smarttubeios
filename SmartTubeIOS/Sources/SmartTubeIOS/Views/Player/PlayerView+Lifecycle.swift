@@ -618,6 +618,10 @@ extension PlayerView {
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
             // Skip suspend when minimizing to mini-player — playback should continue.
             guard playerState.presentation != .miniPlayer else { return }
+            // Player view is being fully dismissed — release PiP controller so the
+            // next play session creates a fresh one bound to the current playerLayer.
+            pipController = nil
+            pipDelegate = nil
             vm.suspend()
             #else
             vm.suspend()
@@ -643,11 +647,15 @@ extension PlayerView {
         .onChange(of: vm.isPlaying) { _, playing in
             let pipUITestingOverride = ProcessInfo.processInfo.arguments.contains("--uitesting-enable-pip")
             guard playing, pipController == nil,
+                  playerLayer.player != nil,
                   store.settings.pipEnabled,
                   pipUITestingOverride || AVPictureInPictureController.isPictureInPictureSupported() else { return }
             let pip = AVPictureInPictureController(playerLayer: playerLayer)
             pip?.canStartPictureInPictureAutomaticallyFromInline = true
-            let delegate = PiPDelegate { active in isPiPActive = active }
+            let delegate = PiPDelegate(
+                onActiveChange: { active in isPiPActive = active },
+                onDidStart: { vm.updateNowPlayingInfo() }
+            )
             pip?.delegate = delegate
             pipDelegate = delegate
             pipController = pip

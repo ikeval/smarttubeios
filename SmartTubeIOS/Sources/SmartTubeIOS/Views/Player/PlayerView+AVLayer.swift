@@ -102,12 +102,15 @@ struct PlayerAVLayerView: UIViewRepresentable {
 /// smooth transition back to full-screen without rebuffering.
 final class PiPDelegate: NSObject, AVPictureInPictureControllerDelegate {
     private let onActiveChange: (Bool) -> Void
+    private let onDidStart: (() -> Void)?
 
-    init(onActiveChange: @escaping (Bool) -> Void) {
+    init(onActiveChange: @escaping (Bool) -> Void, onDidStart: (() -> Void)? = nil) {
         self.onActiveChange = onActiveChange
+        self.onDidStart = onDidStart
     }
 
     func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        onDidStart?()
         onActiveChange(true)
     }
 
