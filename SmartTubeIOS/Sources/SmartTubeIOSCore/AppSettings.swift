@@ -140,6 +140,12 @@ public struct AppSettings: Codable {
     /// synced to iCloud via `NSUbiquitousKeyValueStore`. Defaults to `false` (opt-in).
     public var iCloudSyncEnabled: Bool
 
+    // MARK: Schema version
+    /// Persisted schema version. Starts at 1 for newly stored settings.
+    /// Old JSON lacking this key decodes as 0, signalling a pre-migration store.
+    /// Increment when a breaking schema change requires a migration step.
+    public var settingsVersion: Int
+
     // MARK: Types
 
     /// Canonical ordered list of selectable playback speeds — single source of truth.
@@ -244,5 +250,106 @@ public struct AppSettings: Codable {
         audioOnlyMode        = false
         preferH264           = false
         iCloudSyncEnabled    = false
+        settingsVersion      = 1
+    }
+}
+
+// MARK: - Forward-compatible Codable
+
+// The synthesized init(from:) requires ALL non-Optional properties to be present in the
+// stored JSON. If any property is added, renamed, or type-changed in a new app version,
+// the decode throws and SettingsStore silently resets all settings to defaults (bug #181).
+//
+// This custom init(from:) uses decodeIfPresent with per-field defaults so that:
+//  - New fields get their default value when absent from old JSON (forward compatibility).
+//  - Renamed/type-changed fields fall back to defaults rather than wiping everything.
+//  - settingsVersion = 0 in old JSON signals a pre-migration store for future use.
+
+private extension KeyedDecodingContainer {
+    /// Decodes T if the key exists and the value is the right type; returns `defaultValue`
+    /// for absent keys, null values, or type mismatches — never throws.
+    func safeDecode<T: Decodable>(_ type: T.Type, forKey key: Key, default defaultValue: T) -> T {
+        (try? decodeIfPresent(T.self, forKey: key)) ?? defaultValue
+    }
+}
+
+extension AppSettings {
+    // Explicit CodingKeys keep JSON key names stable even if Swift property names change.
+    enum CodingKeys: String, CodingKey {
+        case settingsVersion
+        case preferredQuality
+        case playbackSpeed
+        case autoplayEnabled
+        case subtitlesEnabled
+        case subtitlesLanguage
+        case backgroundPlaybackEnabled
+        case landscapeAlwaysPlay
+        case pipEnabled
+        case miniPlayerEnabled
+        case seekBackSeconds
+        case seekForwardSeconds
+        case controlsHideTimeout
+        case videoGravityMode
+        case loopEnabled
+        case shuffleEnabled
+        case defaultSection
+        case compactThumbnails
+        case hideShorts
+        case perDeviceRecommendationsEnabled
+        case themeName
+        case enabledSections
+        case historyState
+        case sponsorBlockEnabled
+        case sponsorBlockActions
+        case sponsorBlockMinSegmentDuration
+        case sponsorBlockExcludedChannels
+        case preferredAudioLanguage
+        case preferredCaptionLanguage
+        case deArrowEnabled
+        case forceIPv4
+        case poTokenServiceURL
+        case audioOnlyMode
+        case preferH264
+        case iCloudSyncEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let d = AppSettings()   // defaults for any missing/mismatched field
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        settingsVersion              = c.safeDecode(Int.self,               forKey: .settingsVersion,              default: 0)
+        preferredQuality             = c.safeDecode(VideoQuality.self,      forKey: .preferredQuality,             default: d.preferredQuality)
+        playbackSpeed                = c.safeDecode(Double.self,            forKey: .playbackSpeed,                default: d.playbackSpeed)
+        autoplayEnabled              = c.safeDecode(Bool.self,              forKey: .autoplayEnabled,              default: d.autoplayEnabled)
+        subtitlesEnabled             = c.safeDecode(Bool.self,              forKey: .subtitlesEnabled,             default: d.subtitlesEnabled)
+        subtitlesLanguage            = c.safeDecode(String?.self,           forKey: .subtitlesLanguage,            default: d.subtitlesLanguage)
+        backgroundPlaybackEnabled    = c.safeDecode(Bool.self,              forKey: .backgroundPlaybackEnabled,    default: d.backgroundPlaybackEnabled)
+        landscapeAlwaysPlay          = c.safeDecode(Bool.self,              forKey: .landscapeAlwaysPlay,          default: d.landscapeAlwaysPlay)
+        pipEnabled                   = c.safeDecode(Bool.self,              forKey: .pipEnabled,                   default: d.pipEnabled)
+        miniPlayerEnabled            = c.safeDecode(Bool.self,              forKey: .miniPlayerEnabled,            default: d.miniPlayerEnabled)
+        seekBackSeconds              = c.safeDecode(Int.self,               forKey: .seekBackSeconds,              default: d.seekBackSeconds)
+        seekForwardSeconds           = c.safeDecode(Int.self,               forKey: .seekForwardSeconds,           default: d.seekForwardSeconds)
+        controlsHideTimeout          = c.safeDecode(Int.self,               forKey: .controlsHideTimeout,         default: d.controlsHideTimeout)
+        videoGravityMode             = c.safeDecode(VideoGravityMode.self,  forKey: .videoGravityMode,             default: d.videoGravityMode)
+        loopEnabled                  = c.safeDecode(Bool.self,              forKey: .loopEnabled,                  default: d.loopEnabled)
+        shuffleEnabled               = c.safeDecode(Bool.self,              forKey: .shuffleEnabled,               default: d.shuffleEnabled)
+        defaultSection               = c.safeDecode(String.self,            forKey: .defaultSection,               default: d.defaultSection)
+        compactThumbnails            = c.safeDecode(Bool.self,              forKey: .compactThumbnails,            default: d.compactThumbnails)
+        hideShorts                   = c.safeDecode(Bool.self,              forKey: .hideShorts,                   default: d.hideShorts)
+        perDeviceRecommendationsEnabled = c.safeDecode(Bool.self,           forKey: .perDeviceRecommendationsEnabled, default: d.perDeviceRecommendationsEnabled)
+        themeName                    = c.safeDecode(ThemeName.self,         forKey: .themeName,                    default: d.themeName)
+        enabledSections              = c.safeDecode([BrowseSection.SectionType].self, forKey: .enabledSections,   default: d.enabledSections)
+        historyState                 = c.safeDecode(HistoryState.self,      forKey: .historyState,                 default: d.historyState)
+        sponsorBlockEnabled          = c.safeDecode(Bool.self,              forKey: .sponsorBlockEnabled,          default: d.sponsorBlockEnabled)
+        sponsorBlockActions          = c.safeDecode([SponsorSegment.Category: SponsorBlockAction].self, forKey: .sponsorBlockActions, default: d.sponsorBlockActions)
+        sponsorBlockMinSegmentDuration = c.safeDecode(Double.self,          forKey: .sponsorBlockMinSegmentDuration, default: d.sponsorBlockMinSegmentDuration)
+        sponsorBlockExcludedChannels = c.safeDecode([String: String].self,  forKey: .sponsorBlockExcludedChannels, default: d.sponsorBlockExcludedChannels)
+        preferredAudioLanguage       = c.safeDecode(String?.self,           forKey: .preferredAudioLanguage,       default: d.preferredAudioLanguage)
+        preferredCaptionLanguage     = c.safeDecode(String?.self,           forKey: .preferredCaptionLanguage,     default: d.preferredCaptionLanguage)
+        deArrowEnabled               = c.safeDecode(Bool.self,              forKey: .deArrowEnabled,               default: d.deArrowEnabled)
+        forceIPv4                    = c.safeDecode(Bool.self,              forKey: .forceIPv4,                    default: d.forceIPv4)
+        poTokenServiceURL            = c.safeDecode(URL?.self,              forKey: .poTokenServiceURL,            default: d.poTokenServiceURL)
+        audioOnlyMode                = c.safeDecode(Bool.self,              forKey: .audioOnlyMode,                default: d.audioOnlyMode)
+        preferH264                   = c.safeDecode(Bool.self,              forKey: .preferH264,                   default: d.preferH264)
+        iCloudSyncEnabled            = c.safeDecode(Bool.self,              forKey: .iCloudSyncEnabled,            default: d.iCloudSyncEnabled)
     }
 }
