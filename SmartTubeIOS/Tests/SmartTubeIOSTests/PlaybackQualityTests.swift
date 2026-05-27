@@ -782,4 +782,67 @@ struct PlaybackQualityTests {
         #expect(maxH == 720, "720p quality preference must cap at 720")
         #expect(br == 8_000_000, "720p ABR peak bit rate must be 8 Mbps")
     }
+
+    // MARK: - WKWebView dubbed audio (Phase -1b, task #212)
+
+    /// Verifies that `parseHLSAudioLanguages` extracts dubbed tracks from a master
+    /// manifest that uses YouTube's non-standard `YT-EXT-AUDIO-CONTENT-ID` attribute.
+    /// When the original-audio variant carries no CONTENT-ID, a synthetic "Original"
+    /// entry with `contentID == nil` must be prepended so the picker always shows.
+    @Test func parseHLSAudioLanguages_dubbedTracks_returnsExpectedTracks() {
+        // Minimal HLS master manifest: one original-audio variant (no CONTENT-ID)
+        // and two dubbed variants (Japanese and French).
+        let manifest = """
+        #EXTM3U
+        #EXT-X-VERSION:3
+        #EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720
+        https://manifest.googlevideo.com/original.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720,YT-EXT-AUDIO-CONTENT-ID="ja-JP.1"
+        https://manifest.googlevideo.com/ja.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720,YT-EXT-AUDIO-CONTENT-ID="fr.2"
+        https://manifest.googlevideo.com/fr.m3u8
+        """
+        let tracks = parseHLSAudioLanguages(from: manifest)
+        // Expect 3 tracks: synthetic Original + Japanese + French
+        #expect(tracks.count == 3, "Should return synthetic Original + 2 dubbed tracks")
+        // Original must come first and have nil contentID
+        #expect(tracks[0].isOriginal == true, "First track must be marked isOriginal")
+        #expect(tracks[0].contentID == nil, "Synthetic original must have nil contentID")
+        // Dubbed tracks must carry the parsed contentID and language code
+        let langCodes = Set(tracks.dropFirst().map { $0.languageCode })
+        #expect(langCodes.contains("ja-JP"), "Japanese track must be present")
+        #expect(langCodes.contains("fr"), "French track must be present")
+        // No duplicates
+        let contentIDs = tracks.compactMap { $0.contentID }
+        #expect(Set(contentIDs).count == contentIDs.count, "No duplicate contentIDs")
+    }
+
+    /// Verifies the no-duplicate guard: when the same CONTENT-ID appears on multiple
+    /// bandwidth variants in the manifest, only one AudioTrack is emitted for that language.
+    @Test func parseHLSAudioLanguages_deduplicatesContentID() {
+        let manifest = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,YT-EXT-AUDIO-CONTENT-ID="ja-JP.1"
+        https://example.com/1080p_ja.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720,YT-EXT-AUDIO-CONTENT-ID="ja-JP.1"
+        https://example.com/720p_ja.m3u8
+        """
+        let tracks = parseHLSAudioLanguages(from: manifest)
+        // Only one Japanese track plus the synthetic Original
+        #expect(tracks.count == 2)
+        let jaCount = tracks.filter { $0.languageCode == "ja-JP" }.count
+        #expect(jaCount == 1, "Duplicate CONTENT-ID must be deduplicated")
+    }
+
+    /// When no YT-EXT-AUDIO-CONTENT-ID is present (single-language video), the
+    /// function must return an empty array — no picker shown.
+    @Test func parseHLSAudioLanguages_noContentID_returnsEmpty() {
+        let manifest = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720
+        https://example.com/720p.m3u8
+        """
+        let tracks = parseHLSAudioLanguages(from: manifest)
+        #expect(tracks.isEmpty, "No dubbed tracks should produce an empty result")
+    }
 }

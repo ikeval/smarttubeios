@@ -1672,66 +1672,7 @@ extension PlaybackViewModel {
     ///
     /// Returns deduplicated AudioTrack array (original first if present, then dubbed).
     private func parseHLSAudioLanguages(from manifest: String) -> [AudioTrack] {
-        let lines = manifest.components(separatedBy: "\n")
-        var seenContentIDs = Set<String>()
-        var tracks: [AudioTrack] = []
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("#EXT-X-STREAM-INF:"),
-                  trimmed.contains("YT-EXT-AUDIO-CONTENT-ID=") else { continue }
-
-            // Extract YT-EXT-AUDIO-CONTENT-ID="xx-XX.N"
-            guard let contentID = extractQuotedHLSAttribute("YT-EXT-AUDIO-CONTENT-ID", from: trimmed),
-                  !contentID.isEmpty, !seenContentIDs.contains(contentID) else { continue }
-            seenContentIDs.insert(contentID)
-
-            // Content ID format: "xx-XX.N" or "xx.N" → language code is everything before last "."
-            let langCode: String
-            if let dotIdx = contentID.lastIndex(of: ".") {
-                langCode = String(contentID[contentID.startIndex..<dotIdx])
-            } else {
-                langCode = contentID
-            }
-
-            // Decode YT-EXT-XTAGS (base64 protobuf) to check for acont=original vs dubbed-auto.
-            let isOriginal: Bool
-            if let xtags = extractQuotedHLSAttribute("YT-EXT-XTAGS", from: trimmed),
-               let padded = { () -> Data? in
-                   let s = xtags + String(repeating: "=", count: (4 - xtags.count % 4) % 4)
-                   return Data(base64Encoded: s)
-               }(),
-               let decoded = String(data: padded, encoding: .utf8)
-                           ?? String(data: padded, encoding: .isoLatin1) {
-                isOriginal = decoded.contains("original") && !decoded.contains("dubbed")
-            } else {
-                isOriginal = false
-            }
-
-            let name = Locale.current.localizedString(forLanguageCode: langCode) ?? langCode
-            tracks.append(AudioTrack(id: contentID, name: name, languageCode: langCode,
-                                     isOriginal: isOriginal, contentID: contentID))
-        }
-
-        // If dubbed tracks were found but none is marked isOriginal (meaning the original-audio
-        // variant has no YT-EXT-AUDIO-CONTENT-ID and was not included in the loop above),
-        // add a synthetic "Original" entry at position 0.  Using contentID=nil signals the proxy
-        // to filter for variants that carry *no* YT-EXT-AUDIO-CONTENT-ID attribute.
-        // This ensures the selector always shows when dubbed content is available (count > 1)
-        // and gives the user a visible way to return to the creator's original audio.
-        if !tracks.isEmpty && !tracks.contains(where: \.isOriginal) {
-            let originalName = "Original"
-            let synthetic = AudioTrack(id: "yt-original-audio", name: originalName,
-                                       languageCode: "original", isOriginal: true,
-                                       contentID: nil)
-            tracks.insert(synthetic, at: 0)
-        }
-
-        // Sort: original first, then alphabetical by display name
-        return tracks.sorted { a, b in
-            if a.isOriginal != b.isOriginal { return a.isOriginal }
-            return a.name.localizedCompare(b.name) == .orderedAscending
-        }
+        SmartTubeIOSCore.parseHLSAudioLanguages(from: manifest)
     }
 
     /// Parses a map of stream height → variant URL from the HLS master manifest for a
@@ -1790,11 +1731,7 @@ extension PlaybackViewModel {
 
     /// Extracts the value of a quoted HLS attribute (e.g. `ATTR="value"`) from a tag line.
     private func extractQuotedHLSAttribute(_ name: String, from line: String) -> String? {
-        let prefix = "\(name)=\""
-        guard let start = line.range(of: prefix) else { return nil }
-        let afterQuote = line[start.upperBound...]
-        guard let end = afterQuote.firstIndex(of: "\"") else { return nil }
-        return String(afterQuote[afterQuote.startIndex..<end])
+        SmartTubeIOSCore.extractQuotedHLSAttribute(name, from: line)
     }
 
     /// Parses an HLS master M3U8 manifest and returns a map of stream height → variant URL
