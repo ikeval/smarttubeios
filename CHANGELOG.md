@@ -4,6 +4,27 @@ All notable changes to SmartTube are documented here.
 
 ---
 
+## [4.1] – 2026-05-27
+
+### Added
+- **BotGuard PO token pipeline** — complete WKWebView-based `pot=` token extraction with websafe base64 fallback; token injected into adaptive streaming requests to satisfy YouTube's enhanced bot-detection
+- **AVC-only codec pinning** — "Prefer H.264" toggle in player settings pins DASH and HLS streams to AVC variants for maximum compatibility (#206)
+- **Serbian & Croatian localizations** — two new languages added; 19 missing translation keys filled across all existing languages
+- **HLS audio rendition proxying** — `#EXT-X-MEDIA` audio playlist URLs rewritten to `ytwebhls://` so the local proxy correctly forwards cookies to rendition segments
+
+### Fixed
+- **60 s `loadTracks` stall on SABR streams** — SABR stream detection added; `c=TVHTML5` URLs bypass the stall-prone audio-track load path (#204)
+- **Dubbed audio broken via WKWebView** — HLS proxy now fetches the per-quality master URL rather than the generic master, restoring dubbed tracks (#205, #205b)
+- **WKWebView cookies not forwarded to HLS proxy** — all `WKWebView` cookies, including the `googlevideo.com` domain, are now included in local proxy requests (#207)
+- **8 s `loadTracks` stall** — `rqh=1` adaptive composition skipped when no `googlevideo.com` cookies are present, eliminating the hang (#208)
+- **WKWebView HLS proxy silently skipped** — early `rqh=1` guard removed; proxy is now attempted regardless of cookie state at startup (#209)
+- **Quality switch failed after muxed fallback** — fresh WKWebView extraction is now triggered whenever a quality change follows a muxed-only fallback (#210)
+- **Stale WKWebView HLS URL used** — cached URL validity probed before constructing `AVPlayerItem`; expired URLs trigger immediate re-extraction (#211)
+- **Quality button always visible** — changed from hidden-when-empty to disabled-when-empty; button remains visible but non-interactive when no quality options are available (#186)
+- **Audio tracks not loaded after WKWebView HLS** — `loadAudioTracks(from:)` now called inside the `tryWebViewHLS` `readyToPlay` handler
+
+---
+
 ## [3.0] – 2026-05-22
 
 ### Added
