@@ -30,6 +30,12 @@ public struct HomeView: View {
     @State private var channelDestination: ChannelDestination?
     @State private var showSignIn = false
     @State private var queueVideosCount: Int = 0
+    // Auto-retry tracking: record the type-specific video count at the moment a
+    // scroll trigger fires so onChange can detect whether the next page helped.
+    @State private var needsMoreShorts = false
+    @State private var shortsCountAtTrigger = 0
+    @State private var needsMoreNonShorts = false
+    @State private var nonShortsCountAtTrigger = 0
     #if os(tvOS)
     @FocusState private var focusedSection: BrowseSection?
     #endif
@@ -101,6 +107,10 @@ public struct HomeView: View {
             await sectionVM.updateAuthToken(auth.accessToken)
         }
         .task(id: selectedSection) {
+            // Reset auto-retry flags when switching sections to prevent stale
+            // triggers from a previous section firing on the new section's content.
+            needsMoreShorts = false
+            needsMoreNonShorts = false
             if selectedSection.type == .playlists {
                 queueVideosCount = await CurrentQueueStore.shared.videos.count
             } else if selectedSection.type != .home {
@@ -372,8 +382,12 @@ public struct HomeView: View {
                         : "browse.shortsRow",
                     loadMore: {
                         // Trigger from the shorts row: fires when the last short card
-                        // becomes visible. Uses paginationTrigger (last raw video) so
-                        // the loadMoreIfNeeded membership check always succeeds.
+                        // becomes visible. Record the current shorts count so onChange
+                        // can detect whether the next page actually added any shorts,
+                        // and keep re-triggering until it does.
+                        let allVideos = sectionVM.videoGroups.flatMap(\.videos)
+                        shortsCountAtTrigger = allVideos.filter(\.isShort).count
+                        needsMoreShorts = true
                         if let last = paginationTrigger {
                             sectionVM.loadMoreIfNeeded(lastVideo: last)
                         }
@@ -426,10 +440,13 @@ public struct HomeView: View {
                                 onSelect: { selectVideo($0, from: gridVideos) },
                                 loadMore: {
                                     // Trigger from the main grid: fires when the last
-                                    // visible grid card appears. Uses paginationTrigger
-                                    // (raw last video) so the check succeeds even when
-                                    // the last group is all-shorts (gridVideos.last
-                                    // would be from an earlier group in that case).
+                                    // visible grid card appears. Record the current
+                                    // non-shorts count so onChange can detect whether
+                                    // the next page actually added any grid videos, and
+                                    // keep re-triggering until it does.
+                                    let allVideos = sectionVM.videoGroups.flatMap(\.videos)
+                                    nonShortsCountAtTrigger = allVideos.filter { !$0.isShort }.count
+                                    needsMoreNonShorts = true
                                     if let last = paginationTrigger {
                                         sectionVM.loadMoreIfNeeded(lastVideo: last)
                                     }
@@ -449,17 +466,16 @@ public struct HomeView: View {
             }
         }
         .onChange(of: sectionVM.videoGroups.flatMap(\.videos).count) { _, _ in
-            // After each page load, check whether the newly appended page contained
-            // videos of the type each visible section needs. If not, auto-trigger
-            // another page so both the pinned shorts row and the grid can fill up.
-            //
-            // This handles the common case where the API returns a page that is
-            // entirely shorts (grid gets nothing new) or entirely regular videos
-            // (pinned row gets nothing new).
+            // After each page load, check whether the type(s) each trigger was
+            // waiting for actually appeared. Compare against the count snapshot
+            // recorded when the scroll trigger fired — NOT the last-page slice,
+            // which for mergeIntoFirstGroup sections is the entire accumulated
+            // list (making "does last page have shorts?" always true after the
+            // first short ever arrived).
             //
             // loadMoreIfNeeded's own guards (nextPageToken, isLoadingMore) prevent
-            // runaway loops — pagination stops when pages are exhausted or one is
-            // already in flight.
+            // runaway loops — pagination stops when pages are exhausted or a load
+            // is already in flight.
             let isShortsSectionActive = selectedSection.type == .shorts
             let applyHide = store.settings.hideShorts && selectedSection.type != .history
             guard !isShortsSectionActive,
@@ -467,14 +483,28 @@ public struct HomeView: View {
                   let trigger = sectionVM.videoGroups.last?.videos.last
             else { return }
 
-            let lastPageVideos = sectionVM.videoGroups.last?.videos ?? []
-            let lastPageHasShorts    = lastPageVideos.contains { $0.isShort }
-            let lastPageHasNonShorts = lastPageVideos.contains { !$0.isShort }
+            let allVideos = sectionVM.videoGroups.flatMap(\.videos)
+            var shouldTrigger = false
 
-            // Last page was all-non-shorts → pinned row got no new cards → re-trigger.
-            // Last page was all-shorts → grid got no new cards → re-trigger.
-            // If the page had both types, both sections grew — no re-trigger needed.
-            if !lastPageHasShorts || !lastPageHasNonShorts {
+            if needsMoreShorts {
+                let currentShortsCount = allVideos.filter(\.isShort).count
+                if currentShortsCount > shortsCountAtTrigger {
+                    needsMoreShorts = false  // pinned row got new shorts — satisfied
+                } else {
+                    shouldTrigger = true     // page had no new shorts — fetch another
+                }
+            }
+
+            if needsMoreNonShorts {
+                let currentNonShortsCount = allVideos.filter { !$0.isShort }.count
+                if currentNonShortsCount > nonShortsCountAtTrigger {
+                    needsMoreNonShorts = false  // grid got new regular videos — satisfied
+                } else {
+                    shouldTrigger = true         // page had no new regulars — fetch another
+                }
+            }
+
+            if shouldTrigger {
                 sectionVM.loadMoreIfNeeded(lastVideo: trigger)
             }
         }
