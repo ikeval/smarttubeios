@@ -57,6 +57,10 @@ public final class BrowseViewModel {
     private var enrichTask: Task<Void, Never>?
     /// When `false`, the History section returns empty content rather than fetching from YouTube.
     private var historyEnabled: Bool = true
+    /// Counts consecutive pages fetched for the Shorts chip that produced 0 new unique videos
+    /// (all results were already in the list). After 3 consecutive empty pages we clear the
+    /// nextPageToken so the scroll-trigger sentinel cannot loop forever on a sparse result set.
+    private var consecutiveEmptyShortPages: Int = 0
     /// True when the Recommended section fell back to a `/search?q=popular` result
     /// because the unauthenticated `/browse` home feed returned 0 videos.
     /// In this mode, pagination must also go through `/search` (not `/browse`).
@@ -153,6 +157,7 @@ public final class BrowseViewModel {
             subscribedChannels = []
             recommendedShortsVideos = []
             loadedAt = nil
+            consecutiveEmptyShortPages = 0
             enrichTask?.cancel()
             enrichTask = nil
         }
@@ -566,8 +571,24 @@ public final class BrowseViewModel {
                 if Task.isCancelled {
                     browseLog.notice("fetchNextPage cancelled: section=\(section.title)")
                 } else {
-                    browseLog.notice("fetchNextPage success: section=\(section.title) newVideos=\(group.videos.count) nextToken=\(group.nextPageToken != nil)")
+                    let before = videoGroups.first?.videos.count ?? 0
                     mergeIntoFirstGroup(group)
+                    let after = videoGroups.first?.videos.count ?? 0
+                    let added = after - before
+                    browseLog.notice("fetchNextPage success: section=\(section.title) newVideos=\(added) nextToken=\(group.nextPageToken != nil)")
+                    if added == 0 {
+                        consecutiveEmptyShortPages += 1
+                        browseLog.notice("fetchNextPage: Shorts empty page #\(consecutiveEmptyShortPages)")
+                        if consecutiveEmptyShortPages >= 3 {
+                            // API is cycling through already-seen or empty results.
+                            // Clear the token so the scroll-trigger sentinel stops looping.
+                            browseLog.notice("fetchNextPage: clearing Shorts token after \(consecutiveEmptyShortPages) consecutive empty pages")
+                            videoGroups[0].nextPageToken = nil
+                            consecutiveEmptyShortPages = 0
+                        }
+                    } else {
+                        consecutiveEmptyShortPages = 0
+                    }
                 }
             case .music:
                 let group = try await retryWithBackoff(label: "BrowseVM[\(section.title)]") {

@@ -502,8 +502,11 @@ public struct HomeView: View {
                 // Shorts chip: all videos are shorts — compare total count against snapshot.
                 // Keep triggering until the count grows or pages are exhausted.
                 if needsMoreShorts {
+                    let hasMorePages = sectionVM.videoGroups.last?.nextPageToken != nil
                     if allVideos.count > shortsCountAtTrigger {
                         needsMoreShorts = false  // new shorts arrived — satisfied
+                    } else if !hasMorePages {
+                        needsMoreShorts = false  // no more pages — stop
                     } else {
                         shouldTrigger = true     // page had nothing new — fetch another
                     }
@@ -511,18 +514,24 @@ public struct HomeView: View {
             } else {
                 // Mixed feed: check each type independently.
                 if needsMoreShorts {
+                    let hasMorePages = sectionVM.videoGroups.last?.nextPageToken != nil
                     let currentShortsCount = allVideos.filter(\.isShort).count
                     if currentShortsCount > shortsCountAtTrigger {
                         needsMoreShorts = false  // pinned row got new shorts — satisfied
+                    } else if !hasMorePages {
+                        needsMoreShorts = false  // no more pages — stop
                     } else {
                         shouldTrigger = true     // page had no new shorts — fetch another
                     }
                 }
 
                 if needsMoreNonShorts {
+                    let hasMorePages = sectionVM.videoGroups.last?.nextPageToken != nil
                     let currentNonShortsCount = allVideos.filter { !$0.isShort }.count
                     if currentNonShortsCount > nonShortsCountAtTrigger {
                         needsMoreNonShorts = false  // grid got new regular videos — satisfied
+                    } else if !hasMorePages {
+                        needsMoreNonShorts = false  // no more pages — stop
                     } else {
                         shouldTrigger = true         // page had no new regulars — fetch another
                     }
