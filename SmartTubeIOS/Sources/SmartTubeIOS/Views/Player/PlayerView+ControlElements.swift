@@ -319,7 +319,7 @@ struct PlayerControlsOverlay: View {
                     } label: {
                         Image(systemName: AppSymbol.nextTrack)
                             .font(.system(size: 18 * controlScale))
-                            .foregroundStyle(vm.hasNext && !vm.isLoading ? .white : .white.opacity(0.3))
+                            .foregroundStyle(vm.hasNext ? .white : .white.opacity(0.3))
                             #if os(iOS)
                             .padding(8)
                             .background(.black.opacity(0.4))
@@ -333,7 +333,7 @@ struct PlayerControlsOverlay: View {
                     .shadow(color: highlightedControl == .nextVideo ? .white.opacity(0.85) : .clear, radius: 14)
                     .animation(.easeInOut(duration: 0.15), value: highlightedControl)
                     #endif
-                    .disabled(!vm.hasNext || vm.isLoading)
+                    .disabled(!vm.hasNext)
                     .accessibilityIdentifier("player.nextBtn")
                 }
                 .font(.caption)
