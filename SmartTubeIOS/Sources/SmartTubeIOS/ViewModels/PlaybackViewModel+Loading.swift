@@ -108,6 +108,9 @@ extension PlaybackViewModel {
         if video.playlistId == CurrentQueueStore.playlistID,
            let nextIndex = video.playlistIndex.map({ $0 + 1 }) {
             prefetchQueueVideo(at: nextIndex)
+            // The queue has a next item — enable the next button immediately so
+            // the user can advance before related videos finish loading.
+            hasNext = true
         }
     }
 
