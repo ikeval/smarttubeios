@@ -65,7 +65,7 @@ struct ShortsRowSection: View {
         .accessibilityIdentifier(accessibilityID)
         .focusSection()
         #else
-        ScrollView(.horizontal, showsIndicators: false) {
+        ScrollView(.horizontal, showsIndicators: true) {
             LazyHStack(alignment: .top, spacing: videoGridRowSpacing) {
                 ForEach(videos) { video in
                     ShortsCardView(video: video, onTap: { onSelect(video) })
