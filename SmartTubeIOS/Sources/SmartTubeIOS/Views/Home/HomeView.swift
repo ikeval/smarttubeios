@@ -352,6 +352,14 @@ public struct HomeView: View {
             .filter { !applyHideShorts || !$0.isShort }
             .filter { isShorts || !$0.isShort }
 
+        // The raw last video of the last group is the canonical pagination trigger for
+        // loadMoreIfNeeded — it checks membership in videoGroups.last, so passing a
+        // filtered (non-short) video won't match if the last group is all-shorts.
+        // Both the shorts row and the grid use this as their loadMore trigger so
+        // either reaching the end of the shorts row OR scrolling to the bottom of
+        // the main content independently triggers the next page load.
+        let paginationTrigger: Video? = sectionVM.videoGroups.last?.videos.last
+
         return VStack(spacing: 0) {
             // Pinned ShortsRowSection — outside the ScrollView so it stays fixed
             // at the top while the video content below scrolls.
@@ -361,7 +369,15 @@ public struct HomeView: View {
                     onSelect: { selectVideo($0, from: pinnedShorts) },
                     accessibilityID: selectedSection.type == .recommended
                         ? "recommended.shortsRow"
-                        : "browse.shortsRow"
+                        : "browse.shortsRow",
+                    loadMore: {
+                        // Trigger from the shorts row: fires when the last short card
+                        // becomes visible. Uses paginationTrigger (last raw video) so
+                        // the loadMoreIfNeeded membership check always succeeds.
+                        if let last = paginationTrigger {
+                            sectionVM.loadMoreIfNeeded(lastVideo: last)
+                        }
+                    }
                 )
                 #if os(tvOS)
                 .focusSection()
@@ -377,7 +393,11 @@ public struct HomeView: View {
                     videos: shortsVideos,
                     onSelect: { selectVideo($0, from: shortsVideos) },
                     accessibilityID: "shorts.section",
-                    loadMore: { if let last = shortsVideos.last { sectionVM.loadMoreIfNeeded(lastVideo: last) } },
+                    loadMore: {
+                        if let last = paginationTrigger {
+                            sectionVM.loadMoreIfNeeded(lastVideo: last)
+                        }
+                    },
                     scrollAxis: .vertical
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -404,7 +424,16 @@ public struct HomeView: View {
                             VideoGridSection(
                                 videos: gridVideos,
                                 onSelect: { selectVideo($0, from: gridVideos) },
-                                loadMore: { if let last = gridVideos.last { sectionVM.loadMoreIfNeeded(lastVideo: last) } }
+                                loadMore: {
+                                    // Trigger from the main grid: fires when the last
+                                    // visible grid card appears. Uses paginationTrigger
+                                    // (raw last video) so the check succeeds even when
+                                    // the last group is all-shorts (gridVideos.last
+                                    // would be from an earlier group in that case).
+                                    if let last = paginationTrigger {
+                                        sectionVM.loadMoreIfNeeded(lastVideo: last)
+                                    }
+                                }
                             )
                         }
                         if sectionVM.isLoading {
