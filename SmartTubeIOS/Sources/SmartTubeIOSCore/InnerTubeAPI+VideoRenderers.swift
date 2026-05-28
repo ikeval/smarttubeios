@@ -169,8 +169,8 @@ extension InnerTubeAPI {
         // WEB grid (gridVideoRenderer), and TVHTML5 tileRenderer (subs/history/home on TV client).
         // Matches Android MediaServiceCore ItemWrapper renderer dispatch order.
         func walk(_ obj: Any, depth: Int = 0) {
-            guard depth < 50 else {
-                tubeLog.warning("parseVideoGroup: walk depth limit (50) reached — skipping subtree")
+            guard depth < 20 else {
+                tubeLog.warning("parseVideoGroup: walk depth limit (20) reached — skipping subtree")
                 return
             }
             if let dict = obj as? [String: Any] {
@@ -261,9 +261,10 @@ extension InnerTubeAPI {
                         // Continuation token nested inside richItemRenderer
                         nextPageToken = token
                     } else {
-                        // Unknown richItemRenderer content type — log what keys are present
+                        // Unknown richItemRenderer content type — log keys once, then recurse
                         let unknownKeys = content.keys.sorted().joined(separator: ",")
-                        rendererMisses["richItem/unknown[\(unknownKeys)]", default: 0] += 1
+                        tubeLog.notice("parseVideoGroup: unknown richItem content keys: [\(unknownKeys, privacy: .public)]")
+                        rendererMisses["richItem/unknown", default: 0] += 1
                         for value in content.values { walk(value, depth: depth + 1) }
                     }
                 } else if let renderer = dict["compactVideoRenderer"] as? [String: Any] {
