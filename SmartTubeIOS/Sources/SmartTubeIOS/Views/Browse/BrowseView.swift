@@ -74,83 +74,33 @@ public struct BrowseView: View {
     // MARK: - Subviews
 
     private var content: some View {
+        let isShorts = vm.currentSection.type == .shorts
         let hideShorts = settings.settings.hideShorts
-        let rowGroups: [VideoGroup] = vm.videoGroups.filter { $0.layout == .row }.map { g in
-            guard hideShorts else { return g }
-            var copy = g
-            copy.videos = g.videos.filter { !$0.isShort }
-            return copy
-        }
-        let gridVideos = vm.videoGroups.filter { $0.layout != .row }.flatMap(\.videos).filter { !hideShorts || !$0.isShort }
+        let axis: Axis.Set = isShorts ? .vertical : .horizontal
+
+        // Flatten all video groups into a single ordered list, filtering hidden shorts.
+        // Non-Shorts chips show portrait cards in a horizontal shelf; the Shorts chip
+        // shows them in a vertical scrolling layout.
+        let allVideos: [Video] = vm.videoGroups
+            .flatMap(\.videos)
+            .filter { !hideShorts || !$0.isShort }
+
         return ScrollView {
-            if settings.settings.compactThumbnails {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if vm.isAuthRequired && !auth.isSignedIn { guestBanner }
-                    ForEach(rowGroups) { group in
-                        if let title = group.title, !title.isEmpty {
-                            Text(title)
-                                .font(.headline)
-                                .padding(.horizontal)
-                                .padding(.top, 16)
-                                .padding(.bottom, 4)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if vm.isAuthRequired && !auth.isSignedIn { guestBanner }
+                ShortsRowSection(
+                    videos: allVideos,
+                    onSelect: { selectVideo($0, from: allVideos) },
+                    accessibilityID: isShorts ? "shorts.section" : "browse.section",
+                    loadMore: {
+                        if let last = allVideos.last {
+                            vm.loadMoreIfNeeded(lastVideo: last)
                         }
-                        VideoRowSection(videos: group.videos, onSelect: { selectVideo($0, from: group.videos) })
-                    }
-                    ForEach(gridVideos) { video in
-                        VideoCardView(video: video, compact: true, onSelect: { selectVideo(video, from: gridVideos) })
-                            .padding(.horizontal)
-                            .padding(.vertical, 6)
-                            .accessibilityIdentifier("video.card.\(video.id)")
-                            .onAppear {
-                                if video.id == gridVideos.last?.id {
-                                    vm.loadMoreIfNeeded(lastVideo: video)
-                                }
-                            }
-                        Divider().padding(.horizontal)
-                    }
-                    if vm.isLoading {
-                        ProgressView().frame(maxWidth: .infinity).padding()
-                    }
-                }
-            } else {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if vm.isAuthRequired && !auth.isSignedIn { guestBanner }
-                    ForEach(rowGroups) { group in
-                        if let title = group.title, !title.isEmpty {
-                            Text(title)
-                                .font(.headline)
-                                .padding(.horizontal)
-                                .padding(.top, 16)
-                                .padding(.bottom, 4)
-                        }
-                        VideoRowSection(videos: group.videos, onSelect: { selectVideo($0, from: group.videos) })
-                    }
-                    ForEach(Array(stride(from: 0, to: gridVideos.count, by: 2)), id: \.self) { idx in
-                        HStack(alignment: .top, spacing: videoGridRowSpacing) {
-                            let v1 = gridVideos[idx]
-                            VideoCardView(video: v1, compact: false, onSelect: { selectVideo(v1, from: gridVideos) })
-                                .frame(maxWidth: .infinity)
-                                .accessibilityIdentifier("video.card.\(v1.id)")
-                            if idx + 1 < gridVideos.count {
-                                let v2 = gridVideos[idx + 1]
-                                VideoCardView(video: v2, compact: false, onSelect: { selectVideo(v2, from: gridVideos) })
-                                    .frame(maxWidth: .infinity)
-                                    .accessibilityIdentifier("video.card.\(v2.id)")
-                            } else {
-                                Color.clear.frame(maxWidth: .infinity)
-                            }
-                        }
-                        .padding(.horizontal, 0)
-                        .padding(.vertical, videoGridRowSpacing / 2)
-                        .onAppear {
-                            if idx + 2 >= gridVideos.count, let last = gridVideos.last {
-                                vm.loadMoreIfNeeded(lastVideo: last)
-                            }
-                        }
-                    }
-                    if vm.isLoading {
-                        ProgressView().frame(maxWidth: .infinity).padding()
-                    }
+                    },
+                    scrollAxis: axis
+                )
+                if vm.isLoading {
+                    ProgressView().frame(maxWidth: .infinity).padding()
                 }
             }
         }
@@ -362,61 +312,3 @@ struct VideoRowSection: View {
     }
 }
 
-// MARK: - ShortsRowSection
-
-/// Horizontal scrolling row of portrait (9:16) Shorts cards.
-/// Used by HomeView to display Shorts separately from regular videos.
-struct ShortsRowSection: View {
-    let videos: [Video]
-    let onSelect: (Video) -> Void
-    var accessibilityID: String = ""
-    /// Called when the last card becomes visible — triggers the next page load.
-    var loadMore: (() -> Void)? = nil
-
-    /// Card width: ~120pt on iOS/iPadOS; ~200pt on tvOS.
-    #if os(tvOS)
-    private let cardWidth: CGFloat = 200
-    #else
-    private let cardWidth: CGFloat = 120
-    #endif
-
-    var body: some View {
-        #if os(tvOS)
-        // On tvOS, ScrollView(.horizontal) consumes UP/DOWN directional events
-        // from the Siri remote, trapping focus inside the row and preventing
-        // navigation to the video grid below. Use a plain HStack instead.
-        // A 1920-pt screen holds ~9 cards at 200 pt each; overflow is clipped.
-        HStack(alignment: .top, spacing: videoGridRowSpacing) {
-            ForEach(Array(videos.prefix(9))) { video in
-                Button { onSelect(video) } label: {
-                    ShortsCardView(video: video, onTap: { onSelect(video) })
-                        .frame(width: cardWidth, height: cardWidth * 16 / 9)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("shorts.card.\(video.id)")
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 4)
-        .accessibilityIdentifier(accessibilityID)
-        .focusSection()
-        #else
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(alignment: .top, spacing: videoGridRowSpacing) {
-                ForEach(videos) { video in
-                    ShortsCardView(video: video, onTap: { onSelect(video) })
-                        .frame(width: cardWidth, height: cardWidth * 16 / 9)
-                        .accessibilityIdentifier("shorts.card.\(video.id)")
-                        .onAppear {
-                            if video.id == videos.last?.id { loadMore?() }
-                        }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 4)
-        }
-        .accessibilityIdentifier(accessibilityID)
-        .accessibilityValue("\(videos.count)")
-        #endif
-    }
-}
