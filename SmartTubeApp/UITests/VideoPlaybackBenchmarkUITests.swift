@@ -11,10 +11,10 @@ import XCTest
 //   ✓ [prefetch] ENQUEUE <nextID> priority=2        — prefetch for the following video
 //
 // Expected per-video paths (baseline):
-//   dQw4w9WgXcQ  — cold start, webView/HLS or adaptive
+//   l7To2evwGKs  — cold start + 4 s pre-warm, rqh=1 via BotGuardWV (was 6.1s without pre-warm)
+//   dQw4w9WgXcQ  — hot (cached), webView/HLS or adaptive
 //   jNQXAC9IVRw  — hot (cached), webView/HLS
-//   l7To2evwGKs  — hot (cached), webView/HLS (~5s real-world uncached)
-//   fEvekF1zOKs  — hot (cached), rqh=1 BotGuard chain; still slow due to stream type
+//   fEvekF1zOKs  — hot (cached), rqh=1 BotGuard chain
 //   Wu8xNx4njoM  — hot (cached)
 //   LSMQ3U1Thzw  — hot (cached)
 //
@@ -42,13 +42,15 @@ import XCTest
 final class VideoPlaybackBenchmarkUITests: XCTestCase {
 
     /// All known stable video IDs, ordered so cache warms progressively:
-    ///   - First two mirror the existing NextVideoPrefetchUITests queue
-    ///   - Next two are the real-world videos from log analysis (14-05-28)
+    ///   - First: real-world rqh=1 video from log.txt (2026-05-28) — measures cold
+    ///     start with BotGuardWV pre-warm (4 s pause lets WKWebView warm up).
+    ///   - Next two mirror the existing NextVideoPrefetchUITests queue
+    ///   - Fourth was the former first rqh=1 video; now hot
     ///   - Last two are from HLSResolution and BotGuardLivePipeline test suites
     private static let allVideoIDs: [String] = [
+        "l7To2evwGKs",  // Real-world rqh=1 video (log.txt 2026-05-28) — cold + pre-warm
         "dQw4w9WgXcQ",  // Rick Astley — stable, typical adaptive/HLS path
         "jNQXAC9IVRw",  // "Me at the zoo" — YouTube reference
-        "l7To2evwGKs",  // Real-world video A — webView/HLS path (~5s uncached)
         "fEvekF1zOKs",  // Real-world video B — rqh=1, BotGuard chain (~14s uncached)
         "Wu8xNx4njoM",  // HLS resolution test video
         "LSMQ3U1Thzw",  // BotGuard probe test video
@@ -88,6 +90,13 @@ final class VideoPlaybackBenchmarkUITests: XCTestCase {
         let playerTitle = app.staticTexts["player.titleLabel"].firstMatch
 
         // ── Video 0: cold start ───────────────────────────────────────────────
+        // Allow 4 s after launch for BotGuardWebViewRunner to begin pre-warming
+        // the WKWebView context (triggered by prefetchQueueVideo inside load()).
+        // This simulates real-world usage where the home feed has already scrolled
+        // and the pre-warm is in-flight before the user taps the video.
+        // The cold timer starts AFTER the pause so it measures "time from pre-warm
+        // start" rather than "time from zero".
+        Thread.sleep(forTimeInterval: 4.0)
         let coldStart = Date()
         guard playerTitle.waitForExistence(timeout: 35) else {
             try captureAndSkip("First video did not load — network unavailable or video inaccessible", in: app)
