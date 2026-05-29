@@ -104,7 +104,18 @@ extension PlaybackViewModel {
         // Both race paths failed — fall back to serial WKWebView extraction in case
         // the early task returned nil (e.g. network timeout, JS player error).
         playerLog.notice("⚠️ [webView] race failed — attempting serial WKWebView extraction")
-        let serialURL = await YouTubeWebViewHLSExtractor.shared.extractHLSURL(videoId: video.id)
+        // If an extraction for this video is already in-flight (started by the early task or
+        // a concurrent serial attempt for the same video), await it directly instead of
+        // calling extractHLSURL which would cancel the in-progress extraction via finish(url:nil).
+        // This prevents the ABA cancel-chain where two simultaneous race failures for the same
+        // or different videos each cancel each other's serial extractions, both returning nil.
+        let serialURL: URL?
+        if YouTubeWebViewHLSExtractor.shared.currentExtractionVideoId == video.id {
+            playerLog.notice("[webView] serial: extraction for \(video.id) already in-flight — awaiting it")
+            serialURL = await YouTubeWebViewHLSExtractor.shared.awaitCurrentExtraction()
+        } else {
+            serialURL = await YouTubeWebViewHLSExtractor.shared.extractHLSURL(videoId: video.id)
+        }
         let nSolverSerial = YouTubeWebViewHLSExtractor.shared.extractedNSolver
         if let pot = YouTubeWebViewHLSExtractor.shared.extractedPoToken {
             await api.storeExternalPoToken(pot, for: video.id)
@@ -338,14 +349,22 @@ extension PlaybackViewModel {
             })?.url
             var webProbeStatus: Int? = nil
             if let probeURL {
-                var req = URLRequest(url: probeURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 5)
-                req.httpMethod = "HEAD"
-                let hasPot = probeURL.absoluteString.contains("pot=")
                 let hasRqh = probeURL.absoluteString.contains("rqh=1")
-                if let (_, resp) = try? await URLSession.shared.data(for: req),
-                   let http = resp as? HTTPURLResponse {
-                    webProbeStatus = http.statusCode
-                    playerLog.notice("[BotGuardWV/WEB probe] CDN HEAD: HTTP \(http.statusCode) — pot=\(hasPot ? "YES" : "NO") rqh=\(hasRqh ? "1" : "0")")
+                // Only run the CDN HEAD probe when the URL has rqh=1. The probe is only
+                // used to skip tryAllStreams on 403. For non-rqh=1 URLs the CDN serves
+                // the stream directly — skipping the probe removes one network round-trip
+                // (~0.5–1s) from Path A, helping it win the race against Path B.
+                if hasRqh {
+                    var req = URLRequest(url: probeURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 5)
+                    req.httpMethod = "HEAD"
+                    let hasPot = probeURL.absoluteString.contains("pot=")
+                    if let (_, resp) = try? await URLSession.shared.data(for: req),
+                       let http = resp as? HTTPURLResponse {
+                        webProbeStatus = http.statusCode
+                        playerLog.notice("[BotGuardWV/WEB probe] CDN HEAD: HTTP \(http.statusCode) — pot=\(hasPot ? "YES" : "NO") rqh=1")
+                    }
+                } else {
+                    playerLog.notice("[BotGuardWV/WEB probe] skipping CDN probe — no rqh=1, proceeding directly")
                 }
             }
             guard !Task.isCancelled else { return false }
@@ -496,8 +515,13 @@ extension PlaybackViewModel {
             // so CDN auth may succeed — attempt composition before falling through.
             } else if info.containsRqhAdaptiveFormats {
                 let hasPot = await api.hasPoToken(for: video.id)
-                if hasPot {
-                    playerLog.notice("[\(label)] rqh=1 but pot= token available — attempting adaptive composition")
+                // ANDROID_VR is exempt from CDN rqh=1 enforcement (no GVS_PO_TOKEN_POLICY
+                // defined for android_vr per yt-dlp source). attemptComposition also has
+                // this exemption via isAndroidVR, but it was unreachable from here because
+                // this guard returned early before calling it. Allow VR through directly.
+                let isAndroidVRLabel = label.contains("AndroidVR") || label.contains("ANDROID_VR")
+                if hasPot || isAndroidVRLabel {
+                    playerLog.notice("[\(label)] rqh=1 but \(hasPot ? "pot= token available" : "ANDROID_VR exempt") — attempting adaptive composition")
                     if await attemptComposition(videoURL: videoURL, audioURL: audioURL,
                                                 for: video, info: info, label: label) { return true }
                     playerLog.notice("[\(label)] adaptive composition with pot= failed — falling through")

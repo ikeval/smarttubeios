@@ -35,6 +35,10 @@ final class YouTubeWebViewHLSExtractor: NSObject {
     /// preventing a cancelled previous-extraction timeout from firing on the current
     /// extraction's continuation (ABA problem with the `continuation != nil` guard).
     private var extractionGeneration: Int = 0
+    /// The video ID currently being extracted, set at the start of `extractHLSURL` and
+    /// cleared in `finish`. Allows callers to detect a same-video in-flight extraction
+    /// and await it via `awaitCurrentExtraction()` instead of cancelling it.
+    private(set) var currentExtractionVideoId: String? = nil
     /// After `extractHLSURL` completes, holds the n-challenge mapping solved in-JS.
     /// `nil` when the URL had no `/n/` or the solver wasn't available.
     private(set) var extractedNSolver: (unsolved: String, solved: String)?
@@ -42,6 +46,9 @@ final class YouTubeWebViewHLSExtractor: NSObject {
     /// set alongside `extractedNSolver` when the JS interceptor finds one in
     /// `serviceIntegrityDimensions.poToken`. Nil when the player made no BotGuard call.
     private(set) var extractedPoToken: String?
+    /// Additional continuations registered via `awaitCurrentExtraction()`. When `finish()`
+    /// fires, all extra continuations receive the same URL result as the primary continuation.
+    private var extraContinuations: [CheckedContinuation<URL?, Never>] = []
 
     // MARK: - Public API
 
@@ -73,6 +80,7 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         extractedNSolver = nil
         extractedPoToken = nil
         extractionGeneration &+= 1
+        currentExtractionVideoId = videoId
 
         extractLog.notice("⚠️ [webView] starting HLS extraction for \(videoId as NSString)")
 
@@ -162,6 +170,18 @@ final class YouTubeWebViewHLSExtractor: NSObject {
                 extractLog.notice("⚠️ [webView] timed out for \(videoId as NSString)")
                 self.finish(url: Optional<URL>.none)
             }
+        }
+    }
+
+    /// Awaits the result of the currently in-flight extraction without cancelling it.
+    /// Multiple callers (e.g. two concurrent `race failed` handlers for the same video)
+    /// each append their continuation to `extraContinuations`. When `finish()` fires,
+    /// all waiters receive the same URL result.
+    /// Returns `nil` if no extraction is in progress.
+    func awaitCurrentExtraction() async -> URL? {
+        guard continuation != nil else { return nil }
+        return await withCheckedContinuation { (cont: CheckedContinuation<URL?, Never>) in
+            self.extraContinuations.append(cont)
         }
     }
 
@@ -613,11 +633,16 @@ final class YouTubeWebViewHLSExtractor: NSObject {
     private func finish(url: URL?) {
         timeoutTask?.cancel()
         timeoutTask = nil
+        currentExtractionVideoId = nil
         // Capture and immediately nil the continuation so the cancelled timeout
         // task (which wakes after CancellationError swallowed by try?) cannot
         // double-resume it when it calls finish(url: nil).
         let pendingContinuation = continuation
         continuation = nil
+        // Fan out to all extra waiters registered via awaitCurrentExtraction().
+        let extras = extraContinuations
+        extraContinuations.removeAll()
+        for c in extras { c.resume(returning: url) }
 
         guard let url, let pendingContinuation else {
             // Either nil URL (timeout/error) or already resumed — just clean up.
