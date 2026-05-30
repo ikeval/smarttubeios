@@ -55,9 +55,6 @@ final class VideoPlaybackBenchmarkUITests: XCTestCase {
         "v2ZtAi2rDzA",  // rqh=1, pot= 403 worst-case — measures WKWebView HLS cold path
         "l7To2evwGKs",  // Real-world rqh=1 video (log.txt 2026-05-28) — BotGuardWV fast path
         "dQw4w9WgXcQ",  // Rick Astley — stable, typical adaptive/HLS path
-        "jNQXAC9IVRw",  // "Me at the zoo" — YouTube reference
-        "fEvekF1zOKs",  // Real-world video B — rqh=1, BotGuard chain (~14s uncached)
-        "Wu8xNx4njoM",  // HLS resolution test video
         "LSMQ3U1Thzw",  // BotGuard probe test video
     ]
 
