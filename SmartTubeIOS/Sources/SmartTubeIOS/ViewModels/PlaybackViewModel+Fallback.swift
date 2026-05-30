@@ -351,15 +351,23 @@ extension PlaybackViewModel {
             playerLog.notice("[BotGuardWV] not ready after 6 s wait — Path A done")
             return false
         }
-        let identifier = await api.currentVisitorData() ?? ""
         let webVD = BotGuardWebViewRunner.shared.webVisitorData
+        // fix8: use webVD as the mintToken identifier so the minted pot= token is bound
+        // to the WEB session visitorData — the same VD that will be sent in
+        // fetchPlayerInfoWebWithPoToken's context.client.visitorData and X-Goog-Visitor-Id.
+        // Previously, api.currentVisitorData() (iOS/TV session VD) was used as identifier,
+        // causing apiVD ≠ webVD — the CDN tied the streaming URLs to the iOS session but
+        // our pot= token was minted for the WEB session, causing HTTP 403 on every segment.
+        // If webVD is empty (BotGuard warm-up hasn't fetched guide yet), fall back to apiVD.
+        let apiVD = await api.currentVisitorData() ?? ""
+        let identifier = webVD.isEmpty ? apiVD : webVD
         guard let mintedToken = await BotGuardWebViewRunner.shared.mintToken(identifier: identifier) else {
             playerLog.notice("[BotGuardWV] ⚠️ mintToken returned nil — Path A done")
             return false
         }
         await api.storeExternalPoToken(mintedToken, for: video.id)
         hasMintedPoToken = true
-        playerLog.notice("[BotGuardWV] ✅ minted token (len=\(mintedToken.count) webVD.len=\(webVD.count)) — Path A racing WKWebView HLS")
+        playerLog.notice("[BotGuardWV] ✅ minted token (len=\(mintedToken.count) webVD.len=\(webVD.count) apiVD.len=\(apiVD.count) match=\(apiVD == webVD)) — Path A racing WKWebView HLS")
         guard !Task.isCancelled else { return false }
         do {
             let webInfo = try await api.fetchPlayerInfoWebWithPoToken(
