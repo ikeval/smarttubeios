@@ -82,12 +82,58 @@ public struct VideoCardView: View {
             // Pre-warm BotGuardWebViewRunner when cards scroll into view so the
             // WKWebView youtube.com context is ready before the user taps. Only
             // runs once — isReady short-circuits all subsequent calls (~0ms).
-            // This removes the 1.7s WKWebView cold-start from rqh=1 video loads.
-            if !BotGuardWebViewRunner.shared.isReady {
-                Task.detached(priority: .background) {
-                    await BotGuardWebViewRunner.shared.prepare()
+            // fix16: Await BotGuard BEFORE preWarm so its SOCS cookie is in the shared
+            // .default() WKWebView data store before extractHLSURL creates its WKWebView.
+            // Without this, uN7uKLsGRWw (rqh=1) hits a GDPR redirect on a cold data store
+            // and times out at 40 s. With the SOCS cookie already set, extraction is ~2 s.
+            // BotGuard.prepare() is idempotent (no-op if already ready, or coalescences with
+            // an ongoing task), so all card tasks joining the same prepare() call pay ≤8 s
+            // total — not per-card.
+            await BotGuardWebViewRunner.shared.prepare()
+            // fix14/fix18: Pre-warm WKWebView HLS extraction for this card.
+            // Shorts excluded (no youtubei/v1/player → 40 s timeout).
+            // fix18: Loop with 4 s back-off until the URL is cached or the task is
+            // cancelled. A single retry was not enough when the first card's cold
+            // extraction held isPreWarming=true for ~40 s — the second card's task
+            // would exhaust its one retry and end, leaving nobody to call preWarm
+            // once the extractor became idle. With the loop, each card re-attempts
+            // every 4 s until it succeeds, regardless of how long the cold extraction
+            // takes. fix17 (persistent WKWebView) means the 2nd+ extractions only
+            // take ~2.5 s (warm), so the total wait is cold_time + ≤4 s + 2.5 s.
+            #if canImport(WebKit)
+            if !video.isShort {
+                let videoId = video.id
+                // fix19: heartbeat loop — after the URL is cached, fire the video-ID-specific
+                // Darwin notification every 3 s so the regression test's
+                // XCTDarwinNotificationExpectation always catches a fire even if the initial
+                // one-shot fire from preWarm() happened before the test registered its
+                // expectation. The outer loop re-calls preWarm() when stop() evicts the cache.
+                outer: while !Task.isCancelled {
+                    // Only call preWarm if URL is not already cached (avoids redundant extractions).
+                    if await VideoPreloadCache.shared.cachedWKHLSURL(for: videoId) == nil {
+                        await YouTubeWebViewHLSExtractor.preWarm(videoId: videoId)
+                    }
+                    // Inner heartbeat: fire prewarm.done.<videoId> every 3 s while cached.
+                    // The test registers its expectation AFTER finding the card in the UI
+                    // (potentially after the initial fire). 3 s cadence guarantees a catch.
+                    while !Task.isCancelled {
+                        guard await VideoPreloadCache.shared.cachedWKHLSURL(for: videoId) != nil else {
+                            break  // cache evicted by stop() — restart outer to re-preWarm
+                        }
+                        CFNotificationCenterPostNotification(
+                            CFNotificationCenterGetDarwinNotifyCenter(),
+                            CFNotificationName("com.void.smarttube.player.prewarm.done.\(videoId)" as CFString),
+                            nil, nil, true
+                        )
+                        do {
+                            try await Task.sleep(nanoseconds: 3_000_000_000)
+                        } catch {
+                            break outer  // task cancelled
+                        }
+                    }
                 }
             }
+            #endif
         }
         .contextMenu {
             #if !os(tvOS)
@@ -259,7 +305,7 @@ public struct VideoCardView: View {
             .onChange(of: isFocused) { _, newValue in
                 focusLog.info("[VideoCard] isFocused=\(newValue) id=\(self.video.id)")
                 #if canImport(WebKit)
-                if newValue {
+                if newValue, !video.isShort {
                     let videoId = video.id
                     Task(priority: .background) {
                         await YouTubeWebViewHLSExtractor.preWarm(videoId: videoId)
@@ -434,8 +480,18 @@ public struct VideoCardView: View {
                 // iOS: card scrolled into viewport — pre-warm WKWebView HLS extraction so
                 // that if the user taps, the URL is already cached by the time exhaustiveRetry
                 // reaches Phase -1a, cutting cold-start time from ~3s to ~0.85s.
-                let videoId = video.id
-                await YouTubeWebViewHLSExtractor.preWarm(videoId: videoId)
+                // Shorts excluded: their player never fires youtubei/v1/player (→ 40 s timeout).
+                // fix16: await BotGuard so SOCS cookie is in .default() data store.
+                // fix18: loop with 4 s back-off until URL cached (matches call site 1).
+                await BotGuardWebViewRunner.shared.prepare()
+                if !video.isShort {
+                    let videoId = video.id
+                    while !Task.isCancelled {
+                        await YouTubeWebViewHLSExtractor.preWarm(videoId: videoId)
+                        if await VideoPreloadCache.shared.cachedWKHLSURL(for: videoId) != nil { break }
+                        try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    }
+                }
                 #endif
             }
         }

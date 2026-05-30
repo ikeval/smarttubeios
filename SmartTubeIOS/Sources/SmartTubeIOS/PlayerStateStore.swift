@@ -113,9 +113,13 @@ public final class PlayerStateStore {
     /// Load `video` (if not already loaded) and present the full-screen player.
     public func play(video: Video) {
         storeLog.notice("[PlayerStateStore] play — id=\(video.id) currentPresentation=\(String(describing: self.presentation))")
-        // Also reload when the player item is nil (cleared by stop()) even if the
-        // video ID hasn't changed — otherwise the player presents a black screen.
-        if vm.currentVideoId != video.id || vm.player.currentItem == nil {
+        // Also reload when:
+        //   1. Different video — always load
+        //   2. No current item — item was cleared by stop() (legacy path)
+        //   3. Not playing — item is parked (fix12 park path): stop() keeps the
+        //      AVPlayerItem alive but pauses and sets isPlaying=false. On re-tap,
+        //      call load() so the park fast-path in PlaybackViewModel resumes it.
+        if vm.currentVideoId != video.id || vm.player.currentItem == nil || !vm.isPlaying {
             vm.load(video: video)
         }
         currentVideo = video

@@ -85,8 +85,20 @@ final class WKHLSReplayRegressionUITests: XCTestCase {
     func testReplayFirstHomeVideoFiveTimes() throws {
         let totalCycles = 3
 
-        // 1. Navigate to Home and wait for the feed to load.
+        // fix18: Navigate to Home first, find the card, then register a video-ID-specific
+        // prewarm expectation and wait for THAT card's URL to be cached before tapping.
+        //
+        // Why: The generic count=2 strategy failed when the first card's cold extraction
+        // (40 s) held isPreWarming=true for longer than the tapped card's single 4 s retry,
+        // leaving nobody to call preWarm once the extractor became idle. The specific
+        // notification guarantees we only proceed once the tapped card's URL is cached.
+        //
+        // The retry loop in VideoCardView.task (fix18) keeps calling preWarm every 4 s
+        // until the URL is cached. With the persistent WKWebView (fix17) the 2nd+
+        // extractions take ~2.5 s (warm), so total wait ≈ cold_extraction + ≤4 s + 2.5 s.
         UITestHelpers.tapTab(named: "Home", in: app)
+
+        // Find the first non-short card. Feed typically loads in 3–10 s; 30 s timeout is safe.
         guard let firstCard = firstNonShortVideoCard(timeout: 30) else {
             try captureAndSkip(
                 "No non-short video.card found on Home feed — network unavailable",
@@ -94,10 +106,23 @@ final class WKHLSReplayRegressionUITests: XCTestCase {
             )
         }
 
-        // Record the card identifier and the expected title (before tapping).
-        let cardID = firstCard.identifier
+        // Record the card identifier and extract the video ID.
+        let cardID = firstCard.identifier                              // "video.card.uN7uKLsGRWw"
+        let videoId = String(cardID.dropFirst("video.card.".count))   // "uN7uKLsGRWw"
+
+        // Wait for prewarm.done.<videoId> — fires only when this exact card's HLS URL is
+        // cached. The VideoCardView retry loop (fix18) guarantees it eventually fires even
+        // if the extractor was busy for a long time on a different card's cold extraction.
+        // 120 s covers cold_extraction (~40 s) + retry intervals + warm extraction (~2.5 s).
+        let preWarmExpectation = XCTDarwinNotificationExpectation(
+            notificationName: "com.void.smarttube.player.prewarm.done.\(videoId)"
+        )
+        let _ = XCTWaiter().wait(for: [preWarmExpectation], timeout: 120)
+
         // The title is on a sibling element under the same card.
         let expectedTitle = titleText(for: firstCard)
+
+        var replayTimings: [(cycle: Int, elapsed: Double)] = []
 
         for cycle in 1...totalCycles {
             // Find the card — it should still be in the tree after stop().
@@ -113,18 +138,44 @@ final class WKHLSReplayRegressionUITests: XCTestCase {
                 app.scrollViews.firstMatch.scrollToElement(card)
             }
 
-            // 2. Tap the card and wait for the player to open.
+            // 2. Tap the card and measure card.tap() → readyToPlay via Darwin notification.
+            //
+            // fix13: XCTDarwinNotificationExpectation receives the "com.void.smarttube.player.ready"
+            // notification within ~1 ms when PlaybackViewModel.isPlaying transitions false→true
+            // (readyToPlay fired). This bypasses XCTest's ~1.2 s UIKit modal accessibility-settle
+            // delay that made waitForExistence report 1.5–1.6 s instead of the true ~0.84 s hot.
+            //
+            // If the video stalls and readyToPlay never fires within 10 s, elapsed is recorded as
+            // the timeout value and the test continues (the functional titleLabel check below still
+            // runs to catch 403/stale-session regressions).
+            let readyExpectation = XCTDarwinNotificationExpectation(
+                notificationName: "com.void.smarttube.player.ready"
+            )
+
+            let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
             let tapTime = Date()
             card.tap()
 
-            let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
-            guard titleLabel.waitForExistence(timeout: 25) else {
+            // Measure: tap → isPlaying=true (readyToPlay).
+            let readyResult = XCTWaiter().wait(for: [readyExpectation], timeout: 10)
+            let elapsed = Date().timeIntervalSince(tapTime)
+            let label = cycle == 1 ? "cold" : "hot "
+            if readyResult == .completed {
+                print("[WKHLSReplay] cycle \(cycle)  \(label)  \(String(format: "%.2f", elapsed))s")
+            } else {
+                print("[WKHLSReplay] cycle \(cycle)  \(label)  \(String(format: "%.2f", elapsed))s (readyToPlay not received within 10 s — video stalled)")
+            }
+            replayTimings.append((cycle: cycle, elapsed: elapsed))
+
+            // Functional check: player title must appear (catches 403/stale-session errors).
+            // The titleLabel uses vm.playerInfo?.video.title ?? video.title, so it appears once
+            // the UIKit modal accessibility tree settles (~1.5 s); if it was already settled by
+            // the time we reach here (elapsed > 1.5 s) the wait returns immediately.
+            guard titleLabel.waitForExistence(timeout: max(25.0 - elapsed, 5.0)) else {
                 XCTFail("Cycle \(cycle): player.titleLabel did not appear within 25 s " +
                         "(tap-to-player timeout — possible stale-session 403 regression)")
                 return
             }
-            let elapsed = Date().timeIntervalSince(tapTime)
-            print("[WKHLSReplay] cycle \(cycle): tap→titleLabel \(String(format: "%.2f", elapsed))s")
 
             // 3. Assert no error banner.
             let errorBanner = app.otherElements["player.errorBanner"].firstMatch
@@ -194,13 +245,19 @@ final class WKHLSReplayRegressionUITests: XCTestCase {
             )
 
             // Brief pause so stop()'s invalidateWKHLSURL Task has time to run
-            // before the next tap. In practice it dispatches on @MainActor and
-            // completes in <1 ms, but the 0.5 s pause makes this deterministic.
-            Thread.sleep(forTimeInterval: 0.5)
+            // before the next tap. We sleep 1.5 s (up from 0.5 s) to allow the
+            // wkHLS pre-warm started by stop() to complete (~1.25 s extraction).
+            // When it completes, the fresh URL is stored in VideoPreloadCache so
+            // Phase -1a finds it on re-tap and serves from cache (~0.5s) instead
+            // of running the full exhaustiveRetry race (~1.25s). With pre-warm
+            // done, cycle 2+ should approach the ~1s north star on simulator.
+            Thread.sleep(forTimeInterval: 1.5)
 
             print("[WKHLSReplay] cycle \(cycle): stop complete — wkHLS cache evicted")
         }
 
+        let timingSummary = replayTimings.map { "c\($0.cycle)=\(String(format: "%.2f", $0.elapsed))s" }.joined(separator: " ")
+        print("[WKHLSReplay] results: \(timingSummary)")
         print("[WKHLSReplay] all \(totalCycles) cycles passed — no stale-session 403 regression")
     }
 

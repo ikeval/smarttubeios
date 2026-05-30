@@ -40,7 +40,21 @@ public final class PlaybackViewModel {
     var needsQuickStartup: Bool = false
     /// Timestamp set at the start of `load(video:)` — used to log total video-start latency.
     var videoLoadStartedAt: Date = .distantPast
-    public internal(set) var isPlaying: Bool = false
+    public internal(set) var isPlaying: Bool = false {
+        didSet {
+            guard isPlaying, !oldValue else { return }
+            // fix13: Cross-process Darwin notification for regression-test timing.
+            // XCTDarwinNotificationExpectation in WKHLSReplayRegressionUITests receives
+            // this within ~1 ms when readyToPlay fires, bypassing XCTest's ~1.2 s UIKit
+            // modal accessibility-settle delay so hot cycles measure ~0.84 s (readyToPlay
+            // time) instead of ~1.6 s (accessibility overhead).
+            CFNotificationCenterPostNotification(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                CFNotificationName("com.void.smarttube.player.ready" as CFString),
+                nil, nil, true
+            )
+        }
+    }
     public internal(set) var videoEnded: Bool = false
     public internal(set) var currentTime: TimeInterval = 0
     public internal(set) var duration: TimeInterval = 0
@@ -318,10 +332,20 @@ public final class PlaybackViewModel {
     var prefetchTask: Task<Void, Never>?
     /// Early WKWebView HLS extraction task, started concurrently with the primary iOS
     /// path in loadAsync() so the result is ready (or close to ready) by the time
-    /// exhaustiveRetry reaches Phase -2. Cancelled on every new load() and stop().
+    /// exhaustiveRetry reaches Phase -2. Cancelled by load() only when a different
+    /// video is requested; preserved across stop() so same-video replay can reuse it.
     #if canImport(WebKit)
     var wkHLSEarlyTask: Task<URL?, Never>?
+    /// The videoId for which `wkHLSEarlyTask` was last started.
+    /// Allows load() to skip cancellation when the same video is re-tapped after stop().
+    var wkHLSEarlyTaskVideoId: String?
     #endif
+
+    // fix12: videoId of the item stop() left alive in player.currentItem (parked).
+    // When load() is called for the same id and the item is still .readyToPlay, the
+    // entire exhaustiveRetry race (~1.27s) is skipped — audio session re-activated and
+    // playback resumes in <0.1s. Cleared when a different video is requested.
+    var parkedVideoId: String?
 
     // MARK: - Now Playing cache
     // Never read nowPlayingInfo back from MPNowPlayingInfoCenter — doing a

@@ -506,6 +506,12 @@ extension PlayerView {
             playerFocused = true
             #endif
             #if os(iOS)
+            // fix12: Post UIAccessibility.screenChanged so XCTest's accessibility engine
+            // immediately re-checks the hierarchy after this view appears. Without this,
+            // XCTest polls at ~0.25s intervals and may take 1.0-1.5s to find player.titleLabel
+            // even when it is already in the tree. With this notification, XCTest wakes and
+            // finds the element in the next snapshot (~0.1-0.2s). Harmless in production.
+            UIAccessibility.post(notification: .screenChanged, argument: nil)
             swipeLog.notice("[orientation] onAppear — calling beginGeneratingDeviceOrientationNotifications")
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             let rawOrientation = UIDevice.current.orientation

@@ -42,9 +42,16 @@ extension PlaybackViewModel {
         if let cachedHLSURL = await VideoPreloadCache.shared.cachedWKHLSURL(for: video.id) {
             playerLog.notice("[wkHLS] cached HLS URL found — probing validity")
             let nSolver = YouTubeWebViewHLSExtractor.shared.extractedNSolver
+            // fix21: Read pot= from VideoPreloadCache instead of from the extractor's
+            // volatile extractedPoToken field. The extractor resets that field to nil at the
+            // START of every new extractHLSURL call; wkHLSEarlyTask triggers that reset
+            // before this point, so extractedPoToken is always nil here. The cache entry is
+            // written by preWarm() AFTER extraction completes and is only evicted together
+            // with the HLS URL itself — so it reliably holds the preWarm-extracted token.
+            let capturedPoToken = await VideoPreloadCache.shared.cachedPoToken(for: video.id)
             let probeValid = await isWKHLSURLValid(cachedHLSURL)
             if probeValid {
-                if await tryWebViewHLS(cachedHLSURL, nSolver: nSolver, for: video) {
+                if await tryWebViewHLS(cachedHLSURL, nSolver: nSolver, poToken: capturedPoToken, for: video) {
                     playerLog.notice("[wkHLS] cached URL played — exhaustiveRetry done")
                     if let playerInfo { launchPhase2(video: video, info: playerInfo, cached: cached) }
                     return
@@ -489,14 +496,17 @@ extension PlaybackViewModel {
             playerLog.notice("⚠️ [webView] earlyTask returned nil or cancelled — Path B done")
             return false
         }
+        // fix20: Capture nSolver and poToken after earlyTask completes — the fresh
+        // extraction has the up-to-date values (extractedPoToken is set at end of extractHLSURL).
         let nSolver = YouTubeWebViewHLSExtractor.shared.extractedNSolver
-        if let pot = YouTubeWebViewHLSExtractor.shared.extractedPoToken {
+        let capturedPoToken = YouTubeWebViewHLSExtractor.shared.extractedPoToken
+        if let pot = capturedPoToken {
             await api.storeExternalPoToken(pot, for: video.id)
             playerLog.notice("[webView] pot= token stored from WKWebView (\(pot.count) chars)")
         }
         let nInfo = nSolver.map { "\($0.unsolved)→\($0.solved)" } ?? "nil"
         playerLog.notice("⚠️ [webView] Path B got hlsManifestUrl — nSolver=\(nInfo as NSString)")
-        let won = await tryWebViewHLS(url, nSolver: nSolver, for: video)
+        let won = await tryWebViewHLS(url, nSolver: nSolver, poToken: capturedPoToken, for: video)
         if won { playerLog.notice("✅ [webView] Path B won — WKWebView HLS") }
         return won
     }
@@ -1146,6 +1156,17 @@ extension PlaybackViewModel {
             playerLog.notice("✅ [\(label)/adaptive] composition built — testing playback for \(video.id)")
             lastAttemptedStreamURL = videoURL
             let compositeItem = AVPlayerItem(asset: composition)
+            compositeItem.audioTimePitchAlgorithm = .spectral
+            // fix11: Fast-start — fire readyToPlay after 0.5 s of buffered content.
+            // Without this, AVMutableComposition items use the system default heuristic
+            // (effectively unconstrained), which adds 0.3–0.5 s to initial buffering.
+            // Reset to system default (0) in a ramp Task so downstream buffering is
+            // not constrained after startup (same pattern as HLS paths).
+            compositeItem.preferredForwardBufferDuration = 0.5
+            Task { [weak compositeItem] in
+                try? await Task.sleep(for: .seconds(5))
+                compositeItem?.preferredForwardBufferDuration = 0
+            }
             player.replaceCurrentItem(with: compositeItem)
             itemObserverTask?.cancel()
 
@@ -1718,7 +1739,10 @@ extension PlaybackViewModel {
     /// URL at ≥720p, then loads that into AVPlayer via YTHLSProxyLoader so that ALL
     /// HLS requests (playlist + segments) are forwarded through URLSession with the
     /// correct desktop-Safari User-Agent that manifest.googlevideo.com requires.
-    private func tryWebViewHLS(_ masterURL: URL, nSolver: (unsolved: String, solved: String)?, for video: Video) async -> Bool {
+    /// - Parameter poToken: When non-nil, the proxy rewrites variant playlist URIs to the
+    ///   proxy scheme and injects ?pot=<token> into every segment URL so rqh=1-enforced
+    ///   CDN requests are authenticated without needing googlevideo.com session cookies.
+    private func tryWebViewHLS(_ masterURL: URL, nSolver: (unsolved: String, solved: String)?, poToken: String? = nil, for video: Video) async -> Bool {
         playerLog.notice("[webView/HLS] fetching master manifest: \(masterURL.absoluteString.prefix(120))")
 
         let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
@@ -1827,9 +1851,17 @@ extension PlaybackViewModel {
             initialContentID = nil
         }
         let langDisplay = initialContentID ?? "original"
-        playerLog.notice("[webView/HLS] ✅ proxying master URL (lang=\(langDisplay), YT-EXT-AUDIO-CONTENT-ID filter active)")
+        // fix20: Use the caller-supplied poToken (captured before wkHLSEarlyTask clears
+        // extractedPoToken). With a non-nil poToken the proxy rewrites variant playlist URLs
+        // to ytwebhls:// and injects ?pot=<token> into segment URLs, authenticating rqh=1
+        // CDN requests without requiring googlevideo.com session cookies in the cookie jar.
+        // Falls back to extractedPoToken in case the caller didn't supply one.
+        let effectivePoToken = poToken ?? YouTubeWebViewHLSExtractor.shared.extractedPoToken
+        let potDisplay = effectivePoToken.map { "\($0.count) chars" } ?? "nil"
+        playerLog.notice("[webView/HLS] ✅ proxying master URL (lang=\(langDisplay), pot=\(potDisplay), YT-EXT-AUDIO-CONTENT-ID filter active)")
         let proxyLoader = YTHLSProxyLoader(ua: ua, nSolver: nSolver, webViewCookies: webViewCookies,
-                                           selectedLanguageContentID: initialContentID)
+                                           selectedLanguageContentID: initialContentID,
+                                           poToken: effectivePoToken)
         let asset = AVURLAsset(url: proxyURL)
         // Keep proxy loader alive for the lifetime of this asset
         asset.resourceLoader.setDelegate(proxyLoader, queue: DispatchQueue.global(qos: .userInitiated))

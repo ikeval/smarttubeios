@@ -103,6 +103,11 @@ public actor VideoPreloadCache {
     /// NOT cleared by consume() — persists so that re-plays and neighbour navigation
     /// skip the 5–9 s WKWebView extraction step when the URL is still fresh.
     private var wkHLSCache:       [String: CacheEntry<URL>]                     = [:]
+    /// BotGuard proof-of-origin tokens keyed by videoId, stored alongside the HLS URL.
+    /// These survive the YouTubeWebViewHLSExtractor.extractedPoToken reset that happens
+    /// at the start of each new extractHLSURL call, so Phase -1a can always retrieve
+    /// the preWarm-extracted token regardless of when wkHLSEarlyTask resets the field.
+    private var wkHLSPoTokenCache: [String: String]                             = [:]
 
     // MARK: - Access order (LRU)
 
@@ -414,6 +419,20 @@ public actor VideoPreloadCache {
         return entry.value
     }
 
+    /// Stores the BotGuard pot= token that accompanied the WKWebView HLS URL extraction.
+    /// The token is NOT subject to TTL — it's evicted together with the HLS URL in
+    /// `invalidateWKHLSURL(for:)`. This is the stable storage point for Phase -1a:
+    /// unlike `YouTubeWebViewHLSExtractor.extractedPoToken`, this entry survives the
+    /// nil-reset that happens at the start of every new `extractHLSURL` call.
+    public func store(wkHLSPoToken token: String, for videoId: String) {
+        wkHLSPoTokenCache[videoId] = token
+    }
+
+    /// Returns the cached pot= token for a video, or nil if none was stored.
+    public func cachedPoToken(for videoId: String) -> String? {
+        wkHLSPoTokenCache[videoId]
+    }
+
     // MARK: - Public: auth invalidation
 
     /// Call on sign-out: tracking URLs and like-status in nextInfo are account-bound.
@@ -441,10 +460,12 @@ public actor VideoPreloadCache {
 
     /// Call when the cached WKWebView HLS URL returns 403 (expired signed URL).
     /// Evicting forces a fresh WKWebView extraction on the next load of this video.
+    /// Also clears the associated pot= token so Phase -1a won't use an orphaned token.
     public func invalidateWKHLSURL(for videoId: String) {
         guard wkHLSCache[videoId] != nil else { return }
         cacheLog.notice("[evict] 403 — invalidating wkHLSCache for \(videoId, privacy: .public)")
         wkHLSCache.removeValue(forKey: videoId)
+        wkHLSPoTokenCache.removeValue(forKey: videoId)
     }
 
     // MARK: - Private: prefetch implementation

@@ -33,9 +33,79 @@ extension PlaybackViewModel {
         // fetches for the same (or different) video running at the same time.
         loadTask?.cancel()
         #if canImport(WebKit)
-        wkHLSEarlyTask?.cancel()
-        wkHLSEarlyTask = nil
+        // fix10: preserve the pre-warm task when the same video is re-tapped after stop().
+        // racePathB will await earlyTask.value and get the result when extraction completes
+        // (~0.75s after tap if stop() started it 0.5s earlier) instead of ~1.25s from scratch.
+        // For different-video navigation, cancel as before.
+        if wkHLSEarlyTaskVideoId != video.id {
+            wkHLSEarlyTask?.cancel()
+            wkHLSEarlyTask = nil
+            wkHLSEarlyTaskVideoId = nil
+        }
         #endif
+
+        // fix12: Same-video re-open fast path — if stop() parked the AVPlayerItem and it is
+        // still .readyToPlay, bypass the entire exhaustiveRetry race (~1.27s saved per hot
+        // cycle). Re-activates AVAudioSession, wires end/stall observers, and resumes.
+        // Expected: <0.1s in-app → ~0.5s reported (XCTest polling overhead only).
+        if let parked = parkedVideoId,
+           parked == video.id,
+           let parkedItem = player.currentItem,
+           parkedItem.status == .readyToPlay {
+            playerLog.notice("[fix12] same-video re-open — reusing parked AVPlayerItem for \(video.id)")
+            parkedVideoId = nil
+            // Cancel the now-useless wkHLS serialExtract started by stop().
+            #if canImport(WebKit)
+            wkHLSEarlyTask?.cancel()
+            wkHLSEarlyTask = nil
+            wkHLSEarlyTaskVideoId = nil
+            #endif
+            currentVideo = video
+            isLoading = false
+            isPlaying = false
+            videoEnded = false
+            error = nil
+            wasPlayingBeforeSuspend = false
+            // Re-wire end-of-playback and stall observers on the still-alive item.
+            endObserverTask?.cancel()
+            endObserverTask = Task { [weak self, parkedItem] in
+                let notifications = NotificationCenter.default.notifications(
+                    named: AVPlayerItem.didPlayToEndTimeNotification, object: parkedItem
+                )
+                for await _ in notifications {
+                    guard let self, !Task.isCancelled else { return }
+                    self.handlePlaybackEnd()
+                }
+            }
+            stallObserverTask?.cancel()
+            stallObserverTask = Task { @MainActor [weak self, parkedItem] in
+                let notifications = NotificationCenter.default.notifications(
+                    named: AVPlayerItem.playbackStalledNotification, object: parkedItem
+                )
+                for await _ in notifications {
+                    guard let self, !Task.isCancelled else { return }
+                    self.stallCount += 1
+                    playerLog.notice("[fix12/stall] playbackStalled at t=\(Int(self.currentTime))s #\(self.stallCount)")
+                }
+            }
+            #if canImport(UIKit)
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                playerLog.error("[fix12] AVAudioSession setActive failed: \(error.localizedDescription)")
+            }
+            setupRemoteCommandCenter()
+            UIApplication.shared.isIdleTimerDisabled = true
+            #endif
+            player.rate = Float(settings.playbackSpeed)
+            isPlaying = true
+            return
+        }
+        // Different video or parked item expired — clear parked state and tear down old item.
+        if parkedVideoId != nil {
+            player.replaceCurrentItem(with: nil)
+            parkedVideoId = nil
+        }
 
         // Report watchtime for the video being replaced before tearing it down.
         // This is the only opportunity when switching via load() directly (e.g. autoplay),
@@ -194,6 +264,7 @@ extension PlaybackViewModel {
         #if canImport(WebKit)
         wkHLSEarlyTask?.cancel()
         wkHLSEarlyTask = nil
+        wkHLSEarlyTaskVideoId = nil
         #endif
         isLoading = false
         #if canImport(UIKit)
@@ -278,8 +349,14 @@ extension PlaybackViewModel {
         // the pendingSerialTask chain — any subsequent serialExtract calls from race-failed
         // handlers will chain onto this task instead of cancelling it via finish(url:nil).
         let capturedVideoIdForHLS = video.id
-        wkHLSEarlyTask = Task { @MainActor in
-            await YouTubeWebViewHLSExtractor.shared.serialExtract(videoId: capturedVideoIdForHLS)
+        // Reuse an in-flight pre-warm started by stop() for the same video (fix10).
+        // If stop() already started serialExtract for this videoId, wkHLSEarlyTask is
+        // non-nil and for the same video — just let it run; racePathB awaits its value.
+        if wkHLSEarlyTask == nil {
+            wkHLSEarlyTaskVideoId = capturedVideoIdForHLS
+            wkHLSEarlyTask = Task { @MainActor in
+                await YouTubeWebViewHLSExtractor.shared.serialExtract(videoId: capturedVideoIdForHLS)
+            }
         }
         #endif
 
@@ -900,7 +977,11 @@ extension PlaybackViewModel {
             }
         }
         player.pause()
-        player.replaceCurrentItem(with: nil)
+        // fix12: Do NOT call player.replaceCurrentItem(with: nil) — keep the AVPlayerItem
+        // alive so load() can detect and reuse it if the same video is re-opened within
+        // a short window. Saves the ~1.27s exhaustiveRetry race for hot same-video replays.
+        // load() calls replaceCurrentItem(nil) when a different video is requested.
+        parkedVideoId = currentVideo?.id
         isPlaying = false
         #if canImport(UIKit)
         do {
@@ -925,8 +1006,26 @@ extension PlaybackViewModel {
         // serves recycled session content, which the user sees as a wrong / different
         // video for ~1s before the 403 fires. Evicting here forces a fresh extraction
         // on re-tap while still allowing neighbour pre-warms to populate the cache.
+        //
+        // fix10: after evicting the stale CDN URL, start a fresh wkHLS extraction via
+        // serialExtract. When extraction completes (~1.25s), the URL is stored in cache
+        // so Phase -1a finds it on the next load() for this video (bypassing the full
+        // exhaustiveRetry race entirely → ~0.5s faster). The task is also assigned to
+        // wkHLSEarlyTask so racePathB can use it if the re-tap happens before extraction
+        // completes (< 1.25s after stop).
         if let stoppedVideoId = currentVideo?.id {
             Task { await VideoPreloadCache.shared.invalidateWKHLSURL(for: stoppedVideoId) }
+            #if canImport(WebKit)
+            wkHLSEarlyTaskVideoId = stoppedVideoId
+            let capturedId = stoppedVideoId
+            wkHLSEarlyTask = Task { @MainActor in
+                guard let url = await YouTubeWebViewHLSExtractor.shared.serialExtract(videoId: capturedId) else { return nil }
+                // Store the fresh URL so Phase -1a serves from cache on re-tap.
+                await VideoPreloadCache.shared.store(wkHLSManifestURL: url, for: capturedId)
+                playerLog.notice("[fix10] wkHLS pre-warm complete — cached for \(capturedId)")
+                return url
+            }
+            #endif
         }
         itemObserverTask?.cancel()
         itemObserverTask = nil

@@ -55,19 +55,62 @@ final class YouTubeWebViewHLSExtractor: NSObject {
 
     // MARK: - Public API
 
+    /// Re-entrance guard: `true` while a `preWarm()` extraction is in progress.
+    /// Prevents concurrent VideoCardView tasks from stacking `serialExtract` calls into a
+    /// long sequential chain. Each card that sees `isPreWarming=true` returns immediately;
+    /// after the current extraction finishes, the next idle card (via retry) can start one.
+    static var isPreWarming = false
+
     /// Pre-warms the WKWebView HLS extraction for `videoId` and stores the result in
-    /// `VideoPreloadCache`. Called speculatively on card focus/appear so that if the
-    /// user taps, Phase -1a can play from the cached URL instead of waiting ~2–4 s for
-    /// a live extraction. Skips silently if the URL is already cached or if an
-    /// extraction is already in progress (avoids the singleton cancel-chain when many
-    /// cards appear simultaneously during a feed scroll).
+    /// `VideoPreloadCache`. Called speculatively on card appear so that if the user taps,
+    /// Phase -1a can play from the cached URL instead of waiting ~3 s for a live extraction.
+    ///
+    /// Non-queueing: if an extraction is already in progress (`isPreWarming`), returns
+    /// immediately. Callers should retry after a delay that exceeds typical extraction time
+    /// (~3 s) so the extractor is idle on the second attempt. Callers must guard
+    /// `!video.isShort` before calling so that Shorts (which never trigger
+    /// `youtubei/v1/player`) don't block the chain with a 40 s timeout.
     static func preWarm(videoId: String) async {
+        guard !isPreWarming else { return }
         guard await VideoPreloadCache.shared.cachedWKHLSURL(for: videoId) == nil else { return }
-        // Skip if the singleton extractor is already busy — starting would cancel
-        // the in-progress extraction with no benefit.
-        guard shared.continuation == nil else { return }
-        guard let url = await shared.extractHLSURL(videoId: videoId) else { return }
+        // Re-check after the async suspension: a concurrent task may have set isPreWarming
+        // while the cache check was suspended. @MainActor isolation makes this check-then-set
+        // atomic with respect to other MainActor tasks (no await between the guard and the set).
+        guard !isPreWarming else { return }
+        isPreWarming = true
+        defer { isPreWarming = false }
+        // Use serialExtract (NOT extractHLSURL) so this task joins the pendingSerialTask
+        // chain. load()'s own serialExtract call chains AFTER this task instead of
+        // calling finish(url:nil) to cancel it. The URL is stored in cache before the
+        // Darwin notification fires; Phase -1a reads it on the next load() and fast-starts
+        // without waiting for the race (cold cycle ≈ hot cycle, ~0.5s).
+        guard let url = await shared.serialExtract(videoId: videoId) else { return }
+        // fix21: Capture extractedPoToken NOW, before the first `await` below.
+        // The `await VideoPreloadCache.shared.store(wkHLSManifestURL:)` call yields the
+        // @MainActor, allowing other MainActor tasks to run. If loadAsync's wkHLSEarlyTask
+        // is queued (it chains onto pendingSerialTask), it can start executing and call
+        // extractHLSURL which resets extractedPoToken = nil at line 117. Capturing into a
+        // local `let` before any `await` holds the value regardless of subsequent resets.
+        let capturedPoToken = shared.extractedPoToken
         await VideoPreloadCache.shared.store(wkHLSManifestURL: url, for: videoId)
+        if let pot = capturedPoToken {
+            await VideoPreloadCache.shared.store(wkHLSPoToken: pot, for: videoId)
+        }
+        // Notify the regression test that the wkHLS URL is cached.
+        // fix18: Fire a video-ID-specific notification so the test can wait for the
+        // EXACT card it will tap, rather than counting generic prewarm.done notifications.
+        // Format: "com.void.smarttube.player.prewarm.done.<videoId>"
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("com.void.smarttube.player.prewarm.done.\(videoId)" as CFString),
+            nil, nil, true
+        )
+        // Also fire the legacy generic notification for any other listeners.
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("com.void.smarttube.player.prewarm.done" as CFString),
+            nil, nil, true
+        )
     }
 
     /// Loads the YouTube watch page for `videoId` in a hidden WKWebView, waits for the
@@ -91,64 +134,74 @@ final class YouTubeWebViewHLSExtractor: NSObject {
             self.continuation = cont
             let myGeneration = self.extractionGeneration
 
-            let contentController = WKUserContentController()
-            contentController.add(self, name: "hlsExtractor")
+            // fix17: Reuse the persistent WKWebView if one already exists.
+            // Keeping the WKWebView alive preserves the WebContent process (JIT cache)
+            // and the IndexedDB/localStorage state (YouTube's BotGuard token cache)
+            // across sequential extractions:
+            //   1st extraction (cold): ~40 s — BotGuard WAA pipeline runs + JIT compiles
+            //   2nd extraction (reuse): ~2–5 s — IndexedDB token cached, JIT warm
+            //   3rd+ extraction: ~1.8 s — fully cached
+            // Without reuse, each call created a fresh WKWebView / WebContent process
+            // → every extraction paid the full 40 s cold cost.
+            let wv: WKWebView
+            if let existing = self.webView {
+                wv = existing
+            } else {
+                let contentController = WKUserContentController()
+                contentController.add(self, name: "hlsExtractor")
 
-            // Inject the EJS AST-based n-challenge solver (lib + core) BEFORE
-            // our interceptor so that `jsc` is available when solveNFromPlayerJS runs.
-            if let solverScripts = Self.ejsSolverUserScripts() {
-                for script in solverScripts {
-                    contentController.addUserScript(script)
+                // Inject the EJS AST-based n-challenge solver (lib + core) BEFORE
+                // our interceptor so that `jsc` is available when solveNFromPlayerJS runs.
+                if let solverScripts = Self.ejsSolverUserScripts() {
+                    for script in solverScripts {
+                        contentController.addUserScript(script)
+                    }
                 }
+
+                // Inject the interceptor BEFORE the document loads so it can hook into
+                // XMLHttpRequest and fetch before YouTube's player JS initialises.
+                contentController.addUserScript(WKUserScript(
+                    source: Self.interceptorJS,
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true
+                ))
+
+                let config = WKWebViewConfiguration()
+                config.userContentController = contentController
+                // Allow programmatic video playback (no user gesture required) so that
+                // after we get the hlsManifestUrl we can call video.play() to let the YouTube
+                // player seed googlevideo.com session cookies into the WKWebView cookie store.
+                config.mediaTypesRequiringUserActionForPlayback = []
+                // Use .default() so existing WKWebView cookies from earlier loads are reused.
+                config.websiteDataStore = .default()
+
+                // Pre-seed the SOCS consent cookie once — it persists in the .default() store
+                // across navigations so subsequent extractions don't need to re-seed it.
+                let socsCookieProps: [HTTPCookiePropertyKey: Any] = [
+                    .name: "SOCS",
+                    .value: "CAI",
+                    .domain: ".youtube.com",
+                    .path: "/",
+                    .secure: true,
+                    .sameSitePolicy: "None",
+                    .expires: Date(timeIntervalSinceNow: 365 * 24 * 3600)
+                ]
+                if let socsCookie = HTTPCookie(properties: socsCookieProps) {
+                    config.websiteDataStore.httpCookieStore.setCookie(socsCookie)
+                    extractLog.notice("[webView/HLS] SOCS consent cookie pre-seeded for .youtube.com")
+                }
+
+                // Non-zero off-screen frame so the compositor renders the video element,
+                // which is required for programmatic playback on iOS.
+                let newWv = WKWebView(frame: CGRect(x: -1, y: -1, width: 1, height: 1), configuration: config)
+                newWv.navigationDelegate = self
+                // Desktop Safari UA so YouTube serves its full player (hlsManifestUrl).
+                newWv.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+                    "Version/17.5 Safari/605.1.15"
+                self.webView = newWv
+                wv = newWv
             }
-
-            // Inject the interceptor BEFORE the document loads so it can hook into
-            // XMLHttpRequest and fetch before YouTube's player JS initialises.
-            contentController.addUserScript(WKUserScript(
-                source: Self.interceptorJS,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            ))
-
-            let config = WKWebViewConfiguration()
-            config.userContentController = contentController
-            // Allow programmatic video playback (no user gesture required) so that
-            // after we get the hlsManifestUrl we can call video.play() to let the YouTube
-            // player seed googlevideo.com session cookies into the WKWebView cookie store.
-            config.mediaTypesRequiringUserActionForPlayback = []
-            // Use .default() so existing WKWebView cookies from earlier loads are reused.
-            config.websiteDataStore = .default()
-
-            // Pre-seed the SOCS consent cookie so YouTube does not show the GDPR consent
-            // dialog for EU-region IPs. SOCS=CAI is the minimal accepted-consent value;
-            // must be injected before wv.load() so the cookie is present on the first request.
-            let socsCookieProps: [HTTPCookiePropertyKey: Any] = [
-                .name: "SOCS",
-                .value: "CAI",
-                .domain: ".youtube.com",
-                .path: "/",
-                .secure: true,
-                .sameSitePolicy: "None",
-                .expires: Date(timeIntervalSinceNow: 365 * 24 * 3600)
-            ]
-            if let socsCookie = HTTPCookie(properties: socsCookieProps) {
-                config.websiteDataStore.httpCookieStore.setCookie(socsCookie)
-                extractLog.notice("[webView/HLS] SOCS consent cookie pre-seeded for .youtube.com")
-            }
-
-            // Non-zero off-screen frame so the compositor renders the video element,
-            // which is required for programmatic playback on iOS.
-            let wv = WKWebView(frame: CGRect(x: -1, y: -1, width: 1, height: 1), configuration: config)
-            wv.navigationDelegate = self
-            self.webView = wv
-
-            // Use a desktop Safari UA so YouTube serves its full player (which provides
-            // hlsManifestUrl in the youtubei/v1/player API response). After capturing the URL
-            // we solve the n-challenge by calling _yt_player.Etr(url) via evaluateJavaScript —
-            // that is YouTube's own n-solver function, bound globally as _yt_player.Etr.
-            wv.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-                "Version/17.5 Safari/605.1.15"
 
             guard let url = URL(string: "https://www.youtube.com/watch?v=\(videoId)") else {
                 extractLog.error("❌ [webView] invalid videoId: \(videoId as NSString)")
@@ -675,10 +728,10 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         guard let url, let pendingContinuation else {
             // Either nil URL (timeout/error) or already resumed — just clean up.
             pendingContinuation?.resume(returning: Optional<URL>.none)
-            webView?.navigationDelegate = nil
+            // fix17: Keep WKWebView alive for the next extraction. stopLoading() stops the
+            // current page load; the next extractHLSURL call will navigate via wv.load(request).
+            // The WebContent process (JIT cache) and IndexedDB (BotGuard token) persist.
             webView?.stopLoading()
-            webView?.configuration.userContentController.removeAllScriptMessageHandlers()
-            webView = nil
             return
         }
 
@@ -703,10 +756,9 @@ final class YouTubeWebViewHLSExtractor: NSObject {
                 }
             }
             guard let self else { return }
-            self.webView?.navigationDelegate = nil
+            // fix17: Keep WKWebView alive — don't nil it out on success.
+            // The persistent WKWebView is immediately ready for the next extraction.
             self.webView?.stopLoading()
-            self.webView?.configuration.userContentController.removeAllScriptMessageHandlers()
-            self.webView = nil
             pendingContinuation.resume(returning: capturedURL)
         }
     }
@@ -805,6 +857,10 @@ extension YouTubeWebViewHLSExtractor: WKNavigationDelegate {
     func webView(_ webView: WKWebView,
                  didFail navigation: WKNavigation!,
                  withError error: Error) {
+        // fix17: Ignore NSURLErrorCancelled (-999) — these fire when stopLoading() is called
+        // between sequential extractions on the reused WKWebView.
+        let nsError = error as NSError
+        guard nsError.code != NSURLErrorCancelled else { return }
         extractLog.error("❌ [webView] navigation failed: \(error.localizedDescription as NSString)")
         finish(url: Optional<URL>.none)
     }
@@ -812,6 +868,10 @@ extension YouTubeWebViewHLSExtractor: WKNavigationDelegate {
     func webView(_ webView: WKWebView,
                  didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
+        // fix17: Ignore NSURLErrorCancelled (-999) — these fire when stopLoading() is called
+        // between sequential extractions on the reused WKWebView.
+        let nsError = error as NSError
+        guard nsError.code != NSURLErrorCancelled else { return }
         extractLog.error("❌ [webView] provisional navigation failed: \(error.localizedDescription as NSString)")
         finish(url: Optional<URL>.none)
     }
