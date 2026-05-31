@@ -127,7 +127,15 @@ extension PlaybackViewModel {
             // They interleave cooperatively at every `await` suspension point.
             raceGroup.addTask { (await self.racePathA(video: video), 0) }
             raceGroup.addTask { (await self.racePathB(video: video), 1) }
+            #if os(tvOS)
+            // fix2: Skip racePathC on tvOS. A fresh AndroidVR fetch hits the same rqh=1
+            // timeout (2s) for the same video — wasting 2s just to fail again. The
+            // TVEmbedded pre-fetch (tvEmbeddedEarlyTask) already runs concurrently from
+            // tryAllStreams; Phase 1 will consume it instantly after the race.
+            raceGroup.addTask { (false, 2) }
+            #else
             raceGroup.addTask { (await self.racePathC(video: video), 2) }
+            #endif
             for await (result, path) in raceGroup {
                 if result {
                     raceWon = true
@@ -227,7 +235,26 @@ extension PlaybackViewModel {
             // works via AVPlayer ABR (preferredMaximumResolution) — no composition needed.
             // Videos with embedding disabled will fail this phase and continue to Phase 2.
             do {
+                #if os(tvOS)
+                // fix2: Consume the TVEmbedded pre-fetch started concurrently with the
+                // AndroidVR rqh=1 timeout. Result is typically ready (task completed ~1.5s
+                // before we arrive here), so this await returns immediately.
+                let tvEmbedInfo: PlayerInfo
+                if let earlyTask = tvEmbeddedEarlyTask {
+                    tvEmbeddedEarlyTask = nil
+                    playerLog.notice("[TVEmbedded[\(attempt)]] fix2: consuming pre-fetched TVEmbedded result")
+                    if let preInfo = await earlyTask.value {
+                        tvEmbedInfo = preInfo
+                    } else {
+                        playerLog.notice("[TVEmbedded[\(attempt)]] pre-fetch failed — falling back to fresh fetch")
+                        tvEmbedInfo = try await api.fetchPlayerInfoTVEmbedded(videoId: video.id)
+                    }
+                } else {
+                    tvEmbedInfo = try await api.fetchPlayerInfoTVEmbedded(videoId: video.id)
+                }
+                #else
                 let tvEmbedInfo = try await api.fetchPlayerInfoTVEmbedded(videoId: video.id)
+                #endif
                 if await tryAllStreams(video: video, info: tvEmbedInfo,
                                       label: "TVEmbedded[\(attempt)]", skipMuxed: true) {
                     return
@@ -697,6 +724,22 @@ extension PlaybackViewModel {
                 // this guard returned early before calling it. Allow VR through directly.
                 let isAndroidVRLabel = label.contains("AndroidVR") || label.contains("ANDROID_VR")
                 if hasPot || isAndroidVRLabel {
+                    #if os(tvOS)
+                    // fix2: Pre-fetch TVEmbedded concurrently while AndroidVR rqh=1 composition
+                    // times out (2s on tvOS). By the time the timeout fires and exhaustiveRetry
+                    // reaches Phase 1, the result is ready — eliminating the sequential ~0.5s fetch.
+                    // Fire for all AndroidVR attempts regardless of hasPot: the pot= token doesn't
+                    // prevent the CDN from enforcing rqh=1 at the segment level (only firstByte
+                    // probe returns 206; actual segments still reject with rqh=1).
+                    if isAndroidVRLabel, tvEmbeddedEarlyTask == nil {
+                        let prefetchVideoId = video.id
+                        tvEmbeddedEarlyTask = Task { [weak self] in
+                            guard let self else { return nil }
+                            return try? await self.api.fetchPlayerInfoTVEmbedded(videoId: prefetchVideoId)
+                        }
+                        playerLog.notice("[\(label)] fix2: started TVEmbedded early pre-fetch alongside rqh=1 timeout")
+                    }
+                    #endif
                     playerLog.notice("[\(label)] rqh=1 but \(hasPot ? "pot= token available" : "ANDROID_VR exempt") — attempting adaptive composition")
                     if await attemptComposition(videoURL: videoURL, audioURL: audioURL,
                                                 for: video, info: info, label: label) { return true }
@@ -1149,10 +1192,17 @@ extension PlaybackViewModel {
 
                 // Timeout task — prevents indefinite CDN hang for rqh=1 Bearer experiments.
                 // After finish() is called by either task, subsequent yield/finish are no-ops.
-                // AndroidVR adaptive is a primary quality path; give it the full 8s.
-                // Other clients that can't load tracks (rqh=1 rejection) fail fast anyway.
+                // AndroidVR adaptive is a primary quality path; give it the full 8s on iOS.
+                // On tvOS the CDN occasionally enforces rqh=1 at the segment level (firstByte
+                // probe returns 206 but actual segments hang). Reduce to 2s on tvOS so the
+                // fallback path (preloaded item or exhaustiveRetry) fires 6s sooner.
+                // fix1/tvOS: fast videos complete loadTracks in ~0.4s — 2s is safe margin.
                 let isVRAttempt = clientParam == "ANDROID_VR"
+                #if os(tvOS)
+                let timeoutNs: UInt64 = isVRAttempt ? 2_000_000_000 : 3_000_000_000
+                #else
                 let timeoutNs: UInt64 = (needsQuickStartup && !isVRAttempt) ? 3_000_000_000 : 8_000_000_000
+                #endif
                 Task.detached {
                     try? await Task.sleep(nanoseconds: timeoutNs)
                     raceCont.yield(nil)
@@ -1164,7 +1214,11 @@ extension PlaybackViewModel {
                     vTracks = box.video
                     aTracks = box.audio
                 } else {
+                    #if os(tvOS)
+                    let timeoutSec = isVRAttempt ? 2 : 3
+                    #else
                     let timeoutSec = (needsQuickStartup && !isVRAttempt) ? 3 : 8
+                    #endif
                     let reason = "timed out after \(timeoutSec)s or loadTracks failed"
                     playerLog.error("❌ [\(label)/adaptive] loadTracks \(reason) (rqh=\(videoRqh))")
                     return false

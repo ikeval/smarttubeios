@@ -149,6 +149,10 @@ extension PlaybackViewModel {
         retryAttempts = 0
         exhaustiveRetryTask?.cancel()
         exhaustiveRetryTask = nil
+        #if os(tvOS)
+        tvEmbeddedEarlyTask?.cancel()
+        tvEmbeddedEarlyTask = nil
+        #endif
         qualityManager.reset()
         phase2Task?.cancel()
         phase2Task = nil

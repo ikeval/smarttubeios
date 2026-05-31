@@ -50,8 +50,6 @@
 		AA1100000000000000001602 /* TVPlayerControlsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001601 /* TVPlayerControlsUITests.swift */; };
 		AA1100000000000000001702 /* TVVideoPlaybackRegressionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001701 /* TVVideoPlaybackRegressionUITests.swift */; };
 		AA1100000000000000001802 /* TVAudioAndCaptionPickerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001801 /* TVAudioAndCaptionPickerUITests.swift */; };
-		TV00000000000000000000B02 /* TVVideoPlaybackBenchmarkUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TV00000000000000000000B01 /* TVVideoPlaybackBenchmarkUITests.swift */; };
-		TV00000000000000000000R02 /* TVWKHLSReplayRegressionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TV00000000000000000000R01 /* TVWKHLSReplayRegressionUITests.swift */; };
 		AA1100000000000000001902 /* DownloadsPlaybackUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001901 /* DownloadsPlaybackUITests.swift */; };
 		AA1100000000000000001A02 /* HideShortsHomeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001A01 /* HideShortsHomeUITests.swift */; };
 		AA1100000000000000001B02 /* OrientationCrashRegressionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1100000000000000001B01 /* OrientationCrashRegressionUITests.swift */; };
@@ -94,6 +92,8 @@
 		RS000000000000000000001B /* RSSFeedsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS000000000000000000001A /* RSSFeedsUITests.swift */; };
 		SE000000000000000000001B /* ShareExtensionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SE000000000000000000001A /* ShareExtensionUITests.swift */; };
 		SE000000000000000000002B /* ShareExtensionE2EUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SE000000000000000000002A /* ShareExtensionE2EUITests.swift */; };
+		TV00000000000000000000B02 /* TVVideoPlaybackBenchmarkUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TV00000000000000000000B01 /* TVVideoPlaybackBenchmarkUITests.swift */; };
+		TV00000000000000000000R02 /* TVWKHLSReplayRegressionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TV00000000000000000000R01 /* TVWKHLSReplayRegressionUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -205,8 +205,6 @@
 		AA1100000000000000001601 /* TVPlayerControlsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPlayerControlsUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000001701 /* TVVideoPlaybackRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVVideoPlaybackRegressionUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000001801 /* TVAudioAndCaptionPickerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVAudioAndCaptionPickerUITests.swift; sourceTree = "<group>"; };
-		TV00000000000000000000B01 /* TVVideoPlaybackBenchmarkUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVVideoPlaybackBenchmarkUITests.swift; sourceTree = "<group>"; };
-		TV00000000000000000000R01 /* TVWKHLSReplayRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVWKHLSReplayRegressionUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000001901 /* DownloadsPlaybackUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadsPlaybackUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000001A01 /* HideShortsHomeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HideShortsHomeUITests.swift; sourceTree = "<group>"; };
 		AA1100000000000000001B01 /* OrientationCrashRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationCrashRegressionUITests.swift; sourceTree = "<group>"; };
@@ -243,6 +241,8 @@
 		RS000000000000000000001A /* RSSFeedsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSFeedsUITests.swift; sourceTree = "<group>"; };
 		SE000000000000000000001A /* ShareExtensionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtensionUITests.swift; sourceTree = "<group>"; };
 		SE000000000000000000002A /* ShareExtensionE2EUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtensionE2EUITests.swift; sourceTree = "<group>"; };
+		TV00000000000000000000B01 /* TVVideoPlaybackBenchmarkUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVVideoPlaybackBenchmarkUITests.swift; sourceTree = "<group>"; };
+		TV00000000000000000000R01 /* TVWKHLSReplayRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVWKHLSReplayRegressionUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -1066,7 +1066,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1501,7 +1501,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;

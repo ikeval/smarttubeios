@@ -340,6 +340,12 @@ public final class PlaybackViewModel {
     /// Allows load() to skip cancellation when the same video is re-tapped after stop().
     var wkHLSEarlyTaskVideoId: String?
     #endif
+    /// tvOS fix2: TVEmbedded PlayerInfo pre-fetch started concurrently with the AndroidVR
+    /// rqh=1 adaptive timeout. By the time exhaustiveRetry reaches Phase 1 (~2s later),
+    /// the result is ready — eliminating the sequential ~0.5s Phase 1 network fetch.
+    #if os(tvOS)
+    var tvEmbeddedEarlyTask: Task<PlayerInfo?, Never>?
+    #endif
 
     // fix12: videoId of the item stop() left alive in player.currentItem (parked).
     // When load() is called for the same id and the item is still .readyToPlay, the
