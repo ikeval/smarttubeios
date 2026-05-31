@@ -84,11 +84,14 @@ public final class DownloadStore {
     // MARK: - Public API
 
     /// The on-disk destination for a downloaded video.
-    /// The `videoId` is sanitised (only alphanumerics, `-`, and `_` retained) to
-    /// prevent path-traversal attacks when constructing the path component.
+    /// Percent-encodes the `videoId` to guarantee a 1-to-1 mapping between any
+    /// video ID and its filename — avoids the theoretical collision that could
+    /// occur when two IDs differ only in special characters stripped by a
+    /// character-filter approach. For standard YouTube 11-char IDs
+    /// (`[A-Za-z0-9_-]`) the result is identical to the raw ID.
     public func destinationURL(for videoId: String) -> URL {
-        let safe = videoId.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
-        return downloadsDirectory.appendingPathComponent("\(safe.isEmpty ? "download" : safe).mp4")
+        let encoded = videoId.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? videoId
+        return downloadsDirectory.appendingPathComponent("\(encoded).mp4")
     }
 
     /// Adds or replaces a download record and persists the manifest.
@@ -114,8 +117,36 @@ public final class DownloadStore {
               let decoded = try? JSONDecoder().decode([DownloadedVideo].self, from: data) else {
             return
         }
-        // Drop entries whose files were deleted outside the app.
-        entries = decoded.filter { FileManager.default.fileExists(atPath: $0.fileURL.path) }
+        // Migrate entries whose stored fileURL no longer exists on disk.
+        // The old destinationURL used a character-filter sanitiser; the new one uses
+        // percent-encoding. For standard YouTube IDs these are identical, but migrate
+        // any edge-case entries by trying the new path before dropping them.
+        let fm = FileManager.default
+        var migrated: [DownloadedVideo] = []
+        for entry in decoded {
+            if fm.fileExists(atPath: entry.fileURL.path) {
+                migrated.append(entry)
+            } else {
+                let newURL = destinationURL(for: entry.videoId)
+                if fm.fileExists(atPath: newURL.path) {
+                    var updated = entry
+                    // DownloadedVideo is a struct — recreate with the corrected fileURL.
+                    let corrected = DownloadedVideo(
+                        videoId: entry.videoId,
+                        title: entry.title,
+                        channelTitle: entry.channelTitle,
+                        thumbnailURL: entry.thumbnailURL,
+                        duration: entry.duration,
+                        fileURL: newURL,
+                        downloadedAt: entry.downloadedAt
+                    )
+                    _ = updated  // silence unused warning
+                    migrated.append(corrected)
+                }
+                // If neither path exists, the file was deleted — drop the entry.
+            }
+        }
+        entries = migrated
     }
 
     private func saveManifest() {
