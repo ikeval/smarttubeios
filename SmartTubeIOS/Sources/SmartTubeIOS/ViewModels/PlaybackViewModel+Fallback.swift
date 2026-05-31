@@ -86,7 +86,7 @@ extension PlaybackViewModel {
                 probeValid = await isWKHLSURLValid(cachedHLSURL)
             }
             if probeValid {
-                if await tryWebViewHLS(cachedHLSURL, nSolver: nSolver, poToken: capturedPoToken, for: video) {
+                if await tryWebViewHLS(cachedHLSURL, nSolver: nSolver, poToken: capturedPoToken, skipIfPfa1: true, for: video) {
                     playerLog.notice("[wkHLS] cached URL played — exhaustiveRetry done")
                     if let playerInfo { launchPhase2(video: video, info: playerInfo, cached: cached) }
                     return
@@ -1777,7 +1777,11 @@ extension PlaybackViewModel {
     /// - Parameter poToken: When non-nil, the proxy rewrites variant playlist URIs to the
     ///   proxy scheme and injects ?pot=<token> into every segment URL so rqh=1-enforced
     ///   CDN requests are authenticated without needing googlevideo.com session cookies.
-    private func tryWebViewHLS(_ masterURL: URL, nSolver: (unsolved: String, solved: String)?, poToken: String? = nil, for video: Video) async -> Bool {
+    /// - Parameter skipIfPfa1: When `true` (Phase -1a only), bail immediately if the selected
+    ///   variant URL contains `pfa/1` and `poToken` is nil. The Phase -1a cached preWarm URL has
+    ///   a STALE `xpc=` credential that CDN always rejects for pfa/1 videos. Racing paths and
+    ///   serial-extraction paths pass `false` because those use a FRESH `xpc=` URL (earlyTask).
+    private func tryWebViewHLS(_ masterURL: URL, nSolver: (unsolved: String, solved: String)?, poToken: String? = nil, skipIfPfa1: Bool = false, for video: Video) async -> Bool {
         playerLog.notice("[webView/HLS] fetching master manifest: \(masterURL.absoluteString.prefix(120))")
 
         let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
@@ -1803,6 +1807,27 @@ extension PlaybackViewModel {
             return false
         }
         playerLog.notice("[webView/HLS] selected per-quality URL: \(bestURL.absoluteString.prefix(200))")
+
+        // fix28: Fast-fail for pfa/1 urls in Phase -1a when no pot= is available.
+        //
+        // For pfa/1 variants the CDN rejects segment requests (-12660) unless the URL's
+        // xpc= credential is FRESH (< ~5 s, minted by the YouTube player at wv.load() time).
+        // When Phase -1a calls tryWebViewHLS with the CACHED preWarm URL (stored 90+ s ago),
+        // that URL's xpc= is always stale → CDN rejects all segments → 1.1 s wasted.
+        //
+        // Returning false immediately lets the race start earlier. Race Path B awaits
+        // wkHLSEarlyTask (priorityExtract), which has already extracted a FRESH xpc= URL.
+        // Path B wins with that fresh URL, reducing c1 from ~2.87 s → ~1.0-1.4 s.
+        //
+        // IMPORTANT: this guard only fires when `skipIfPfa1 == true` (Phase -1a mode).
+        // The race path (racePathB) and serial extraction after race-failed pass
+        // `skipIfPfa1: false` so fresh liveRace URLs are never prematurely rejected.
+        if skipIfPfa1, poToken == nil,
+           (bestURL.absoluteString.contains("/pfa/1/") || bestURL.absoluteString.contains("pfa%2F1")) {
+            playerLog.notice("[webView/HLS] Phase -1a pfa/1 + pot=nil — stale xpc= cannot auth CDN segments; bailing early (fix28)")
+            return false
+        }
+
         // Cache the master manifest URL so future loads of this video (or pre-extracted
         // neighbours) can skip the 5–9 s WKWebView extraction step entirely.
         await VideoPreloadCache.shared.store(wkHLSManifestURL: masterURL, for: video.id)

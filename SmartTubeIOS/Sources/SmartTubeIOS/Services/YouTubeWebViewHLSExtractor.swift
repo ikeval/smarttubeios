@@ -52,6 +52,12 @@ final class YouTubeWebViewHLSExtractor: NSObject {
     /// The last task created by `serialExtract()`. Each new serialExtract call chains onto
     /// this task, ensuring strict sequential execution of serial extractions.
     private var pendingSerialTask: Task<URL?, Never>? = nil
+    /// Epoch counter incremented by `priorityExtract` on every user-initiated load.
+    /// A `serialExtract` task that wakes up after waiting for its predecessor will
+    /// compare its captured epoch with the current epoch: if they differ, a priority
+    /// extract has taken over and the serial task must await `pendingSerialTask`
+    /// (the priority task) rather than call `extractHLSURL` and cancel it.
+    private var serialTaskEpoch: Int = 0
 
     // MARK: - Public API
 
@@ -230,6 +236,29 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         }
     }
 
+    /// Priority entry point for user-initiated load (earlyTask). Unlike `serialExtract`,
+    /// this method does NOT wait for any in-flight background extraction. Instead it
+    /// starts immediately — `extractHLSURL`'s `finish(url:nil)` cancels any active
+    /// continuation, ending the background task cleanly. The new task is still registered
+    /// in `pendingSerialTask` so subsequent `serialExtract` calls (from race-failed
+    /// handlers) chain onto it correctly.
+    ///
+    /// Incrementing `serialTaskEpoch` signals every queued-but-not-yet-awoken
+    /// `serialExtract` task to yield to this priority task instead of calling
+    /// `extractHLSURL` and inadvertently cancelling the ongoing extraction (R14 regression:
+    /// multiple VideoCardView timeout-driven tasks for `_CjIX66a9ts` woke up sequentially
+    /// and each called `extractHLSURL`, cancelling `priorityExtract`'s active continuation).
+    func priorityExtract(videoId: String) async -> URL? {
+        serialTaskEpoch &+= 1
+        let newTask = Task { @MainActor [weak self] in
+            guard let self else { return Optional<URL>.none }
+            extractLog.notice("[webView] priorityExtract(\(videoId as NSString)): starting immediately (user tap, bypasses chain)")
+            return await self.extractHLSURL(videoId: videoId)
+        }
+        pendingSerialTask = newTask
+        return await newTask.value
+    }
+
     /// Serial-safe entry point for the fallback path. Unlike `extractHLSURL`, this method
     /// uses a task-chain to guarantee strict sequential execution: each call awaits the
     /// previous `serialExtract` task before starting a new extraction. This prevents N
@@ -239,8 +268,14 @@ final class YouTubeWebViewHLSExtractor: NSObject {
     /// Pattern: each call captures the previous pending task, creates a new task that
     /// awaits the previous one, then calls `extractHLSURL`. Since all callers are on
     /// the `@MainActor`, the `pendingSerialTask` assignment is safe.
+    ///
+    /// Epoch check: before calling `extractHLSURL`, the task compares its captured
+    /// `serialTaskEpoch` with the current value. If they differ, `priorityExtract` has
+    /// advanced the epoch — this task is stale and should await `pendingSerialTask`
+    /// (the priority task) instead of calling `extractHLSURL` and cancelling it.
     func serialExtract(videoId: String) async -> URL? {
         let previousTask = pendingSerialTask
+        let capturedEpoch = serialTaskEpoch
         let newTask = Task { @MainActor [weak self] in
             // Wait for the previous serial extraction to complete before starting ours.
             // This prevents the cancel-chain: finish(url:nil) at the top of extractHLSURL
@@ -248,6 +283,12 @@ final class YouTubeWebViewHLSExtractor: NSObject {
             // the previous extraction has already resolved and cleared its continuation.
             _ = await previousTask?.value
             guard let self else { return Optional<URL>.none }
+            // Epoch check: if priorityExtract advanced the epoch while we were waiting,
+            // we are stale. Await the priority task instead of cancelling it.
+            guard self.serialTaskEpoch == capturedEpoch else {
+                extractLog.notice("[webView] serialExtract(\(videoId as NSString)): stale epoch — yielding to priority task")
+                return await self.pendingSerialTask?.value
+            }
             extractLog.notice("[webView] serialExtract(\(videoId as NSString)): starting (previous task done)")
             return await self.extractHLSURL(videoId: videoId)
         }
@@ -331,9 +372,19 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         function sendHLSURL(hlsUrl, poToken, source, unsolvedN, solvedN, playerID) {
             if (sentFinalURL) return;
             sentFinalURL = true;
+            // fix29: Include the page's own videoId so Swift can reject stale JS
+            // callbacks that fire after wv.load() switches to a new video. Without
+            // this check, a pending XHR or fetch .then() from the PREVIOUS page can
+            // deliver the wrong video's HLS URL into the current extraction.
+            var vid = null;
+            try {
+                var m = window.location.href.match(/[?&]v=([^&]+)/);
+                vid = m ? m[1] : null;
+            } catch(e) {}
             window.webkit.messageHandlers.hlsExtractor.postMessage(
                 JSON.stringify({
                     hlsManifestUrl: hlsUrl,
+                    videoId:        vid,
                     poToken:        poToken   || null,
                     source:         source    || 'unknown',
                     unsolvedN:      unsolvedN || null,
@@ -783,6 +834,17 @@ extension YouTubeWebViewHLSExtractor: WKScriptMessageHandler {
                 unsolvedNValue = json["unsolvedN"] as? String
                 solvedNValue = json["solvedN"] as? String
                 playerIDValue = json["playerID"] as? String
+                // fix29: Reject stale JS callbacks from a previous page. When wv.load()
+                // switches to a new video, any in-flight XHR/fetch callbacks from the
+                // old page may fire after `currentExtractionVideoId` has changed. The
+                // JS embeds the page's own v= parameter in every message so we can
+                // verify the callback belongs to the current extraction.
+                if let msgVid = json["videoId"] as? String,
+                   let curVid = currentExtractionVideoId,
+                   msgVid != curVid {
+                    extractLog.warning("⚠️ [webView/fix29] stale JS callback: videoId=\(msgVid as NSString) != current=\(curVid as NSString) — ignoring")
+                    return
+                }
             } else {
                 // Fallback: raw URL string (old format)
                 hlsURLString = body

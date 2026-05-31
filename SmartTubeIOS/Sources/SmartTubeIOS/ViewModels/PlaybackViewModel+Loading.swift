@@ -345,9 +345,13 @@ extension PlaybackViewModel {
         // For rqh=1 videos the ~2 s extraction overlaps the primary iOS attempt so the URL
         // is ready (or nearly ready) by the time exhaustiveRetry reaches Phase -2, saving
         // the serial 2–4 s wait. For non-rqh=1 videos the task completes silently unused.
-        // Use serialExtract() (not extractHLSURL directly) so the task is registered in
-        // the pendingSerialTask chain — any subsequent serialExtract calls from race-failed
-        // handlers will chain onto this task instead of cancelling it via finish(url:nil).
+        // Use priorityExtract() (not serialExtract) so earlyTask starts wv.load() IMMEDIATELY
+        // without waiting for any in-flight VideoCardView second-serialExtract. A background
+        // card extraction (e.g. POTUARPb1CU) may have captured pendingSerialTask just before
+        // the tap; chaining onto it (serialExtract's behaviour) delays wv.load() by ~2.3 s,
+        // making CDN trust too stale (~0.5 s) for AndroidVR loadTracks (R12 regression).
+        // priorityExtract registers itself in pendingSerialTask so race-failed handlers still
+        // chain onto it correctly via serialExtract.
         let capturedVideoIdForHLS = video.id
         // Reuse an in-flight pre-warm started by stop() for the same video (fix10).
         // If stop() already started serialExtract for this videoId, wkHLSEarlyTask is
@@ -355,18 +359,11 @@ extension PlaybackViewModel {
         if wkHLSEarlyTask == nil {
             wkHLSEarlyTaskVideoId = capturedVideoIdForHLS
             wkHLSEarlyTask = Task { @MainActor in
-                // fix26b: If VideoCardView's second serialExtract just stored a fresh URL
-                // (< 5 s ago), return it directly WITHOUT calling serialExtract. Calling
-                // serialExtract would invoke extractHLSURL → wv.load() which navigates
-                // the WKWebView and INVALIDATES the CDN session the extraction established.
-                // By skipping serialExtract the WKWebView stays on the video page, its CDN
-                // session remains active, and Phase -1a can load segments without pot=.
-                if await VideoPreloadCache.shared.isWKHLSURLFresh(for: capturedVideoIdForHLS, within: 5),
-                   let freshCachedURL = await VideoPreloadCache.shared.cachedWKHLSURL(for: capturedVideoIdForHLS) {
-                    playerLog.notice("[fix26b/earlyTask] returning pre-baked URL (< 5 s) — no wv.load(), CDN session preserved")
-                    return freshCachedURL
-                }
-                return await YouTubeWebViewHLSExtractor.shared.serialExtract(videoId: capturedVideoIdForHLS)
+                // priorityExtract bypasses pendingSerialTask chaining → wv.load() starts
+                // immediately at tap time. For pfa/1 rqh=1 videos like _DY9cTWakcM, this
+                // refreshes CDN IP-level trust so it is only ~2.5 s old when AndroidVR
+                // loadTracks runs — within the ~2.5 s trust window.
+                return await YouTubeWebViewHLSExtractor.shared.priorityExtract(videoId: capturedVideoIdForHLS)
             }
         }
         #endif
