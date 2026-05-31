@@ -378,6 +378,7 @@ extension PlaybackViewModel {
     /// Path A of the exhaustiveRetry race: BotGuardWV adaptive / proxy HLS path.
     /// Waits up to 6 s for BotGuard to mint a token, then tries WEB/iOS/Android adaptive.
     /// Returns `true` if a stream reached `readyToPlay`.
+    #if canImport(WebKit)
     func racePathA(video: Video) async -> Bool {
         if !BotGuardWebViewRunner.shared.isReady {
             playerLog.notice("[BotGuardWV] waiting up to 6 s for minted token (race Path A)…")
@@ -517,10 +518,12 @@ extension PlaybackViewModel {
         playerLog.notice("[BotGuardWV] Path A exhausted — all BotGuardWV attempts failed")
         return false
     }
+    #endif // canImport(WebKit)
 
     /// Path B of the exhaustiveRetry race: early WKWebView HLS path.
     /// Awaits the `wkHLSEarlyTask` started in `loadAsync` (already in-flight).
     /// Returns `true` if a stream reached `readyToPlay`.
+    #if canImport(WebKit)
     func racePathB(video: Video) async -> Bool {
         guard let earlyTask = wkHLSEarlyTask else {
             playerLog.notice("⚠️ [webView] no earlyTask — Path B done")
@@ -545,6 +548,7 @@ extension PlaybackViewModel {
         if won { playerLog.notice("✅ [webView] Path B won — WKWebView HLS") }
         return won
     }
+    #endif // canImport(WebKit)
 
     /// Path C of the exhaustiveRetry race: Android VR (Oculus Quest) adaptive path.
     /// CDN-exempt from rqh=1 / pot= token requirements. Runs concurrently with Path A and B.

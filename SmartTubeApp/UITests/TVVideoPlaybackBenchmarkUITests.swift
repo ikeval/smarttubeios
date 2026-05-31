@@ -71,7 +71,7 @@ final class TVVideoPlaybackBenchmarkUITests: XCTestCase {
         let chipBar = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == 'home.chipBar'"))
             .firstMatch
-        guard chipBar.waitForExistence(timeout: 20) else {
+        guard chipBar.waitForExistence(timeout: 30) else {
             try captureAndSkip("home.chipBar did not appear — app failed to reach Home", in: app)
         }
         let cardPredicate = NSPredicate(format: "identifier BEGINSWITH 'video.card.'")
@@ -79,7 +79,7 @@ final class TVVideoPlaybackBenchmarkUITests: XCTestCase {
         let cardExp = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "count > 0"), object: cards
         )
-        guard XCTWaiter().wait(for: [cardExp], timeout: 20) == .completed else {
+        guard XCTWaiter().wait(for: [cardExp], timeout: 60) == .completed else {
             try captureAndSkip("No video cards — network unavailable or feed empty", in: app)
         }
 
@@ -134,12 +134,13 @@ final class TVVideoPlaybackBenchmarkUITests: XCTestCase {
                     return
                 }
 
-                // Time: nextBtn tap → com.void.smarttube.player.ready Darwin notification.
+                // Time: nextBtn select → com.void.smarttube.player.ready Darwin notification.
                 let readyExp = XCTDarwinNotificationExpectation(
                     notificationName: "com.void.smarttube.player.ready"
                 )
                 let start = Date()
-                nextButton.tap() // XCTest focuses + selects on tvOS
+                // nextButton already has focus from the poll above; press Select to activate.
+                remote.press(.select) // activate focused nextBtn on tvOS
 
                 let readyResult = XCTWaiter().wait(for: [readyExp], timeout: 10)
                 let elapsed = Date().timeIntervalSince(start)

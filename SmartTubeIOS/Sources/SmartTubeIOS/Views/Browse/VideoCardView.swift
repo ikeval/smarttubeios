@@ -89,7 +89,9 @@ public struct VideoCardView: View {
             // BotGuard.prepare() is idempotent (no-op if already ready, or coalescences with
             // an ongoing task), so all card tasks joining the same prepare() call pay ≤8 s
             // total — not per-card.
+            #if canImport(WebKit)
             await BotGuardWebViewRunner.shared.prepare()
+            #endif
             // fix14/fix18: Pre-warm WKWebView HLS extraction for this card.
             // Shorts excluded (no youtubei/v1/player → 40 s timeout).
             // fix18: Loop with 4 s back-off until the URL is cached or the task is

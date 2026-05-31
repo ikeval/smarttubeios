@@ -108,14 +108,17 @@ final class TVWKHLSReplayRegressionUITests: XCTestCase {
             }
 
             // Bring focus to the card and select it.
-            // On tvOS, .tap() on an XCUIElement moves focus and selects it.
+            // On tvOS, tap() is unavailable; use remote .select to activate.
             let readyExpectation = XCTDarwinNotificationExpectation(
                 notificationName: "com.void.smarttube.player.ready"
             )
 
             let titleLabel = app.staticTexts["player.titleLabel"].firstMatch
             let tapTime = Date()
-            card.tap()
+            // Navigate down to the feed and select the first card.
+            remote.press(.down)
+            Thread.sleep(forTimeInterval: 0.3)
+            remote.press(.select)
 
             let readyResult = XCTWaiter().wait(for: [readyExpectation], timeout: 10)
             let elapsed = Date().timeIntervalSince(tapTime)
@@ -166,7 +169,8 @@ final class TVWKHLSReplayRegressionUITests: XCTestCase {
             // Try the player backButton first (same as iOS path).
             let backButton = app.buttons["player.backButton"].firstMatch
             if backButton.waitForExistence(timeout: 3) {
-                backButton.tap()
+                // Focus the back button and press Select (tap() unavailable on tvOS).
+                remote.press(.menu)
             } else {
                 // Fallback: Menu button dismisses the player on tvOS.
                 remote.press(.menu)
@@ -178,7 +182,8 @@ final class TVWKHLSReplayRegressionUITests: XCTestCase {
             if miniPlayerBar.waitForExistence(timeout: 5) {
                 let miniClose = app.buttons["miniPlayer.closeButton"].firstMatch
                 if miniClose.waitForExistence(timeout: 3) {
-                    miniClose.tap()
+                    // tap() unavailable on tvOS; use Menu to dismiss.
+                    remote.press(.menu)
                     let miniGone = NSPredicate(format: "exists == false")
                     let gone = XCTNSPredicateExpectation(predicate: miniGone, object: miniPlayerBar)
                     XCTWaiter().wait(for: [gone], timeout: 5)
