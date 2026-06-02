@@ -141,4 +141,31 @@ struct CrashlyticsLogger: Sendable {
             userInfo: [NSLocalizedDescriptionKey: "Playback failure — see session breadcrumbs"]
         ))
     }
+
+    /// Records a non-fatal Crashlytics event when the video that reached readyToPlay
+    /// (`activeId`) does not match the video the user intended to play (`intendedId`).
+    /// Surfaces in Firebase under domain `SmartTube.WrongVideo` (code 2) so
+    /// wrong-video regressions can be queried independently of user-triggered reports.
+    /// Custom keys `wv_intended_id` / `wv_active_id` make it easy to see both IDs
+    /// in the Firebase console without opening the full breadcrumb log.
+    static func sendWrongVideoReport(
+        intendedId: String,
+        intendedTitle: String,
+        activeId: String,
+        activeTitle: String
+    ) {
+        let crashlytics = Crashlytics.crashlytics()
+        crashlytics.setCustomValue(intendedId,    forKey: "wv_intended_id")
+        crashlytics.setCustomValue(intendedTitle, forKey: "wv_intended_title")
+        crashlytics.setCustomValue(activeId,      forKey: "wv_active_id")
+        crashlytics.setCustomValue(activeTitle,   forKey: "wv_active_title")
+        let msg = "[WrongVideo] intended=\(intendedId) (\(intendedTitle.prefix(60))) active=\(activeId) (\(activeTitle.prefix(60)))"
+        crashlytics.log(msg)
+        Logger(subsystem: appSubsystem, category: "WrongVideo").error("\(msg, privacy: .public)")
+        crashlytics.record(error: NSError(
+            domain: "SmartTube.WrongVideo",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Wrong video at readyToPlay: intended=\(intendedId) active=\(activeId)"]
+        ))
+    }
 }

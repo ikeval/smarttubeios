@@ -46,6 +46,14 @@ public final class PlaybackViewModel {
     var needsQuickStartup: Bool = false
     /// Timestamp set at the start of `load(video:)` — used to log total video-start latency.
     var videoLoadStartedAt: Date = .distantPast
+    /// Video ID (and title) that `load(video:)` was last called with. Compared against
+    /// `currentVideo.id` when `isPlaying` fires for the first time in each load cycle
+    /// to detect a wrong-video outcome (fix236).
+    var intendedVideoId: String? = nil
+    var intendedVideoTitle: String? = nil
+    /// Set to `true` at the start of each `load()` and cleared on the first
+    /// `isPlaying = true` of that load cycle so the check fires exactly once.
+    var pendingWrongVideoCheck: Bool = false
     public internal(set) var isPlaying: Bool = false {
         didSet {
             guard isPlaying, !oldValue else { return }
@@ -59,6 +67,7 @@ public final class PlaybackViewModel {
                 CFNotificationName("com.void.smarttube.player.ready" as CFString),
                 nil, nil, true
             )
+            checkWrongVideoOnFirstPlay()
         }
     }
     public internal(set) var videoEnded: Bool = false
@@ -540,6 +549,28 @@ extension PlaybackViewModel: QualityEventHandler {
 
     func qualitySelectDASHFormat(videoURL: URL, audioURL: URL, seekTo: TimeInterval) async {
         await rebuildCompositionForQuality(videoURL: videoURL, audioURL: audioURL, seekTo: seekTo)
+    }
+
+    // MARK: - Wrong-video detection (fix236)
+
+    /// Fires once per `load()` cycle when `isPlaying` transitions to `true`.
+    /// Compares `currentVideo.id` against `intendedVideoId` set at `load()` time.
+    /// On mismatch: records a `SmartTube.WrongVideo` non-fatal to Crashlytics and
+    /// shows the user a toast so they know a report was filed automatically.
+    private func checkWrongVideoOnFirstPlay() {
+        guard pendingWrongVideoCheck else { return }
+        pendingWrongVideoCheck = false
+        guard let intended = intendedVideoId,
+              let active = currentVideo,
+              active.id != intended else { return }
+        playerLog.error("[WrongVideo] MISMATCH at readyToPlay — intended=\(intended) active=\(active.id)")
+        CrashlyticsLogger.sendWrongVideoReport(
+            intendedId: intended,
+            intendedTitle: intendedVideoTitle ?? intended,
+            activeId: active.id,
+            activeTitle: active.title
+        )
+        toastMessage = "⚠️ Wrong video loaded — report sent"
     }
 }
 

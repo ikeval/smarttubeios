@@ -151,6 +151,11 @@ extension PlaybackViewModel {
             history.append(prev)
         }
         currentVideo = video
+        // fix236: Record the intended video at load() time so checkWrongVideoOnFirstPlay()
+        // can detect if a stale task swaps currentVideo before readyToPlay fires.
+        intendedVideoId = video.id
+        intendedVideoTitle = video.title
+        pendingWrongVideoCheck = true
         hasPrevious = !history.isEmpty
         retryAttempts = 0
         exhaustiveRetryTask?.cancel()
