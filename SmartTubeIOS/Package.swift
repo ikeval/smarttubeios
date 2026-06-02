@@ -51,7 +51,7 @@ let package = Package(
         // MARK: Tests
         .testTarget(
             name: "SmartTubeIOSTests",
-            dependencies: ["SmartTubeIOSCore"],
+            dependencies: ["SmartTubeIOSCore", "SmartTubeIOS"],
             path: "Tests/SmartTubeIOSTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

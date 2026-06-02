@@ -193,12 +193,9 @@ public actor VideoPreloadCache {
         authToken: String?,
         priority: PrefetchPriority = .visible
     ) {
-        // Global kill-switch: flip DebugFlags.cachingDisabled = true to suppress all prefetch
-        // during cold-start benchmarking without modifying call sites.
+        // Global kill-switch: DebugFlags.cachingDisabled covers both the hardcoded flag
+        // and the --uitesting-disable-prefetch launch argument.
         if DebugFlags.cachingDisabled { return }
-        // UI-testing seam: `--uitesting-disable-prefetch` suppresses all background
-        // prefetch so TTP benchmarks measure a cold player load with no cache warming.
-        if ProcessInfo.processInfo.arguments.contains("--uitesting-disable-prefetch") { return }
         // Playlist IDs are not video IDs — skip them to avoid wasted /player calls.
         let isPlaylistId = videoId == "WL" || videoId == "LL" || videoId.hasPrefix("PL")
         if isPlaylistId { return }

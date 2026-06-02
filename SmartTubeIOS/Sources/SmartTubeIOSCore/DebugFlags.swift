@@ -1,3 +1,5 @@
+import Foundation
+
 /// Global debug flags — flip these locally when you need a reproducible cold-start
 /// baseline. Commit only with all flags set to their default (production) values.
 ///
@@ -12,6 +14,12 @@
 ///   Writes to caches are unaffected — the cache fills normally, reads are just bypassed.
 public enum DebugFlags {
     /// Set to `true` to disable all custom in-memory caching for cold-start benchmarking.
+    /// Also activated at runtime by the `--uitesting-disable-prefetch` launch argument,
+    /// so UI tests automatically get a fully cold path with no cache reads.
     /// Default: `false` (full caching enabled in production).
-    public static let cachingDisabled: Bool = false
+    public static var cachingDisabled: Bool {
+        _cachingDisabled
+            || ProcessInfo.processInfo.arguments.contains("--uitesting-disable-prefetch")
+    }
+    private static let _cachingDisabled: Bool = false
 }
