@@ -75,8 +75,11 @@ body:
   - type: textarea
     id: screenshots
     attributes:
-      label: Screenshots / Screen Recording
-      description: If applicable, attach screenshots or a screen recording to help explain the problem.
+      label: Screenshots
+      description: |
+        **Please include a screenshot if at all possible — it dramatically speeds up diagnosis.**
+        Drag and drop images directly into this box, or paste from clipboard.
+      placeholder: "Drag & drop screenshots here..."
     validations:
       required: false
 
