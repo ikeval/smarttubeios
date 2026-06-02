@@ -116,6 +116,22 @@ extension PlaybackViewModel {
         //   client, which is CDN-exempt from rqh=1 / pot= token requirements. Runs concurrently
         //   with Path A and B. Expected ~2–3 s cold; beats serial WKWebView extraction (~3–5 s).
         //
+        // fix30 (task #230): Pre-fetch TVEmbedded playerInfo in parallel with the race on iOS.
+        // If all race paths fail, Phase 1 (TVEmbedded serial) can consume the already-resolved
+        // result instead of waiting an additional ~0.5–1 s for a fresh network request.
+        // tvOS already starts tvEmbeddedEarlyTask inside tryAllStreams (fix2); on iOS we fire
+        // it here so the prefetch begins as soon as the race paths do.
+        #if !os(tvOS)
+        if tvEmbeddedEarlyTask == nil {
+            let prefetchVideoId = video.id
+            tvEmbeddedEarlyTask = Task { [weak self] in
+                guard let self else { return nil }
+                return try? await self.api.fetchPlayerInfoTVEmbedded(videoId: prefetchVideoId)
+            }
+            playerLog.notice("[TVEmbedded] fix30: started iOS TVEmbedded early pre-fetch alongside race paths")
+        }
+        #endif
+        //
         // Key safety property: all paths are @MainActor, so `player.replaceCurrentItem` and
         // `itemObserverTask` mutations are always serialised. Losing paths' status streams
         // exit via task cancellation.
@@ -235,14 +251,14 @@ extension PlaybackViewModel {
             // works via AVPlayer ABR (preferredMaximumResolution) — no composition needed.
             // Videos with embedding disabled will fail this phase and continue to Phase 2.
             do {
-                #if os(tvOS)
-                // fix2: Consume the TVEmbedded pre-fetch started concurrently with the
-                // AndroidVR rqh=1 timeout. Result is typically ready (task completed ~1.5s
-                // before we arrive here), so this await returns immediately.
+                // fix2/fix30: Consume the TVEmbedded pre-fetch started concurrently with the
+                // race paths (fix2: AndroidVR rqh=1 timeout on tvOS; fix30: race group on iOS).
+                // Result is typically ready (task completed before we arrive here), so this
+                // await returns immediately.
                 let tvEmbedInfo: PlayerInfo
                 if let earlyTask = tvEmbeddedEarlyTask {
                     tvEmbeddedEarlyTask = nil
-                    playerLog.notice("[TVEmbedded[\(attempt)]] fix2: consuming pre-fetched TVEmbedded result")
+                    playerLog.notice("[TVEmbedded[\(attempt)]] fix2/fix30: consuming pre-fetched TVEmbedded result")
                     if let preInfo = await earlyTask.value {
                         tvEmbedInfo = preInfo
                     } else {
@@ -252,9 +268,6 @@ extension PlaybackViewModel {
                 } else {
                     tvEmbedInfo = try await api.fetchPlayerInfoTVEmbedded(videoId: video.id)
                 }
-                #else
-                let tvEmbedInfo = try await api.fetchPlayerInfoTVEmbedded(videoId: video.id)
-                #endif
                 if await tryAllStreams(video: video, info: tvEmbedInfo,
                                       label: "TVEmbedded[\(attempt)]", skipMuxed: true) {
                     return
@@ -1203,7 +1216,13 @@ extension PlaybackViewModel {
                 #if os(tvOS)
                 let timeoutNs: UInt64 = isVRAttempt ? 2_000_000_000 : 3_000_000_000
                 #else
-                let timeoutNs: UInt64 = (needsQuickStartup && !isVRAttempt) ? 3_000_000_000 : 8_000_000_000
+                // fix30 (task #230): Reduce adaptive composition timeout from 3 s → 1.5 s
+                // for iOS first-video loads (needsQuickStartup && !isVRAttempt). The adaptive
+                // loadTracks race rarely resolves between 1.5 s and 3 s for non-VR clients;
+                // when rqh=1 blocks the URL the CDN returns 403 almost immediately. Failing
+                // faster lets exhaustiveRetry reach the serial phases (TVEmbedded, which has
+                // a pre-fetched result from fix30) 1.5 s earlier.
+                let timeoutNs: UInt64 = (needsQuickStartup && !isVRAttempt) ? 1_500_000_000 : 8_000_000_000
                 #endif
                 Task.detached {
                     try? await Task.sleep(nanoseconds: timeoutNs)
@@ -1219,7 +1238,7 @@ extension PlaybackViewModel {
                     #if os(tvOS)
                     let timeoutSec = isVRAttempt ? 2 : 3
                     #else
-                    let timeoutSec = (needsQuickStartup && !isVRAttempt) ? 3 : 8
+                    let timeoutSec = (needsQuickStartup && !isVRAttempt) ? 1 : 8  // 1.5s → display as 1s (fix30)
                     #endif
                     let reason = "timed out after \(timeoutSec)s or loadTracks failed"
                     playerLog.error("❌ [\(label)/adaptive] loadTracks \(reason) (rqh=\(videoRqh))")
