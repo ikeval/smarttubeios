@@ -127,7 +127,7 @@ extension PlaybackViewModel {
         // return cachedArtwork (nil until the background fetch completes, then the image).
         if let thumbURL = video.thumbnailURL {
             let artwork = MPMediaItemArtwork(boundsSize: CGSize(width: 600, height: 600)) { [weak self] _ in
-                self?.cachedArtwork
+                self?.cachedArtwork ?? UIImage()
             }
             nowPlayingInfoCache[MPMediaItemPropertyArtwork] = artwork
 
