@@ -965,6 +965,35 @@ extension InnerTubeAPI {
                 .flatMap { $0["percentDurationWatched"] as? Double } }
             .first.map { $0 / 100.0 }
 
+        // isShort: apply same 4 signals as parseVideoRenderer (BUG-019 fix).
+        // playlistVideoRenderer items appear in Home, Subscriptions, and History feeds
+        // and previously had isShort hard-coded to false, bypassing all hideShorts filtering.
+        let isShort: Bool = {
+            // Primary: reelWatchEndpoint in navigationEndpoint
+            if let nav = r["navigationEndpoint"] as? [String: Any], nav["reelWatchEndpoint"] != nil {
+                if duration.map({ $0 <= 180 }) ?? true { return true }
+            }
+            // Secondary: thumbnailOverlayTimeStatusRenderer.style == "SHORTS"
+            let hasShortOverlay = (r["thumbnailOverlays"] as? [[String: Any]])?.contains {
+                ($0["thumbnailOverlayTimeStatusRenderer"] as? [String: Any])?["style"] as? String == "SHORTS"
+            } ?? false
+            if hasShortOverlay && (duration.map { $0 <= 180 } ?? true) { return true }
+            // Tertiary: ustreamerConfig == "GgIIBQ=="
+            let watchEndpoint = (r["navigationEndpoint"] as? [String: Any])?["watchEndpoint"] as? [String: Any]
+            if watchEndpoint?["ustreamerConfig"] as? String == "GgIIBQ=="
+               && (duration.map { $0 <= 180 } ?? true) { return true }
+            // Quaternary: vertical thumbnail (height > width), guarded by duration
+            let isVerticalThumbnail = thumbnails?.contains {
+                let w = ($0["width"] as? Int) ?? 0
+                let h = ($0["height"] as? Int) ?? 0
+                return h > w && w > 0
+            } ?? false
+            return isVerticalThumbnail && (duration.map { $0 <= 180 } ?? true)
+        }()
+        if isShort {
+            tubeLog.debug("playlistVideoRenderer isShort=true id=\(videoId, privacy: .public) duration=\(Int(duration ?? -1))")
+        }
+
         let publishedTimeText: String? = (r["publishedTimeText"] as? [String: Any]).flatMap { extractText($0) }
         let publishedAt: Date? = publishedTimeText.flatMap { parseRelativeDate($0) }
         let _ptp = publishedTimeText ?? "nil"
@@ -981,7 +1010,7 @@ extension InnerTubeAPI {
             publishedAt: publishedAt,
             publishedTimeText: publishedTimeText,
             isLive: false,
-            isShort: false,
+            isShort: isShort,
             watchProgress: watchProgress,
             badges: []
         )

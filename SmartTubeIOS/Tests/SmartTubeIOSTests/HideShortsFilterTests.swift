@@ -240,3 +240,91 @@ extension HideShortsFilterTests {
         #expect(result.first?.id == "regular1")
     }
 }
+
+// MARK: - Task #231: parsePlaylistVideoRenderer isShort detection (BUG-019)
+
+extension HideShortsFilterTests {
+
+    private func playlistVideoRendererJSON(videoId: String, extras: [String: Any] = [:]) -> [String: Any] {
+        var renderer: [String: Any] = [
+            "videoId": videoId,
+            "title": ["simpleText": videoId],
+            "shortBylineText": ["runs": [["text": "Channel"]]],
+            "thumbnail": ["thumbnails": [["url": "https://example.com/thumb.jpg", "width": 120, "height": 90]]],
+        ]
+        for (k, v) in extras { renderer[k] = v }
+        return ["playlistVideoRenderer": renderer]
+    }
+
+    @Test("playlistVideoRenderer with reelWatchEndpoint is parsed as a Short")
+    func playlistVideoRendererReelEndpoint_isShortTrue() async throws {
+        let json: [String: Any] = [
+            "items": [
+                playlistVideoRendererJSON(videoId: "SHORT_PV_1", extras: [
+                    "navigationEndpoint": ["reelWatchEndpoint": ["videoId": "SHORT_PV_1"]],
+                    "lengthText": ["simpleText": "0:30"]
+                ])
+            ]
+        ]
+        let api = InnerTubeAPI()
+        let group = try await api.parseVideoGroupForTesting(json, title: nil)
+        #expect(group.videos.count == 1)
+        #expect(group.videos.first?.id == "SHORT_PV_1")
+        #expect(group.videos.first?.isShort == true, "playlistVideoRenderer with reelWatchEndpoint must be isShort")
+    }
+
+    @Test("playlistVideoRenderer with watchEndpoint is parsed as a regular video")
+    func playlistVideoRendererWatchEndpoint_isShortFalse() async throws {
+        let json: [String: Any] = [
+            "items": [
+                playlistVideoRendererJSON(videoId: "VIDEO_PV_1", extras: [
+                    "navigationEndpoint": ["watchEndpoint": ["videoId": "VIDEO_PV_1"]],
+                    "lengthText": ["simpleText": "5:00"]
+                ])
+            ]
+        ]
+        let api = InnerTubeAPI()
+        let group = try await api.parseVideoGroupForTesting(json, title: nil)
+        #expect(group.videos.count == 1)
+        #expect(group.videos.first?.id == "VIDEO_PV_1")
+        #expect(group.videos.first?.isShort == false, "playlistVideoRenderer with watchEndpoint must not be isShort")
+    }
+
+    @Test("playlistVideoRenderer Short is hidden when hideShorts is enabled")
+    func playlistVideoRendererShort_hiddenWhenHideShortsEnabled() async throws {
+        let json: [String: Any] = [
+            "items": [
+                playlistVideoRendererJSON(videoId: "SHORT_PV_2", extras: [
+                    "navigationEndpoint": ["reelWatchEndpoint": ["videoId": "SHORT_PV_2"]],
+                    "lengthText": ["simpleText": "0:45"]
+                ]),
+                playlistVideoRendererJSON(videoId: "VIDEO_PV_2", extras: [
+                    "navigationEndpoint": ["watchEndpoint": ["videoId": "VIDEO_PV_2"]],
+                    "lengthText": ["simpleText": "10:00"]
+                ])
+            ]
+        ]
+        let api = InnerTubeAPI()
+        let group = try await api.parseVideoGroupForTesting(json, title: nil)
+        let visible = apply(hideShorts: true, to: group.videos)
+        #expect(visible.count == 1)
+        #expect(visible.first?.id == "VIDEO_PV_2", "Only regular video should survive the filter")
+    }
+
+    @Test("playlistVideoRenderer with reelWatchEndpoint but long duration is NOT a Short")
+    func playlistVideoRendererReelEndpointLongDuration_isShortFalse() async throws {
+        // Duration guard: 3 min 01 sec > 180 s → should NOT be classified as Short
+        let json: [String: Any] = [
+            "items": [
+                playlistVideoRendererJSON(videoId: "LONG_PV_1", extras: [
+                    "navigationEndpoint": ["reelWatchEndpoint": ["videoId": "LONG_PV_1"]],
+                    "lengthText": ["simpleText": "3:01"]
+                ])
+            ]
+        ]
+        let api = InnerTubeAPI()
+        let group = try await api.parseVideoGroupForTesting(json, title: nil)
+        #expect(group.videos.count == 1)
+        #expect(group.videos.first?.isShort == false, "Video > 180s with reelWatchEndpoint must not be classified as Short")
+    }
+}
