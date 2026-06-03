@@ -383,18 +383,25 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         // to suppress xhrManifest/fetchManifest fallbacks from firing.
         var hlsExtractionStarted = false;
 
-        function sendHLSURL(hlsUrl, poToken, source, unsolvedN, solvedN, playerID) {
+        function sendHLSURL(hlsUrl, poToken, source, unsolvedN, solvedN, playerID, capturedPageVideoId) {
             if (sentFinalURL) return;
             sentFinalURL = true;
             // fix29: Include the page's own videoId so Swift can reject stale JS
             // callbacks that fire after wv.load() switches to a new video. Without
             // this check, a pending XHR or fetch .then() from the PREVIOUS page can
             // deliver the wrong video's HLS URL into the current extraction.
-            var vid = null;
-            try {
-                var m = window.location.href.match(/[?&]v=([^&]+)/);
-                vid = m ? m[1] : null;
-            } catch(e) {}
+            // fix29b: Prefer capturedPageVideoId (read at request setup time) over
+            // window.location.href. Stale async callbacks fire AFTER wv navigates to
+            // the new page, so window.location.href already shows the NEW video's ID —
+            // breaking fix29's guard. Capturing at open()/fetch() call time preserves
+            // the correct ID regardless of subsequent page navigation.
+            var vid = capturedPageVideoId;
+            if (!vid) {
+                try {
+                    var m = window.location.href.match(/[?&]v=([^&]+)/);
+                    vid = m ? m[1] : null;
+                } catch(e) {}
+            }
             window.webkit.messageHandlers.hlsExtractor.postMessage(
                 JSON.stringify({
                     hlsManifestUrl: hlsUrl,
@@ -513,7 +520,7 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         }
 
         // ── Main extraction ───────────────────────────────────────────────────────────
-        function tryExtractHLS(responseData, requestBodyStr) {
+        function tryExtractHLS(responseData, requestBodyStr, capturedPageVideoId) {
             if (sentFinalURL || hlsExtractionStarted) return false;
             try {
                 var obj = (typeof responseData === 'string') ?
@@ -570,7 +577,7 @@ final class YouTubeWebViewHLSExtractor: NSObject {
 
                     // Fallback timer: if async chain takes >20 s, send whatever we have.
                     var fallbackTimer = setTimeout(function() {
-                        sendHLSURL(hlsUrl, poToken, 'apiResponse', hlsN, solvedN, playerID);
+                        sendHLSURL(hlsUrl, poToken, 'apiResponse', hlsN, solvedN, playerID, capturedPageVideoId);
                     }, 20000);
 
                     try {
@@ -590,7 +597,7 @@ final class YouTubeWebViewHLSExtractor: NSObject {
 
                     clearTimeout(fallbackTimer);
                     // Include playerID so Swift can run the Node.js solver as fallback.
-                    sendHLSURL(hlsUrl, poToken, 'apiResponse', hlsN, solvedN, playerID);
+                    sendHLSURL(hlsUrl, poToken, 'apiResponse', hlsN, solvedN, playerID, capturedPageVideoId);
                 })();
 
                 return true;
@@ -604,8 +611,14 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         if (origSrcDesc && origSrcDesc.set) {
             Object.defineProperty(mediaProto, 'src', {
                 set: function(url) {
-                    if (url && typeof url === 'string' && isManifestVariantURL(url))
-                        sendHLSURL(url, null, 'videoSrc', null, null);
+                    if (url && typeof url === 'string' && isManifestVariantURL(url)) {
+                        var pageVid = null;
+                        try {
+                            var m = window.location.href.match(/[?&]v=([^&]+)/);
+                            pageVid = m ? m[1] : null;
+                        } catch(e) {}
+                        sendHLSURL(url, null, 'videoSrc', null, null, null, pageVid);
+                    }
                     return origSrcDesc.set.call(this, url);
                 },
                 get: origSrcDesc.get,
@@ -622,17 +635,27 @@ final class YouTubeWebViewHLSExtractor: NSObject {
             this.__isPlayerReq   = isPlayerURL(urlStr);
             this.__isManifestReq = isManifestVariantURL(urlStr);
             if (this.__isManifestReq) this.__manifestUrl = urlStr;
+            // fix29b: Capture page videoId at open() time, before any async page
+            // navigation. Stale .then() callbacks read window.location.href AFTER
+            // wv navigates — by then it shows the new video's ID, bypassing fix29.
+            if (this.__isPlayerReq || this.__isManifestReq) {
+                try {
+                    var m = window.location.href.match(/[?&]v=([^&]+)/);
+                    this.__pageVideoId = m ? m[1] : null;
+                } catch(e) { this.__pageVideoId = null; }
+            }
             return origOpen.apply(this, arguments);
         };
 
         XMLHttpRequest.prototype.send = function(body) {
             // xhrManifest fallback — only fires if player API never responded
             if (this.__isManifestReq && this.__manifestUrl && !hlsExtractionStarted)
-                sendHLSURL(this.__manifestUrl, null, 'xhrManifest', null, null);
+                sendHLSURL(this.__manifestUrl, null, 'xhrManifest', null, null, null, this.__pageVideoId);
             if (this.__isPlayerReq) {
                 var capturedBody = (typeof body === 'string') ? body : null;
+                var capturedPageVideoId = this.__pageVideoId;  // fix29b: captured at open() time
                 this.addEventListener('load', function() {
-                    tryExtractHLS(this.responseText, capturedBody);
+                    tryExtractHLS(this.responseText, capturedBody, capturedPageVideoId);
                 });
             }
             return origSend.apply(this, arguments);
@@ -644,6 +667,14 @@ final class YouTubeWebViewHLSExtractor: NSObject {
             var url = (typeof input === 'string') ? input :
                       (input && (input.url || input.href)) || '';
             var bodyStr = null;
+            // fix29b: Capture page videoId at fetch() call time, before any async
+            // navigation. The .then() callback fires asynchronously and may read
+            // a different window.location.href if wv has navigated by then.
+            var capturedPageVideoId = null;
+            try {
+                var m = window.location.href.match(/[?&]v=([^&]+)/);
+                capturedPageVideoId = m ? m[1] : null;
+            } catch(e) {}
             try {
                 if (isPlayerURL(url) && init && init.body)
                     bodyStr = (typeof init.body === 'string') ? init.body : null;
@@ -653,12 +684,12 @@ final class YouTubeWebViewHLSExtractor: NSObject {
             if (isManifestVariantURL(url)) {
                 // fetchManifest fallback — only fires if player API never responded
                 if (!hlsExtractionStarted)
-                    sendHLSURL(url, null, 'fetchManifest', null, null);
+                    sendHLSURL(url, null, 'fetchManifest', null, null, null, capturedPageVideoId);
             } else if (isPlayerURL(url)) {
                 var capturedBody = bodyStr;
                 promise.then(function(response) {
                     return response.clone().text().then(function(text) {
-                        tryExtractHLS(text, capturedBody);
+                        tryExtractHLS(text, capturedBody, capturedPageVideoId);
                     });
                 }).catch(function() {});
             }
@@ -668,8 +699,14 @@ final class YouTubeWebViewHLSExtractor: NSObject {
         // ── DOMContentLoaded fallback ─────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', function() {
             try {
-                if (window.ytInitialPlayerResponse)
-                    tryExtractHLS(window.ytInitialPlayerResponse, null);
+                if (window.ytInitialPlayerResponse) {
+                    var vid = null;
+                    try {
+                        var m = window.location.href.match(/[?&]v=([^&]+)/);
+                        vid = m ? m[1] : null;
+                    } catch(e) {}
+                    tryExtractHLS(window.ytInitialPlayerResponse, null, vid);
+                }
             } catch(e) {}
         });
     })();
