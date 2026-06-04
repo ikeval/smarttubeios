@@ -39,5 +39,7 @@
 	<string>public.app-category.entertainment</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>None</string>
+	<key>NSApplicationCrashOnExceptions</key>
+	<true/>
 </dict>
 </plist>

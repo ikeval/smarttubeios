@@ -2,7 +2,7 @@ import SwiftUI
 import CoreImage
 import CoreImage.CIFilterBuiltins
 #if os(macOS)
-import AuthenticationServices
+import AppKit
 #endif
 
 // MARK: - SignInView
@@ -15,9 +15,6 @@ public struct SignInView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var showError = false
-    #if os(macOS)
-    @State private var webAuthSession: ASWebAuthenticationSession?
-    #endif
 
     public init() {}
 
@@ -202,22 +199,18 @@ public struct SignInView: View {
     }
 
     #if os(macOS)
-    /// Opens the activation URL in an in-app ASWebAuthenticationSession sheet.
-    /// The app's poll loop already handles token acquisition; we don't need the
-    /// redirect callback — we just keep the session alive until the user closes it.
+    /// Opens the activation URL in the system default browser.
+    ///
+    /// `ASWebAuthenticationSession` was tried here but crashes reliably on macOS
+    /// when the user closes Safari: the SafariLaunchAgent XPC teardown fires on a
+    /// non-main thread and AppKit's sheet dismissal path calls `dispatch_assert_queue`
+    /// against the main queue → `_dispatch_assert_queue_fail`.  Since Device
+    /// Authorization Grant never needs a redirect callback, a plain browser open is
+    /// both simpler and crash-free.
     @MainActor
     private func openActivationPageMac(info: AuthService.ActivationInfo) {
         guard let url = URL(string: activationQRURL(info: info)) else { return }
-        let session = ASWebAuthenticationSession(
-            url: url,
-            callbackURLScheme: "smarttube"  // never invoked; user closes the sheet manually
-        ) { _, _ in
-            // Token acquisition is handled by AuthService.pollForToken — nothing to do here.
-        }
-        session.prefersEphemeralWebBrowserSession = false
-        session.presentationContextProvider = MacPresentationAnchor.shared
-        session.start()
-        webAuthSession = session  // retain so the sheet stays alive
+        NSWorkspace.shared.open(url)
     }
     #endif
 

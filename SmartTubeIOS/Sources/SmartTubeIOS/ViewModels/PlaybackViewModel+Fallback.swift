@@ -531,6 +531,14 @@ extension PlaybackViewModel {
                     case .readyToPlay:
                         playerLog.notice("[benchmark] readyToPlay — BotGuardWV/proxy-HLS — videoId=\(video.id)")
                         timeToPlayMs = Int(Date().timeIntervalSince(videoLoadStartedAt) * 1000)
+                        if timeToPlayMs > 4_000 {
+                            CrashlyticsLogger.recordSlowVideoLoad(
+                                videoId: video.id,
+                                elapsedMs: timeToPlayMs,
+                                streamType: "BotGuardWV/proxyHLS",
+                                hasError: false
+                            )
+                        }
                         playerLog.notice("[BotGuardWV] ✅ Path A won — proxy HLS")
                         return true
                     case .failed:
@@ -1048,6 +1056,14 @@ extension PlaybackViewModel {
                 isLoading = false
                 timeToPlayMs = Int(Date().timeIntervalSince(videoLoadStartedAt) * 1000)
                 lastSuccessfulStreamType = label
+                if timeToPlayMs > 4_000 {
+                    CrashlyticsLogger.recordSlowVideoLoad(
+                        videoId: video.id,
+                        elapsedMs: timeToPlayMs,
+                        streamType: label,
+                        hasError: false
+                    )
+                }
                 player.rate = Float(settings.playbackSpeed)
                 isPlaying = true
                 launchPhase2(video: video, info: info)
@@ -1340,6 +1356,14 @@ extension PlaybackViewModel {
                     needsQuickStartup = false
                     isLoading = false
                     timeToPlayMs = Int(Date().timeIntervalSince(videoLoadStartedAt) * 1000)
+                    if timeToPlayMs > 4_000 {
+                        CrashlyticsLogger.recordSlowVideoLoad(
+                            videoId: video.id,
+                            elapsedMs: timeToPlayMs,
+                            streamType: "\(label)/adaptive",
+                            hasError: false
+                        )
+                    }
                     player.rate = Float(settings.playbackSpeed)
                     isPlaying = true
                     launchPhase2(video: video, info: info)
@@ -2101,6 +2125,14 @@ extension PlaybackViewModel {
                 isLoading = false
                 timeToPlayMs = Int(Date().timeIntervalSince(videoLoadStartedAt) * 1000)
                 lastSuccessfulStreamType = "webView/HLS"
+                if timeToPlayMs > 4_000 {
+                    CrashlyticsLogger.recordSlowVideoLoad(
+                        videoId: video.id,
+                        elapsedMs: timeToPlayMs,
+                        streamType: "webView/HLS",
+                        hasError: false
+                    )
+                }
                 player.rate = Float(settings.playbackSpeed)
                 isPlaying = true
                 qualityManager.isMuxedFallback = false
