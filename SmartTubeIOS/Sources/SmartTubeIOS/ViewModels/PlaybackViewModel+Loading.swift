@@ -1038,8 +1038,28 @@ extension PlaybackViewModel {
             // the broken auth token. Only applies when signed-in — unsigned users
             // hitting truly age-restricted content get the error immediately.
             // Firebase: 0edf6a2f (AutoDiagnostic(1)) + db9e0581 (APIError(6)).
-            if let apiErr = error as? APIError, case .signInRequired = apiErr, hasAuthToken {
-                playerLog.notice("⚠️ signInRequired from primary client (signed-in user) — routing to exhaustiveRetry for fallback clients")
+            //
+            // httpError(403) from the authenticated TV client is the same class of failure:
+            // a stale/expired auth token causes YouTube to return a raw HTTP 403 (no JSON
+            // body) instead of a LOGIN_REQUIRED playabilityStatus. Since signInRequired
+            // detection requires a parseable body, these arrive here as httpError(403).
+            // Route them to exhaustiveRetry too — unauthenticated fallback clients may
+            // succeed without the broken token. Firebase: 5f445659 (APIError(0) HTTP 403).
+            let shouldRetryWithFallback: Bool
+            if let apiErr = error as? APIError {
+                switch apiErr {
+                case .signInRequired:
+                    shouldRetryWithFallback = hasAuthToken
+                case .httpError(403):
+                    shouldRetryWithFallback = hasAuthToken
+                default:
+                    shouldRetryWithFallback = false
+                }
+            } else {
+                shouldRetryWithFallback = false
+            }
+            if shouldRetryWithFallback {
+                playerLog.notice("⚠️ \(error.localizedDescription) from primary client (signed-in user) — routing to exhaustiveRetry for fallback clients")
                 exhaustiveRetryTask?.cancel()
                 exhaustiveRetryTask = Task { [weak self] in
                     await self?.exhaustiveRetry(video: video, originalError: error)
