@@ -48,6 +48,18 @@ extension PlayerView {
                 // into the accessibility tree so XCUITest can always read it.
                 .accessibilityHidden(false)
                 .allowsHitTesting(false)
+            // Probe stream result — only present during single-method probe runs.
+            // Exposes the stream type + max resolution so StreamMethodProbeUITests
+            // can read it without needing to parse device logs.
+            if let result = vm.probeStreamResult {
+                Text(result)
+                    .font(.caption)
+                    .opacity(0)
+                    .accessibilityIdentifier("player.probeStreamResult")
+                    .accessibilityLabel(result)
+                    .accessibilityHidden(false)
+                    .allowsHitTesting(false)
+            }
         }
         #if !os(tvOS)
         .padding(.top, 60)

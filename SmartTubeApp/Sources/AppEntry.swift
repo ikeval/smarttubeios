@@ -61,6 +61,17 @@ struct AppEntry: App {
         _playerStateStore = State(initialValue: PlayerStateStore(api: api))
         #endif
         _cardDownloadService = State(initialValue: VideoDownloadService(api: api))
+
+        // --uitesting-force-stream-method=<method>: restricts exhaustiveRetry to a
+        // single named stream-fetching client.  Written here (main thread, before any
+        // concurrent work) so the nonisolated(unsafe) static is safe to read later.
+        if let arg = ProcessInfo.processInfo.arguments
+                .first(where: { $0.hasPrefix("--uitesting-force-stream-method=") }) {
+            let method = String(arg.dropFirst("--uitesting-force-stream-method=".count))
+            if !method.isEmpty {
+                StreamMethodProbeSupport.forcedStreamMethod = method
+            }
+        }
     }
 
     /// When launched with `--uitesting-shorts` the app skips the full navigation

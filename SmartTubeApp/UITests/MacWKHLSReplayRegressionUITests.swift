@@ -1,3 +1,4 @@
+#if os(macOS)
 import XCTest
 
 // AGENT-POST-RUN-CHECK: ui-tests-with-logs
@@ -234,3 +235,4 @@ private extension XCUIElement {
         }
     }
 }
+#endif

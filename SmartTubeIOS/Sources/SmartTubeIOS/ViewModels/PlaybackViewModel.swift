@@ -38,6 +38,10 @@ public final class PlaybackViewModel {
     /// enters the multi-phase stream-negotiation fallback chain. `nil` while the
     /// fast path is still in-flight or after loading completes.
     public internal(set) var retryStatusMessage: String? = nil
+    /// Populated by `probeStreamMethod` after a successful single-method probe.
+    /// Format: `"HLS 1080p"`, `"1080p"`, `"1080p rqh=1"`, `"muxed 720p"`, `"WKWebView-HLS"`, etc.
+    /// `nil` in normal (non-probe) playback. Read by `player.probeStreamResult` accessibility element.
+    var probeStreamResult: String? = nil
     /// True only during the initial load sequence (before first readyToPlay).
     /// The 8s loadTracks timeout in attemptComposition is applied only while this
     /// flag is set, giving fast startup (≤20 s) for the initial stream.
