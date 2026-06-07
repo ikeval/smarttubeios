@@ -75,30 +75,80 @@ final class TOSPlayerViewModel: NSObject {
     /// The segment currently showing a skip toast, if any.
     var currentToastSegment: SponsorSegment? = nil
 
+    // MARK: - Like / Dislike / Sleep Timer
+    //
+    // Transferred from PlaybackViewModel+LikeDislike.swift / +SleepTimer.swift —
+    // see TOSPlayerViewModel+LikeDislike.swift / +SleepTimer.swift for the
+    // `like()`/`dislike()`/`setSleepTimer(minutes:)` implementations. Both features
+    // are pure API/timer operations with no AVPlayer dependency, so they port
+    // verbatim. State lives here (with the rest of the model's @Observable storage);
+    // mutation is split out to extension files mirroring the PlaybackViewModel+*
+    // pattern — hence `internal` rather than `private(set)`/`private`, the same
+    // trade-off PlaybackViewModel makes with `public internal(set)`.
+
+    /// Optimistically updated in like()/dislike(); rolled back on API failure.
+    /// Seeded from cached `nextInfo.likeStatus` in `beginWatchtimeTracking()`.
+    var likeStatus: LikeStatus = .none
+    /// Non-nil while a sleep-timer countdown is active; drives the moreButton's label
+    /// and the checkmark in its picker submenu. Mirrors `PlaybackViewModel.sleepTimerMinutes`.
+    var sleepTimerMinutes: Int? = nil
+    @ObservationIgnored var sleepTimerTask: Task<Void, Never>?
+
     // MARK: - Dependencies
 
     private(set) var settings: AppSettings = AppSettings()
-    private let sponsorService = SponsorBlockService()
+    /// Used by `fetchSponsorSegments()` (TOSPlayerViewModel+SponsorBlock.swift).
+    let sponsorService = SponsorBlockService()
+    /// Used directly by like()/dislike() (TOSPlayerViewModel+LikeDislike.swift —
+    /// pure InnerTubeAPI calls, no AVPlayer dependency) and to construct `tracker` below.
+    let api: InnerTubeAPI
+    /// Drives watch-position checkpointing (VideoStateStore) and watch-history
+    /// reporting (InnerTubeAPI) — parity with the standard PlaybackViewModel's
+    /// `tracker`. See `beginWatchtimeTracking()`/`saveProgress()`
+    /// (TOSPlayerViewModel+WatchHistory.swift) for where this is begun/used.
+    let tracker: WatchtimeTracker
 
     // MARK: - Internal
 
     let webView: WKWebView
-    private let videoId: String
+    /// Used by `fetchSponsorSegments()`/`beginWatchtimeTracking()`/`saveProgress()`/
+    /// `like()`/`dislike()` — all in extension files, hence `internal` not `private`.
+    let videoId: String
+    /// Used to respect `settings.sponsorBlockExcludedChannels` — mirrors the
+    /// channel-exclusion check in `PlaybackViewModel+Loading`'s SponsorBlock phase.
+    /// Read by `fetchSponsorSegments()` in TOSPlayerViewModel+SponsorBlock.swift.
+    let channelId: String?
     private let startTime: Double
     /// Guards against re-triggering a skip within the same segment.
-    private var activeSkipEnd: Double? = nil
+    /// Mutated by `checkSponsorSkip(at:)` in TOSPlayerViewModel+SponsorBlock.swift.
+    var activeSkipEnd: Double? = nil
+    /// Set when an auto-skip seek is fired; cleared once a subsequent "tick" confirms
+    /// where playback landed (or times out). `seekTo` is a fire-and-forget JS eval with
+    /// no completion callback, so the "after" time can only be observed asynchronously
+    /// from the next tick — never synchronously right after calling `seekTo`. See
+    /// `PendingSkipLog` / the "tick" handler in `handleScriptMessage` for the landing
+    /// check (both in TOSPlayerViewModel+SponsorBlock.swift).
+    var pendingSkipLog: PendingSkipLog? = nil
+    /// The most recently logged toast segment, so `checkSponsorSkip` logs a "toast SHOW"
+    /// notice only on the transition into a new segment — not on every tick while the
+    /// toast remains visible (which would spam the log at ~4 lines/second).
+    var lastLoggedToastSegment: SponsorSegment? = nil
     /// Strong reference to the WKWebView's navigation delegate (WKWebView retains it weakly).
     private var navigationDelegate: TOSNavigationDelegate?
     /// Fires the "tickstarted" Darwin notification on the first tick received.
-    private var hasReceivedFirstTick = false
+    /// Mutated by `handleScriptMessage(_:)` in TOSPlayerViewModel+WebBridge.swift.
+    var hasReceivedFirstTick = false
     /// Prevents loadEmbed from firing in instances SwiftUI creates-then-discards during init.
     private var hasStartedLoading = false
 
     // MARK: - Init
 
-    init(videoId: String, startTime: Double = 0) {
+    init(videoId: String, channelId: String? = nil, startTime: Double = 0, api: InnerTubeAPI) {
         self.videoId = videoId
+        self.channelId = channelId
         self.startTime = startTime
+        self.api = api
+        self.tracker = WatchtimeTracker(api: api)
 
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -188,161 +238,6 @@ final class TOSPlayerViewModel: NSObject {
 
     func setPlaybackRate(_ rate: Double) {
         eval("var v=document.querySelector('video');if(v)v.playbackRate=\(rate);")
-    }
-
-    // MARK: - JS Message Handling
-
-    /// Called from `ScriptMessageProxy` (main thread guaranteed by WKWebView).
-    func handleScriptMessage(_ body: String) {
-        guard let data = body.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String
-        else {
-            tosLog.debug("[ytCallback] unparseable message: \(body)")
-            return
-        }
-
-        switch type {
-        case "ping":
-            tosLog.notice("[ytCallback] JS<->Swift bridge ping received")
-            CFNotificationCenterPostNotification(
-                CFNotificationCenterGetDarwinNotifyCenter(),
-                CFNotificationName("com.void.smarttube.tosplayer.bridge" as CFString),
-                nil, nil, true
-            )
-
-        case "ready":
-            isReady = true
-            duration = (json["duration"] as? Double) ?? 0
-            tosLog.notice("[ytCallback] ready — duration=\(self.duration, format: .fixed(precision: 1))s")
-            CFNotificationCenterPostNotification(
-                CFNotificationCenterGetDarwinNotifyCenter(),
-                CFNotificationName("com.void.smarttube.tosplayer.ready" as CFString),
-                nil, nil, true
-            )
-            // play() is intentionally NOT called here. "ready" fires only after
-            // video.duration > 0, meaning YouTube's MSE stream is initialised.
-            // The JS pollVideo() already called video.play() at that point (see
-            // stateDetectionJS), so calling it again from Swift would be a no-op or
-            // could interrupt the stream seek in progress.
-            Task { await self.fetchSponsorSegments() }
-
-        case "stateChange":
-            let raw = (json["state"] as? Int) ?? 999
-            playerState = YTPlayerState(raw: raw)
-            tosLog.debug("[ytCallback] stateChange → \(raw)")
-            if playerState == .playing {
-                CFNotificationCenterPostNotification(
-                    CFNotificationCenterGetDarwinNotifyCenter(),
-                    CFNotificationName("com.void.smarttube.tosplayer.playing" as CFString),
-                    nil, nil, true
-                )
-            }
-
-        case "rateChange":
-            playbackRate = (json["rate"] as? Double) ?? 1.0
-
-        case "tick":
-            let t = (json["t"] as? Double) ?? 0
-            let s = (json["state"] as? Int) ?? 999
-            currentTime = t
-            let newState = YTPlayerState(raw: s)
-            if !hasReceivedFirstTick {
-                hasReceivedFirstTick = true
-                tosLog.notice("[ytCallback] first tick — state=\(s) t=\(t, format: .fixed(precision: 2))s")
-                CFNotificationCenterPostNotification(
-                    CFNotificationCenterGetDarwinNotifyCenter(),
-                    CFNotificationName("com.void.smarttube.tosplayer.tickstarted" as CFString),
-                    nil, nil, true
-                )
-            }
-            let wasActivelyPlaying = playerState == .playing || playerState == .buffering
-            let isNowActivelyPlaying = newState == .playing || newState == .buffering
-            if isNowActivelyPlaying && !wasActivelyPlaying {
-                tosLog.notice("[ytCallback] tick detected active playback (state=\(s)) — firing playing notification")
-                CFNotificationCenterPostNotification(
-                    CFNotificationCenterGetDarwinNotifyCenter(),
-                    CFNotificationName("com.void.smarttube.tosplayer.playing" as CFString),
-                    nil, nil, true
-                )
-            }
-            if newState != playerState {
-                tosLog.notice("[ytCallback] tick state: \(self.playerState.rawValue) → \(s) at t=\(t, format: .fixed(precision: 1))s")
-                CFNotificationCenterPostNotification(
-                    CFNotificationCenterGetDarwinNotifyCenter(),
-                    CFNotificationName("com.void.smarttube.tosplayer.state.\(s)" as CFString),
-                    nil, nil, true
-                )
-            }
-            playerState = newState
-            checkSponsorSkip(at: t)
-
-        case "error":
-            let code = (json["code"] as? Int) ?? -1
-            let errText = (json["text"] as? String) ?? ""
-            let errName: String
-            switch code {
-            case 2:        errName = "invalid-param";          playerError = .iframeError(code)
-            case 5:        errName = "html5-not-supported";    playerError = .iframeError(code)
-            case 100:      errName = "video-not-found";        playerError = .notFound
-            case 101, 150: errName = "embedding-disabled";     playerError = .embeddingDisabled
-            case 153:      errName = "player-config-error";    playerError = .iframeError(code)
-            default:       errName = "unknown(\(code))";       playerError = .iframeError(code)
-            }
-            tosLog.notice("[ytCallback] ❌ player error \(code) (\(errName)) text='\(errText)' isFatal=\(self.playerError?.isFatal ?? false)")
-            CFNotificationCenterPostNotification(
-                CFNotificationCenterGetDarwinNotifyCenter(),
-                CFNotificationName("com.void.smarttube.tosplayer.error.\(code)" as CFString),
-                nil, nil, true
-            )
-
-        default:
-            break
-        }
-    }
-
-    // MARK: - SponsorBlock
-
-    private func fetchSponsorSegments() async {
-        guard settings.sponsorBlockEnabled,
-              !settings.activeSponsorCategories.isEmpty
-        else { return }
-
-        let segments = await sponsorService.fetchSegments(
-            videoId: videoId,
-            categories: settings.activeSponsorCategories
-        )
-        sponsorSegments = segments
-        tosLog.notice("[SponsorBlock] loaded \(segments.count) segment(s) for \(self.videoId)")
-    }
-
-    private func checkSponsorSkip(at time: Double) {
-        guard settings.sponsorBlockEnabled else {
-            currentToastSegment = nil
-            return
-        }
-
-        if let end = activeSkipEnd, time >= end { activeSkipEnd = nil }
-
-        guard let seg = sponsorSegments.first(where: { time >= $0.start && time < $0.end }) else {
-            currentToastSegment = nil
-            return
-        }
-
-        switch settings.sponsorAction(for: seg.category) {
-        case .skip:
-            guard activeSkipEnd == nil else { return }
-            activeSkipEnd = seg.end
-            currentToastSegment = nil
-            seekTo(seg.end)
-            tosLog.notice("[SponsorBlock] auto-skip \(seg.category.rawValue) → \(seg.end, format: .fixed(precision: 1))s")
-
-        case .showToast:
-            currentToastSegment = seg
-
-        case .nothing:
-            currentToastSegment = nil
-        }
     }
 
     // MARK: - Private helpers

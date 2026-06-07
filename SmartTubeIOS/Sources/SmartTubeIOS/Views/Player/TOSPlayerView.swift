@@ -15,7 +15,7 @@ private let tosViewLog = Logger(subsystem: "com.void.smarttube.app", category: "
 // Entry path:
 //   MainSidebarView (RootView.swift)
 //     └─ store.settings.useTOSPlayerOnMac == true
-//          └─ TOSPlayerView(video:)
+//          └─ TOSPlayerView(video:api:)
 //
 // When the IFrame player returns error 101/150 (embedding disabled) or 100
 // (not found), `playerError.isFatal` is true and this view calls `onFallback`
@@ -30,15 +30,19 @@ public struct TOSPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(SettingsStore.self) private var store
     @Environment(BrowseViewModel.self) private var browseVM
+    @Environment(AuthService.self) private var authService
 
     @State private var vm: TOSPlayerViewModel
 
-    public init(video: Video, onFallback: @escaping () -> Void = {}) {
+    public init(video: Video, api: InnerTubeAPI, onFallback: @escaping () -> Void = {}) {
         self.video = video
         self.onFallback = onFallback
         // startTime defaults to 0; saved position is restored asynchronously
         // in .task once the view has appeared (see body below).
-        _vm = State(initialValue: TOSPlayerViewModel(videoId: video.id, startTime: 0))
+        // `api` is threaded through so TOSPlayerViewModel can drive a WatchtimeTracker
+        // (history/position-checkpoint parity with the standard PlayerView — see
+        // TOSPlayerViewModel.saveProgress()).
+        _vm = State(initialValue: TOSPlayerViewModel(videoId: video.id, channelId: video.channelId, startTime: 0, api: api))
     }
 
     public var body: some View {
@@ -49,6 +53,12 @@ public struct TOSPlayerView: View {
 
             // MARK: Close button (top-left, always visible)
             closeButton
+
+            // MARK: Top-right control cluster — more menu (like/dislike, sleep
+            // timer, share) + playback speed picker. See topRightControls for why
+            // these are native Menus rather than ports of the standard player's
+            // custom overlay views.
+            topRightControls
 
             // MARK: SponsorBlock skip toast (bottom-centre)
             if let seg = vm.currentToastSegment {
@@ -75,6 +85,30 @@ public struct TOSPlayerView: View {
         .onAppear {
             vm.updateSettings(store.settings)
             vm.startIfNeeded()
+        }
+        // Pause the embedded <video> element when this view leaves the hierarchy —
+        // via the close button, the Esc key, or a fallback transition. Without this,
+        // the WKWebView keeps playing (and audio keeps being heard) after the player
+        // UI has been dismissed, since nothing else stops it.
+        //
+        // saveProgress() mirrors the standard PlayerView's vm.suspend()/vm.stop() —
+        // both of which checkpoint the watch position from the same onDisappear hook
+        // (see PlayerView+Lifecycle.swift). Without it, closing a TOS-played video
+        // silently lost the watch position (resume-from-last-position and "continue
+        // watching"/history never worked for TOS sessions — see WatchtimeTracker).
+        .onDisappear {
+            vm.pause()
+            vm.saveProgress()
+        }
+        // Esc key closes the player. This is currently the ONLY alternative to the
+        // on-screen close button — TOSPlayerView is presented as a conditional
+        // full-window overlay (RootView: `if let video = browseVM.deepLinkedVideo`),
+        // not pushed onto a NavigationStack, so the toolbar's "Back" chevron belongs
+        // to the browse content underneath and does not affect this overlay at all.
+        // Mirrors closeButton's action exactly (see below).
+        .onExitCommand {
+            browseVM.deepLinkedVideo = nil
+            dismiss()
         }
         // Restore saved watch position asynchronously.
         // We seek once the player reports .playing or .paused (i.e. after onReady fires)
@@ -122,6 +156,145 @@ public struct TOSPlayerView: View {
         .padding(.leading, 16)
         .accessibilityIdentifier("tosPlayer.closeButton")
         .accessibilityLabel("Close")
+    }
+
+    // MARK: - Top-right control cluster (speed + more)
+    //
+    // Both rendered as native macOS `Menu`s rather than the standard player's custom
+    // overlay+backdrop pickers / more-menu sheet: controls:1 leaves no "more menu"
+    // affordance to anchor a picker sheet from, and a Menu needs no new
+    // dismissal/animation/focus state of its own — it's the idiomatic macOS control
+    // for "pick one of a short list", and a `Menu`-of-`Menu`s is itself a minimal,
+    // zero-new-state stand-in for the "more menu" the architecture analysis flagged
+    // as a prerequisite for richer transfers (queue, captions, description, etc.) —
+    // this is the lightest possible version of that affordance, available today
+    // without waiting on the controls:0 fork.
+    private var topRightControls: some View {
+        HStack(spacing: 8) {
+            Spacer()
+            moreButton
+            speedButton
+        }
+        .padding(.top, 16)
+        .padding(.trailing, 16)
+    }
+
+    /// Transferred from PlayerView+PickerOverlays.speedPickerOverlay — same source of
+    /// truth (`AppSettings.availableSpeeds` / `store.settings.playbackSpeed`) and the
+    /// same JS-bridge call (`vm.setPlaybackRate`). Current rate is read live from
+    /// `vm.playbackRate`, which the JS bridge already reports via "rateChange"/"tick".
+    private var speedButton: some View {
+        Menu {
+            ForEach(AppSettings.availableSpeeds, id: \.self) { speed in
+                Button {
+                    store.settings.playbackSpeed = speed
+                    vm.setPlaybackRate(speed)
+                } label: {
+                    if abs(vm.playbackRate - speed) < 0.01 {
+                        Label(speedLabel(for: speed), systemImage: "checkmark")
+                    } else {
+                        Text(speedLabel(for: speed))
+                    }
+                }
+            }
+        } label: {
+            Text(speedLabel(for: vm.playbackRate))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("tosPlayer.speedButton")
+        .accessibilityLabel("Playback speed")
+    }
+
+    private func speedLabel(for speed: Double) -> String {
+        speed == 1.0 ? "Normal (1\u{d7})" : String(format: "%.2g\u{d7}", speed)
+    }
+
+    // MARK: - More menu (Like/Dislike, Sleep Timer, Share)
+    //
+    // Transfer of three self-contained, AVPlayer-independent standard-player features
+    // that previously had zero presence in TOS:
+    //   • Like/Dislike  — PlaybackViewModel+LikeDislike.swift: pure InnerTubeAPI calls
+    //                     with optimistic update + rollback. Gated on sign-in, mirroring
+    //                     moreMenuLikeDislikeRow's `if authService.isSignedIn` guard.
+    //   • Sleep Timer   — PlaybackViewModel+SleepTimer.swift: schedules a Task that
+    //                     calls player.pause(); TOS only needed vm.pause() to slot in.
+    //   • Share         — pure metadata (no player dependency at all).
+    private var moreButton: some View {
+        Menu {
+            if authService.isSignedIn {
+                Button {
+                    vm.like()
+                } label: {
+                    Label(vm.likeStatus == .like ? "Liked" : "Like",
+                          systemImage: vm.likeStatus == .like ? "hand.thumbsup.fill" : "hand.thumbsup")
+                }
+                .accessibilityIdentifier("tosPlayer.moreMenu.likeRow")
+
+                Button {
+                    vm.dislike()
+                } label: {
+                    Label(vm.likeStatus == .dislike ? "Disliked" : "Dislike",
+                          systemImage: vm.likeStatus == .dislike ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                }
+                .accessibilityIdentifier("tosPlayer.moreMenu.dislikeRow")
+
+                Divider()
+            }
+
+            Menu {
+                Button {
+                    vm.setSleepTimer(minutes: nil)
+                } label: {
+                    if vm.sleepTimerMinutes == nil {
+                        Label("Off", systemImage: "checkmark")
+                    } else {
+                        Text("Off")
+                    }
+                }
+                ForEach(PlaybackViewModel.sleepTimerOptions, id: \.self) { mins in
+                    Button {
+                        vm.setSleepTimer(minutes: mins)
+                    } label: {
+                        if vm.sleepTimerMinutes == mins {
+                            Label("\(mins) minutes", systemImage: "checkmark")
+                        } else {
+                            Text("\(mins) minutes")
+                        }
+                    }
+                }
+            } label: {
+                Label(sleepTimerLabel, systemImage: "moon.zzz")
+            }
+            .accessibilityIdentifier("tosPlayer.moreMenu.sleepTimerRow")
+
+            if let url = URL(string: "https://www.youtube.com/watch?v=\(video.id)") {
+                ShareLink(item: url) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityIdentifier("tosPlayer.moreMenu.shareRow")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(10)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("tosPlayer.moreButton")
+        .accessibilityLabel("More")
+    }
+
+    private var sleepTimerLabel: String {
+        guard let minutes = vm.sleepTimerMinutes else { return "Sleep Timer" }
+        return "Sleep Timer (\(minutes)m)"
     }
 
     // MARK: - SponsorBlock toast

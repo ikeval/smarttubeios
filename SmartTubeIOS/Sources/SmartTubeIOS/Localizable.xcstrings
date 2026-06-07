@@ -581,6 +581,9 @@
         }
       }
     },
+    "%lld minutes" : {
+
+    },
     "%lld s" : {
 
     },
@@ -11360,6 +11363,9 @@
         }
       }
     },
+    "More" : {
+
+    },
     "Movie" : {
       "comment" : "Video type search filter option",
       "extractionState" : "manual",
@@ -14222,6 +14228,9 @@
           }
         }
       }
+    },
+    "Playback speed" : {
+
     },
     "Playback Speed" : {
       "comment" : "Settings picker label and player more-menu / speed-picker header",

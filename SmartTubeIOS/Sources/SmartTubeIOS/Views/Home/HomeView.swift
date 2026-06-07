@@ -80,7 +80,7 @@ public struct HomeView: View {
                 .navigationDestination(item: $selectedVideo) { video in
                     #if os(macOS)
                     if store.settings.useTOSPlayerOnMac && tosPlayerFallbackVideoId != video.id {
-                        TOSPlayerView(video: video) {
+                        TOSPlayerView(video: video, api: api) {
                             tosPlayerFallbackVideoId = video.id
                         }
                         .environment(store)

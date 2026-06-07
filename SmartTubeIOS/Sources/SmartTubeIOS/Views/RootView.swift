@@ -322,7 +322,7 @@ struct MainSidebarView: View {
                 if shouldUseTOS {
                     // TOS-compliant IFrame player experiment (macOS only, opt-in).
                     // Falls back to the standard PlayerView on embedding-disabled videos.
-                    TOSPlayerView(video: video) {
+                    TOSPlayerView(video: video, api: api) {
                         // Mark this video ID so the guard above drops to PlayerView.
                         tosPlayerFallbackVideoId = video.id
                     }
